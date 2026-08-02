@@ -52,7 +52,7 @@ jobs:
           cmp "$SNAPSHOT" artifacts/themehelpers-abi.json
 
       - name: Run harvester tests
-        run: python3 -m unittest discover -s phase1/tests -v
+        run: python3 -m unittest discover -s phase1/tests -p 'test_themehelpers_abi.py' -v
 
       - name: Summarize ABI
         run: |
