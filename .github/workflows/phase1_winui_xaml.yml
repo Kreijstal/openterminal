@@ -1,0 +1,79 @@
+name: Phase 1 - WinUI XAML ABI Harvest
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/phase1_winui_xaml.yml
+      - phase1/**
+      - research/nuget/microsoft.ui.xaml/**
+
+permissions:
+  contents: read
+
+env:
+  PACKAGE_ID: Microsoft.UI.Xaml
+  PACKAGE_VERSION: 2.8.4
+  PACKAGE_SHA256: 486dbe1f271b31057ec01ecb7ce4df3eedad11efdc26569170fb128ee4a4e964
+  NUGET_SOURCE: https://api.nuget.org/v3/index.json
+  SNAPSHOT: research/nuget/microsoft.ui.xaml/2.8.4/abi.json
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out OpenTerminal research
+        uses: actions/checkout@v4
+
+      - name: Install harvester dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check -r phase1/requirements-winui.txt
+          if ! command -v llvm-readobj >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y llvm
+          fi
+
+      - name: Download pinned package
+        run: |
+          python3 phase1/scripts/download_nuget_package.py \
+            --source "$NUGET_SOURCE" \
+            --package "$PACKAGE_ID" \
+            --version "$PACKAGE_VERSION" \
+            --expected-sha256 "$PACKAGE_SHA256" \
+            --output "$RUNNER_TEMP/microsoft.ui.xaml.nupkg"
+
+      - name: Harvest WinUI and XAML contracts
+        run: |
+          mkdir -p artifacts
+          python3 phase1/scripts/harvest_winui_xaml.py \
+            "$RUNNER_TEMP/microsoft.ui.xaml.nupkg" \
+            --source "$NUGET_SOURCE" \
+            --output artifacts/winui-xaml-abi.json
+          python3 -m json.tool artifacts/winui-xaml-abi.json >/dev/null
+          cmp "$SNAPSHOT" artifacts/winui-xaml-abi.json
+
+      - name: Run harvester tests
+        run: python3 -m unittest discover -s phase1/tests -v
+
+      - name: Summarize harvest
+        run: |
+          jq -r '
+            "## Microsoft.UI.Xaml ABI and resource surface",
+            "",
+            "Package: `\(.package.id) \(.package.version)`",
+            "",
+            "- WinRT type definitions: \(.winmd.table_counts.TypeDef)",
+            "- WinRT methods: \(.winmd.table_counts.MethodDef)",
+            "- WinRT properties: \(.winmd.table_counts.Property)",
+            "- Activatable classes: \(.architectures.x64.manifest.activatable_classes | length)",
+            "- Generic.xaml elements: \(.generic_xaml.element_counts | to_entries | map(.value) | add)",
+            "- Generic.xaml resource keys: \(.generic_xaml.resource_keys | length)",
+            "- x64 imported DLL groups: \(.architectures.x64.dll.imports | length)"
+          ' artifacts/winui-xaml-abi.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload textual harvest
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase1-winui-xaml-abi
+          path: artifacts/winui-xaml-abi.json
+          if-no-files-found: error

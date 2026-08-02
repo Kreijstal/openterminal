@@ -21,3 +21,22 @@ downloads the exact hash-pinned package and records:
 
 The NuGet archive and its DLL/import-library payloads remain temporary. CI
 publishes only the normalized JSON harvest.
+
+## WinUI 2 / XAML
+
+The `Microsoft.UI.Xaml` 2.8.4 harvester records the UI framework surface that
+Windows Terminal consumes:
+
+- every WinRT type, GUID, method-signature blob, property, event, enum field,
+  and implemented interface in `Microsoft.UI.Xaml.winmd`;
+- documented public member identifiers from the XML contract;
+- `Generic.xaml` namespaces, resource keys, named elements, styles, control
+  templates, and element counts;
+- framework-package identity, minimum OS version, native activation classes,
+  DLL exports, and DLL imports for x86, x64, ARM, and ARM64;
+- the NuGet and nested AppX file manifests with sizes and SHA-256 hashes; and
+- MSBuild imports, targets, properties, package registrations, references, and
+  the conditional VCLibs dependency.
+
+The PRI files are currently hashed and sized. A semantic PRI dump remains a
+separate task because it requires `MakePri` or an open PRI parser.
