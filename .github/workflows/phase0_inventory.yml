@@ -1,0 +1,47 @@
+name: Phase 0 - Dependency Inventory
+
+on:
+  workflow_dispatch:
+    inputs:
+      terminal_ref:
+        description: Microsoft Terminal branch, tag, or commit
+        required: true
+        default: main
+  push:
+    paths:
+      - .github/workflows/phase0_inventory.yml
+      - phase0/**
+
+permissions:
+  contents: read
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out OpenTerminal research
+        uses: actions/checkout@v4
+
+      - name: Check out Microsoft Terminal
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/terminal
+          ref: ${{ inputs.terminal_ref || 'main' }}
+          path: _terminal
+          fetch-depth: 1
+
+      - name: Harvest declared dependencies
+        run: |
+          mkdir -p artifacts
+          python3 phase0/scripts/harvest_dependencies.py \
+            _terminal \
+            --output artifacts/dependency-inventory.json
+          git -C _terminal rev-parse HEAD > artifacts/terminal-commit.txt
+          python3 -m json.tool artifacts/dependency-inventory.json >/dev/null
+
+      - name: Upload textual inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase0-dependency-inventory
+          path: artifacts/
+          if-no-files-found: error
