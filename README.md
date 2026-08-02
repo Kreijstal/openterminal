@@ -36,7 +36,11 @@ git clone https://github.com/microsoft/terminal /tmp/windows-terminal
 python3 phase0/scripts/harvest_dependencies.py \
   /tmp/windows-terminal \
   --output /tmp/dependency-inventory.json
+python3 phase0/scripts/harvest_build_surface.py \
+  /tmp/windows-terminal \
+  --output /tmp/build-surface.json
 python3 -m json.tool /tmp/dependency-inventory.json >/dev/null
+python3 -m json.tool /tmp/build-surface.json >/dev/null
 ```
 
 The Phase 0 GitHub Actions workflow performs the same harvest and publishes the

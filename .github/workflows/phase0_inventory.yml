@@ -1,4 +1,4 @@
-name: Phase 0 - Dependency Inventory
+name: Phase 0 - Source Harvest
 
 on:
   workflow_dispatch:
@@ -36,12 +36,37 @@ jobs:
           python3 phase0/scripts/harvest_dependencies.py \
             _terminal \
             --output artifacts/dependency-inventory.json
+          python3 phase0/scripts/harvest_build_surface.py \
+            _terminal \
+            --output artifacts/build-surface.json
           git -C _terminal rev-parse HEAD > artifacts/terminal-commit.txt
           python3 -m json.tool artifacts/dependency-inventory.json >/dev/null
+          python3 -m json.tool artifacts/build-surface.json >/dev/null
+
+      - name: Run harvester tests
+        run: python3 -m unittest discover -s phase0/tests -v
+
+      - name: Summarize harvest
+        run: |
+          {
+            echo '## Windows Terminal source harvest'
+            echo
+            echo "Commit: \`$(cat artifacts/terminal-commit.txt)\`"
+            echo
+            jq -r '
+              "- MSBuild roots: \(.project_roots | length)",
+              "- MSBuild imports: \(.imports | length)",
+              "- IDL inputs: \(.source_inputs.idl | length)",
+              "- XAML inputs: \(.source_inputs.xaml | length)",
+              "- RESW inputs: \(.source_inputs.resw | length)",
+              "- Library tokens: \(.library_tokens | length)",
+              "- XML parse failures: \(.parse_failures | length)"
+            ' artifacts/build-surface.json
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload textual inventory
         uses: actions/upload-artifact@v4
         with:
-          name: phase0-dependency-inventory
+          name: phase0-source-harvest
           path: artifacts/
           if-no-files-found: error
