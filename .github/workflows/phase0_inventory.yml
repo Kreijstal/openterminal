@@ -40,7 +40,7 @@ jobs:
           python3 -m json.tool artifacts/dependency-inventory.json >/dev/null
 
       - name: Upload textual inventory
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phase0-dependency-inventory
           path: artifacts/
