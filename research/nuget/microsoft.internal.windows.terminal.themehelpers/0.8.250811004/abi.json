@@ -1,0 +1,700 @@
+{
+  "abi_consistency": {
+    "export_ordinals_identical_across_architectures": true,
+    "exports_match_header": true,
+    "import_libraries_define_all_exports": true
+  },
+  "abi_observations": {
+    "x64_and_arm64_decoration": "undecorated C symbol names",
+    "x86_calling_convention_evidence": "leading underscore without an @N suffix in the import library, consistent with MSVC __cdecl"
+  },
+  "architectures": {
+    "arm64": {
+      "dll": {
+        "address_size": 64,
+        "architecture": "aarch64",
+        "exports": [
+          {
+            "name": "TerminalTrySetAutoCompleteAnimationsWhenOccluded",
+            "ordinal": 1
+          },
+          {
+            "name": "TerminalTrySetTransparentBackground",
+            "ordinal": 2
+          },
+          {
+            "name": "TerminalTrySetWindowAssociatedProcesses",
+            "ordinal": 3
+          }
+        ],
+        "format": "COFF-ARM64",
+        "imports": [
+          {
+            "dll": "api-ms-win-core-errorhandling-l1-1-0.dll",
+            "symbols": [
+              "GetLastError",
+              "RaiseException",
+              "SetLastError"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-fibers-l1-1-0.dll",
+            "symbols": [
+              "FlsAlloc",
+              "FlsFree",
+              "FlsGetValue",
+              "FlsSetValue"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-interlocked-l1-1-0.dll",
+            "symbols": [
+              "InitializeSListHead",
+              "InterlockedFlushSList"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-kernel32-legacy-l1-1-1.dll",
+            "symbols": [
+              "VerifyVersionInfoW"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-libraryloader-l1-2-0.dll",
+            "symbols": [
+              "GetProcAddress",
+              "LoadLibraryExW"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-processthreads-l1-1-0.dll",
+            "symbols": [
+              "GetCurrentProcessId",
+              "GetCurrentThreadId"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-profile-l1-1-0.dll",
+            "symbols": [
+              "QueryPerformanceCounter"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-rtlsupport-l1-1-0.dll",
+            "symbols": [
+              "RtlLookupFunctionEntry",
+              "RtlPcToFileHeader",
+              "RtlUnwindEx"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-synch-l1-1-0.dll",
+            "symbols": [
+              "AcquireSRWLockExclusive",
+              "DeleteCriticalSection",
+              "InitializeCriticalSectionEx",
+              "ReleaseSRWLockExclusive"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-synch-l1-2-0.dll",
+            "symbols": [
+              "SleepConditionVariableSRW",
+              "WakeAllConditionVariable"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-sysinfo-l1-1-0.dll",
+            "symbols": [
+              "GetSystemTimeAsFileTime"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-sysinfo-l1-2-0.dll",
+            "symbols": [
+              "VerSetConditionMask"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-util-l1-1-0.dll",
+            "symbols": [
+              "EncodePointer"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-winrt-l1-1-0.dll",
+            "symbols": [
+              "RoGetActivationFactory"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-winrt-string-l1-1-0.dll",
+            "symbols": [
+              "WindowsCreateStringReference"
+            ]
+          },
+          {
+            "dll": "api-ms-win-crt-heap-l1-1-0.dll",
+            "symbols": [
+              "calloc",
+              "free",
+              "malloc"
+            ]
+          },
+          {
+            "dll": "api-ms-win-crt-runtime-l1-1-0.dll",
+            "symbols": [
+              "_cexit",
+              "_configure_narrow_argv",
+              "_execute_onexit_table",
+              "_initialize_narrow_environment",
+              "_initialize_onexit_table",
+              "_initterm",
+              "_initterm_e",
+              "_seh_filter_dll",
+              "abort",
+              "terminate"
+            ]
+          },
+          {
+            "dll": "api-ms-win-crt-string-l1-1-0.dll",
+            "symbols": [
+              "strcmp",
+              "strcpy_s"
+            ]
+          }
+        ],
+        "machine": "IMAGE_FILE_MACHINE_ARM64",
+        "path": "runtimes/win10-arm64/native/TerminalThemeHelpers.dll",
+        "sha256": "4efe10a36c9437db5468aeb19836efaa693f54cdaa7619221fa79d29f3ba25be",
+        "size": 37376
+      },
+      "import_library": {
+        "path": "runtimes/win10-arm64/lib/uap10.0/TerminalThemeHelpers.lib",
+        "sha256": "cc62f828781eb101d10cc9a6bc0e2bb9c73f5c3a732e673efc931e087beaf044",
+        "size": 2792,
+        "symbols": [
+          "TerminalTrySetAutoCompleteAnimationsWhenOccluded",
+          "TerminalTrySetTransparentBackground",
+          "TerminalTrySetWindowAssociatedProcesses",
+          "__imp_TerminalTrySetAutoCompleteAnimationsWhenOccluded",
+          "__imp_TerminalTrySetTransparentBackground",
+          "__imp_TerminalTrySetWindowAssociatedProcesses"
+        ]
+      }
+    },
+    "x64": {
+      "dll": {
+        "address_size": 64,
+        "architecture": "x86_64",
+        "exports": [
+          {
+            "name": "TerminalTrySetAutoCompleteAnimationsWhenOccluded",
+            "ordinal": 1
+          },
+          {
+            "name": "TerminalTrySetTransparentBackground",
+            "ordinal": 2
+          },
+          {
+            "name": "TerminalTrySetWindowAssociatedProcesses",
+            "ordinal": 3
+          }
+        ],
+        "format": "COFF-x86-64",
+        "imports": [
+          {
+            "dll": "api-ms-win-core-debug-l1-1-0.dll",
+            "symbols": [
+              "IsDebuggerPresent"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-errorhandling-l1-1-0.dll",
+            "symbols": [
+              "GetLastError",
+              "RaiseException",
+              "SetLastError",
+              "SetUnhandledExceptionFilter",
+              "UnhandledExceptionFilter"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-interlocked-l1-1-0.dll",
+            "symbols": [
+              "InitializeSListHead",
+              "InterlockedFlushSList"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-kernel32-legacy-l1-1-1.dll",
+            "symbols": [
+              "VerifyVersionInfoW"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-libraryloader-l1-2-0.dll",
+            "symbols": [
+              "FreeLibrary",
+              "GetProcAddress",
+              "LoadLibraryExW"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-processthreads-l1-1-0.dll",
+            "symbols": [
+              "GetCurrentProcess",
+              "GetCurrentProcessId",
+              "GetCurrentThreadId",
+              "TerminateProcess",
+              "TlsAlloc",
+              "TlsFree",
+              "TlsGetValue",
+              "TlsSetValue"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-processthreads-l1-1-1.dll",
+            "symbols": [
+              "IsProcessorFeaturePresent"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-profile-l1-1-0.dll",
+            "symbols": [
+              "QueryPerformanceCounter"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-rtlsupport-l1-1-0.dll",
+            "symbols": [
+              "RtlCaptureContext",
+              "RtlLookupFunctionEntry",
+              "RtlPcToFileHeader",
+              "RtlUnwindEx",
+              "RtlVirtualUnwind"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-synch-l1-1-0.dll",
+            "symbols": [
+              "AcquireSRWLockExclusive",
+              "DeleteCriticalSection",
+              "InitializeCriticalSectionAndSpinCount",
+              "ReleaseSRWLockExclusive"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-synch-l1-2-0.dll",
+            "symbols": [
+              "SleepConditionVariableSRW",
+              "WakeAllConditionVariable"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-sysinfo-l1-1-0.dll",
+            "symbols": [
+              "GetSystemTimeAsFileTime"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-sysinfo-l1-2-0.dll",
+            "symbols": [
+              "VerSetConditionMask"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-util-l1-1-0.dll",
+            "symbols": [
+              "EncodePointer"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-winrt-l1-1-0.dll",
+            "symbols": [
+              "RoGetActivationFactory"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-winrt-string-l1-1-0.dll",
+            "symbols": [
+              "WindowsCreateStringReference"
+            ]
+          },
+          {
+            "dll": "api-ms-win-crt-heap-l1-1-0.dll",
+            "symbols": [
+              "calloc",
+              "free",
+              "malloc"
+            ]
+          },
+          {
+            "dll": "api-ms-win-crt-runtime-l1-1-0.dll",
+            "symbols": [
+              "_cexit",
+              "_configure_narrow_argv",
+              "_execute_onexit_table",
+              "_initialize_narrow_environment",
+              "_initialize_onexit_table",
+              "_initterm",
+              "_initterm_e",
+              "_seh_filter_dll",
+              "abort",
+              "terminate"
+            ]
+          },
+          {
+            "dll": "api-ms-win-crt-string-l1-1-0.dll",
+            "symbols": [
+              "strcpy_s",
+              "wcsncmp"
+            ]
+          }
+        ],
+        "machine": "IMAGE_FILE_MACHINE_AMD64",
+        "path": "runtimes/win10-x64/native/TerminalThemeHelpers.dll",
+        "sha256": "929ddfb7696bbe75234b2bf2ae1997b05502cc45b263ce53a5d27e7bf23abd77",
+        "size": 40960
+      },
+      "import_library": {
+        "path": "runtimes/win10-x64/lib/uap10.0/TerminalThemeHelpers.lib",
+        "sha256": "597c058a46ada7a2742eb10ffb5ce9843e820ea4c7dfa6f6404f59c577af2a90",
+        "size": 2792,
+        "symbols": [
+          "TerminalTrySetAutoCompleteAnimationsWhenOccluded",
+          "TerminalTrySetTransparentBackground",
+          "TerminalTrySetWindowAssociatedProcesses",
+          "__imp_TerminalTrySetAutoCompleteAnimationsWhenOccluded",
+          "__imp_TerminalTrySetTransparentBackground",
+          "__imp_TerminalTrySetWindowAssociatedProcesses"
+        ]
+      }
+    },
+    "x86": {
+      "dll": {
+        "address_size": 32,
+        "architecture": "i386",
+        "exports": [
+          {
+            "name": "TerminalTrySetAutoCompleteAnimationsWhenOccluded",
+            "ordinal": 1
+          },
+          {
+            "name": "TerminalTrySetTransparentBackground",
+            "ordinal": 2
+          },
+          {
+            "name": "TerminalTrySetWindowAssociatedProcesses",
+            "ordinal": 3
+          }
+        ],
+        "format": "COFF-i386",
+        "imports": [
+          {
+            "dll": "api-ms-win-core-debug-l1-1-0.dll",
+            "symbols": [
+              "IsDebuggerPresent"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-errorhandling-l1-1-0.dll",
+            "symbols": [
+              "GetLastError",
+              "RaiseException",
+              "SetLastError",
+              "SetUnhandledExceptionFilter",
+              "UnhandledExceptionFilter"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-interlocked-l1-1-0.dll",
+            "symbols": [
+              "InitializeSListHead",
+              "InterlockedFlushSList"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-kernel32-legacy-l1-1-1.dll",
+            "symbols": [
+              "VerifyVersionInfoW"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-libraryloader-l1-2-0.dll",
+            "symbols": [
+              "FreeLibrary",
+              "GetProcAddress",
+              "LoadLibraryExW"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-processthreads-l1-1-0.dll",
+            "symbols": [
+              "GetCurrentProcess",
+              "GetCurrentProcessId",
+              "GetCurrentThreadId",
+              "TerminateProcess",
+              "TlsAlloc",
+              "TlsFree",
+              "TlsGetValue",
+              "TlsSetValue"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-processthreads-l1-1-1.dll",
+            "symbols": [
+              "IsProcessorFeaturePresent"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-profile-l1-1-0.dll",
+            "symbols": [
+              "QueryPerformanceCounter"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-rtlsupport-l1-1-0.dll",
+            "symbols": [
+              "RtlUnwind"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-synch-l1-1-0.dll",
+            "symbols": [
+              "AcquireSRWLockExclusive",
+              "DeleteCriticalSection",
+              "InitializeCriticalSectionAndSpinCount",
+              "ReleaseSRWLockExclusive"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-synch-l1-2-0.dll",
+            "symbols": [
+              "SleepConditionVariableSRW",
+              "WakeAllConditionVariable"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-sysinfo-l1-1-0.dll",
+            "symbols": [
+              "GetSystemTimeAsFileTime"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-sysinfo-l1-2-0.dll",
+            "symbols": [
+              "VerSetConditionMask"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-util-l1-1-0.dll",
+            "symbols": [
+              "EncodePointer"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-winrt-l1-1-0.dll",
+            "symbols": [
+              "RoGetActivationFactory"
+            ]
+          },
+          {
+            "dll": "api-ms-win-core-winrt-string-l1-1-0.dll",
+            "symbols": [
+              "WindowsCreateStringReference"
+            ]
+          },
+          {
+            "dll": "api-ms-win-crt-heap-l1-1-0.dll",
+            "symbols": [
+              "calloc",
+              "free",
+              "malloc"
+            ]
+          },
+          {
+            "dll": "api-ms-win-crt-runtime-l1-1-0.dll",
+            "symbols": [
+              "_cexit",
+              "_configure_narrow_argv",
+              "_execute_onexit_table",
+              "_initialize_narrow_environment",
+              "_initialize_onexit_table",
+              "_initterm",
+              "_initterm_e",
+              "_seh_filter_dll",
+              "abort",
+              "terminate"
+            ]
+          },
+          {
+            "dll": "api-ms-win-crt-string-l1-1-0.dll",
+            "symbols": [
+              "strcpy_s",
+              "wcsncmp"
+            ]
+          }
+        ],
+        "machine": "IMAGE_FILE_MACHINE_I386",
+        "path": "runtimes/win10-x86/native/TerminalThemeHelpers.dll",
+        "sha256": "846aa41241026f88ca310fcd6ae86d2ca5442d2d6ea30632efdc52ddd81596b1",
+        "size": 29184
+      },
+      "import_library": {
+        "path": "runtimes/win10-x86/lib/uap10.0/TerminalThemeHelpers.lib",
+        "sha256": "7c9721d14e6448d5d235e5e0521ccfa3b32fdc32dbe0d9e61c8e96275c68aafe",
+        "size": 2810,
+        "symbols": [
+          "_TerminalTrySetAutoCompleteAnimationsWhenOccluded",
+          "_TerminalTrySetTransparentBackground",
+          "_TerminalTrySetWindowAssociatedProcesses",
+          "__imp__TerminalTrySetAutoCompleteAnimationsWhenOccluded",
+          "__imp__TerminalTrySetTransparentBackground",
+          "__imp__TerminalTrySetWindowAssociatedProcesses"
+        ]
+      }
+    }
+  },
+  "header": {
+    "declared_calling_convention": "compiler default",
+    "functions": [
+      {
+        "declaration": "TERMINALTHEMEHELPERS_EXPORT HRESULT TerminalTrySetAutoCompleteAnimationsWhenOccluded(IUnknown*, bool);",
+        "name": "TerminalTrySetAutoCompleteAnimationsWhenOccluded",
+        "parameters": [
+          "IUnknown*",
+          "bool"
+        ],
+        "return_type": "HRESULT"
+      },
+      {
+        "declaration": "TERMINALTHEMEHELPERS_EXPORT HRESULT TerminalTrySetTransparentBackground(const bool);",
+        "name": "TerminalTrySetTransparentBackground",
+        "parameters": [
+          "const bool"
+        ],
+        "return_type": "HRESULT"
+      },
+      {
+        "declaration": "TERMINALTHEMEHELPERS_EXPORT HRESULT TerminalTrySetWindowAssociatedProcesses(HWND, DWORD, PHANDLE);",
+        "name": "TerminalTrySetWindowAssociatedProcesses",
+        "parameters": [
+          "HWND",
+          "DWORD",
+          "PHANDLE"
+        ],
+        "return_type": "HRESULT"
+      }
+    ],
+    "language_linkage": "C when included from C++",
+    "path": "inc/TerminalThemeHelpers.h",
+    "sha256": "c73993ddfff532f8c312909fc5f1b2c23b9bcf85baf1cd7ce917d37f1d5b024b"
+  },
+  "msbuild_integration": {
+    "copy_local": [
+      "$(MSBuildThisFileDirectory)..\\..\\runtimes\\win10-$(Native-Platform)\\native\\TerminalThemeHelpers.dll"
+    ],
+    "include_directories": [
+      "$(MSBuildThisFileDirectory)..\\..\\inc\\;%(AdditionalIncludeDirectories)"
+    ],
+    "link_dependencies": [
+      "$(MSBuildThisFileDirectory)..\\..\\runtimes\\win10-$(Native-Platform)\\lib\\uap10.0\\TerminalThemeHelpers.lib;%(AdditionalDependencies)"
+    ],
+    "path": "build/native/Microsoft.Internal.Windows.Terminal.ThemeHelpers.targets",
+    "platform_mapping": [
+      {
+        "condition": "'$(Platform)' != 'Win32'",
+        "value": "$(Platform)"
+      },
+      {
+        "condition": "'$(Platform)' == 'Win32'",
+        "value": "x86"
+      }
+    ],
+    "sha256": "ce6644ea1a580cf583b5c536271cbf4739b3318ba8183db0f57dafa3659a8e66"
+  },
+  "package": {
+    "authors": "Microsoft",
+    "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+    "description": "This library exists to help Terminal acquire window themes.",
+    "files": [
+      {
+        "path": ".signature.p7s",
+        "sha256": "65bf206f3f175a5340c21e2cc699be2c846b53ab1270bd060d9c912ab447bc2a",
+        "size": 12873
+      },
+      {
+        "path": "Microsoft.Internal.Windows.Terminal.ThemeHelpers.nuspec",
+        "sha256": "78631f39539b14df5148328f0f0a1aca7c295677a2e3b65c6d0362d7b99c4dd8",
+        "size": 636
+      },
+      {
+        "path": "[Content_Types].xml",
+        "sha256": "0622e95681eadccb044b24aa4cb5f38326c36a2a90919441f5e8599ec790d956",
+        "size": 656
+      },
+      {
+        "path": "_rels/.rels",
+        "sha256": "872b3e535408d7f74dd4863b94f6a75a548b8b7b9937366d1a3dd236c8257bda",
+        "size": 542
+      },
+      {
+        "path": "build/native/Microsoft.Internal.Windows.Terminal.ThemeHelpers.targets",
+        "sha256": "ce6644ea1a580cf583b5c536271cbf4739b3318ba8183db0f57dafa3659a8e66",
+        "size": 942
+      },
+      {
+        "path": "inc/TerminalThemeHelpers.h",
+        "sha256": "c73993ddfff532f8c312909fc5f1b2c23b9bcf85baf1cd7ce917d37f1d5b024b",
+        "size": 644
+      },
+      {
+        "path": "package/services/metadata/core-properties/70b8c9b2306845acaf76cef3330e4de2.psmdcp",
+        "sha256": "9517824c0c95db443dfec14cb10897a436a9df15006148300bc5b016546dcff0",
+        "size": 739
+      },
+      {
+        "path": "runtimes/win10-arm64/lib/uap10.0/TerminalThemeHelpers.lib",
+        "sha256": "cc62f828781eb101d10cc9a6bc0e2bb9c73f5c3a732e673efc931e087beaf044",
+        "size": 2792
+      },
+      {
+        "path": "runtimes/win10-arm64/native/TerminalThemeHelpers.dll",
+        "sha256": "4efe10a36c9437db5468aeb19836efaa693f54cdaa7619221fa79d29f3ba25be",
+        "size": 37376
+      },
+      {
+        "path": "runtimes/win10-x64/lib/uap10.0/TerminalThemeHelpers.lib",
+        "sha256": "597c058a46ada7a2742eb10ffb5ce9843e820ea4c7dfa6f6404f59c577af2a90",
+        "size": 2792
+      },
+      {
+        "path": "runtimes/win10-x64/native/TerminalThemeHelpers.dll",
+        "sha256": "929ddfb7696bbe75234b2bf2ae1997b05502cc45b263ce53a5d27e7bf23abd77",
+        "size": 40960
+      },
+      {
+        "path": "runtimes/win10-x86/lib/uap10.0/TerminalThemeHelpers.lib",
+        "sha256": "7c9721d14e6448d5d235e5e0521ccfa3b32fdc32dbe0d9e61c8e96275c68aafe",
+        "size": 2810
+      },
+      {
+        "path": "runtimes/win10-x86/native/TerminalThemeHelpers.dll",
+        "sha256": "846aa41241026f88ca310fcd6ae86d2ca5442d2d6ea30632efdc52ddd81596b1",
+        "size": 29184
+      }
+    ],
+    "id": "Microsoft.Internal.Windows.Terminal.ThemeHelpers",
+    "license": null,
+    "license_url": null,
+    "project_url": "https://github.com/microsoft/terminal",
+    "require_license_acceptance": "false",
+    "sha256": "c70c34c5ed0b937a23285402396c3f23523496dca59ede2aaddc2914f6ea339d",
+    "size": 70501,
+    "title": "Terminal Theme Helpers",
+    "version": "0.8.250811004"
+  },
+  "schema_version": 1,
+  "source": "https://pkgs.dev.azure.com/shine-oss/terminal/_packaging/TerminalDependencies%40Local/nuget/v3/index.json"
+}

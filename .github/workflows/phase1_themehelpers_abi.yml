@@ -1,0 +1,76 @@
+name: Phase 1 - TerminalThemeHelpers ABI Harvest
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/phase1_themehelpers_abi.yml
+      - phase1/**
+      - research/nuget/microsoft.internal.windows.terminal.themehelpers/**
+
+permissions:
+  contents: read
+
+env:
+  PACKAGE_ID: Microsoft.Internal.Windows.Terminal.ThemeHelpers
+  PACKAGE_VERSION: 0.8.250811004
+  PACKAGE_SHA256: c70c34c5ed0b937a23285402396c3f23523496dca59ede2aaddc2914f6ea339d
+  NUGET_SOURCE: https://pkgs.dev.azure.com/shine-oss/terminal/_packaging/TerminalDependencies%40Local/nuget/v3/index.json
+  SNAPSHOT: research/nuget/microsoft.internal.windows.terminal.themehelpers/0.8.250811004/abi.json
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out OpenTerminal research
+        uses: actions/checkout@v4
+
+      - name: Ensure LLVM COFF tools are available
+        run: |
+          if ! command -v llvm-readobj >/dev/null || ! command -v llvm-nm >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y llvm
+          fi
+
+      - name: Download pinned package
+        run: |
+          python3 phase1/scripts/download_nuget_package.py \
+            --source "$NUGET_SOURCE" \
+            --package "$PACKAGE_ID" \
+            --version "$PACKAGE_VERSION" \
+            --expected-sha256 "$PACKAGE_SHA256" \
+            --output "$RUNNER_TEMP/themehelpers.nupkg"
+
+      - name: Harvest ABI
+        run: |
+          mkdir -p artifacts
+          python3 phase1/scripts/harvest_themehelpers_abi.py \
+            "$RUNNER_TEMP/themehelpers.nupkg" \
+            --source "$NUGET_SOURCE" \
+            --output artifacts/themehelpers-abi.json
+          python3 -m json.tool artifacts/themehelpers-abi.json >/dev/null
+          cmp "$SNAPSHOT" artifacts/themehelpers-abi.json
+
+      - name: Run harvester tests
+        run: python3 -m unittest discover -s phase1/tests -v
+
+      - name: Summarize ABI
+        run: |
+          jq -r '
+            "## TerminalThemeHelpers ABI",
+            "",
+            "Package: `\(.package.id) \(.package.version)`",
+            "",
+            "- Header functions: \(.header.functions | length)",
+            "- Architectures: \(.architectures | keys | join(", "))",
+            "- x64 exports: \(.architectures.x64.dll.exports | length)",
+            "- x86 exports: \(.architectures.x86.dll.exports | length)",
+            "- ARM64 exports: \(.architectures.arm64.dll.exports | length)"
+          ' artifacts/themehelpers-abi.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload textual ABI harvest
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase1-themehelpers-abi
+          path: artifacts/themehelpers-abi.json
+          if-no-files-found: error
