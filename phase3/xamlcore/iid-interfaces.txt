@@ -1,0 +1,42 @@
+# Interfaces whose IIDs the DLL needs, named as the pinned SDK IDL qualifies
+# them. phase3/scripts/harvest_xaml_iids.py reads the uuid() attributes and
+# emits them as constants, because GCC has no __uuidof.
+#
+# QueryInterface is the only thing these are used for. An IID that is present
+# but wrong is worse than one that is absent: the caller asks for an interface
+# the object genuinely implements and is told E_NOINTERFACE, which is
+# indistinguishable from the class not being implemented at all.
+
+Windows.UI.Xaml.IDependencyObject
+Windows.UI.Xaml.IUIElement
+Windows.UI.Xaml.IFrameworkElement
+
+Windows.UI.Xaml.Controls.IPanel
+Windows.UI.Xaml.Controls.IBorder
+Windows.UI.Xaml.Controls.IGrid
+Windows.UI.Xaml.Controls.IStackPanel
+Windows.UI.Xaml.Controls.IColumnDefinition
+Windows.UI.Xaml.Controls.IRowDefinition
+
+Windows.UI.Xaml.Controls.IGridStatics
+Windows.UI.Xaml.Controls.Primitives.ILayoutInformationStatics
+
+# Parameterized collection interfaces, named by the mangled name the SDK's
+# generated headers give each specialization. Their IIDs are computed from the
+# type signature rather than declared, so they come from the headers, not the
+# IDL.
+__FIVector_1_Windows__CUI__CXaml__CUIElement
+__FIIterable_1_Windows__CUI__CXaml__CUIElement
+__FIIterator_1_Windows__CUI__CXaml__CUIElement
+__FIVector_1_Windows__CUI__CXaml__CControls__CColumnDefinition
+__FIIterable_1_Windows__CUI__CXaml__CControls__CColumnDefinition
+__FIIterator_1_Windows__CUI__CXaml__CControls__CColumnDefinition
+__FIVector_1_Windows__CUI__CXaml__CControls__CRowDefinition
+__FIIterable_1_Windows__CUI__CXaml__CControls__CRowDefinition
+__FIIterator_1_Windows__CUI__CXaml__CControls__CRowDefinition
+
+# Every WinRT object implements these. The SDK's own inspectable.h shadows
+# mingw's, and the SDK version defines their IIDs through __uuidof rather than
+# DEFINE_GUID, so neither compiler nor import library supplies them here.
+IInspectable
+IActivationFactory

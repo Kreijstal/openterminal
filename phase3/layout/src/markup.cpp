@@ -1,5 +1,7 @@
 #include "markup.h"
 
+#include "markup_tree.h"
+
 #include <cctype>
 #include <cstdlib>
 #include <map>
@@ -173,7 +175,7 @@ private:
     size_t position_ = 0;
 };
 
-// --- element construction -----------------------------------------------------
+// --- element description ------------------------------------------------------
 
 const std::map<std::string, HorizontalAlignment> kHorizontalAlignments = {
     {"Left", HorizontalAlignment::Left},
@@ -194,82 +196,75 @@ const std::map<std::string, Orientation> kOrientations = {
     {"Vertical", Orientation::Vertical},
 };
 
-std::unique_ptr<Element> CreateElement(const std::string& name) {
-    if (name == "Border") return std::make_unique<Border>();
-    if (name == "Grid") return std::make_unique<Grid>();
-    if (name == "StackPanel") return std::make_unique<StackPanel>();
-    throw MarkupError("the type '" + name + "' is not implemented");
-}
-
 // Attributes every FrameworkElement takes. Returns false if the name is not
 // one of them, so the caller can try the type's own properties next.
-bool ApplyCommonAttribute(Element& element, const std::string& name, const std::string& value) {
+bool ApplyCommonAttribute(MarkupNode& node, const std::string& name, const std::string& value) {
     if (name == "xmlns" || name.rfind("xmlns:", 0) == 0) return true;
-    if (name == "Width") { element.width = ParseLength(value, "Width"); return true; }
-    if (name == "Height") { element.height = ParseLength(value, "Height"); return true; }
-    if (name == "MinWidth") { element.min_width = ParseDouble(value, "MinWidth"); return true; }
-    if (name == "MaxWidth") { element.max_width = ParseDouble(value, "MaxWidth"); return true; }
-    if (name == "MinHeight") { element.min_height = ParseDouble(value, "MinHeight"); return true; }
-    if (name == "MaxHeight") { element.max_height = ParseDouble(value, "MaxHeight"); return true; }
-    if (name == "Margin") { element.margin = ParseThickness(value, "Margin"); return true; }
+    if (name == "Width") { node.width = ParseLength(value, "Width"); return true; }
+    if (name == "Height") { node.height = ParseLength(value, "Height"); return true; }
+    if (name == "MinWidth") { node.min_width = ParseDouble(value, "MinWidth"); return true; }
+    if (name == "MaxWidth") { node.max_width = ParseDouble(value, "MaxWidth"); return true; }
+    if (name == "MinHeight") { node.min_height = ParseDouble(value, "MinHeight"); return true; }
+    if (name == "MaxHeight") { node.max_height = ParseDouble(value, "MaxHeight"); return true; }
+    if (name == "Margin") { node.margin = ParseThickness(value, "Margin"); return true; }
     if (name == "HorizontalAlignment") {
-        element.horizontal_alignment = ParseEnum(value, kHorizontalAlignments, "HorizontalAlignment");
+        node.horizontal_alignment = ParseEnum(value, kHorizontalAlignments, "HorizontalAlignment");
         return true;
     }
     if (name == "VerticalAlignment") {
-        element.vertical_alignment = ParseEnum(value, kVerticalAlignments, "VerticalAlignment");
+        node.vertical_alignment = ParseEnum(value, kVerticalAlignments, "VerticalAlignment");
         return true;
     }
-    if (name == "Grid.Column") { element.grid_column = ParseInt(value, "Grid.Column"); return true; }
-    if (name == "Grid.Row") { element.grid_row = ParseInt(value, "Grid.Row"); return true; }
+    if (name == "Grid.Column") { node.grid_column = ParseInt(value, "Grid.Column"); return true; }
+    if (name == "Grid.Row") { node.grid_row = ParseInt(value, "Grid.Row"); return true; }
     if (name == "Grid.ColumnSpan") {
-        element.grid_column_span = ParseInt(value, "Grid.ColumnSpan");
+        node.grid_column_span = ParseInt(value, "Grid.ColumnSpan");
         return true;
     }
     if (name == "Grid.RowSpan") {
-        element.grid_row_span = ParseInt(value, "Grid.RowSpan");
+        node.grid_row_span = ParseInt(value, "Grid.RowSpan");
         return true;
     }
     return false;
 }
 
-void ApplyAttributes(Element& element, const std::map<std::string, std::string>& attributes) {
+void ApplyAttributes(MarkupNode& node, const std::map<std::string, std::string>& attributes) {
     for (const auto& [name, value] : attributes) {
-        if (ApplyCommonAttribute(element, name, value)) continue;
+        if (ApplyCommonAttribute(node, name, value)) continue;
 
-        if (auto* border = dynamic_cast<Border*>(&element)) {
+        if (node.type == "Border") {
             if (name == "BorderThickness") {
-                border->border_thickness = ParseThickness(value, "BorderThickness");
+                node.border_thickness = ParseThickness(value, "BorderThickness");
                 continue;
             }
             if (name == "Padding") {
-                border->padding = ParseThickness(value, "Padding");
+                node.padding = ParseThickness(value, "Padding");
                 continue;
             }
         }
-        if (auto* stack = dynamic_cast<StackPanel*>(&element)) {
+        if (node.type == "StackPanel") {
             if (name == "Orientation") {
-                stack->orientation = ParseEnum(value, kOrientations, "Orientation");
+                node.orientation = ParseEnum(value, kOrientations, "Orientation");
                 continue;
             }
         }
         throw MarkupError("the property '" + name + "' was not found in type '" +
-                          element.TypeName() + "'");
+                          FullTypeName(node.type) + "'");
     }
 }
 
-Definition MakeDefinition(const Tag& tag, bool is_column) {
-    Definition definition;
+MarkupDefinition MakeDefinition(const Tag& tag, bool is_column) {
+    MarkupDefinition definition;
     const std::string size_property = is_column ? "Width" : "Height";
     const std::string min_property = is_column ? "MinWidth" : "MinHeight";
     const std::string max_property = is_column ? "MaxWidth" : "MaxHeight";
     for (const auto& [name, value] : tag.attributes) {
         if (name == size_property) {
-            definition.user_size = ParseGridLength(value, size_property);
+            definition.size = ParseGridLength(value, size_property);
         } else if (name == min_property) {
-            definition.user_min_size = ParseDouble(value, min_property);
+            definition.min_size = ParseDouble(value, min_property);
         } else if (name == max_property) {
-            definition.user_max_size = ParseDouble(value, max_property);
+            definition.max_size = ParseDouble(value, max_property);
         } else {
             throw MarkupError("the property '" + name + "' was not found in type '" + tag.name +
                               "'");
@@ -278,30 +273,80 @@ Definition MakeDefinition(const Tag& tag, bool is_column) {
     return definition;
 }
 
-// Attaches a finished element to whatever is currently open above it.
-void AttachChild(Element& parent, std::unique_ptr<Element> child) {
-    if (auto* border = dynamic_cast<Border*>(&parent)) {
-        if (!border->Children().empty())
-            throw MarkupError("a Border takes a single child");
-        border->SetChild(std::move(child));
-        return;
+// Attaches a finished node to whatever is currently open above it.
+void AttachChild(MarkupNode& parent, MarkupNode child) {
+    if (parent.type == "Border" && !parent.children.empty())
+        throw MarkupError("a Border takes a single child");
+    parent.children.push_back(std::move(child));
+}
+
+// --- realising the description ------------------------------------------------
+
+Definition ToDefinition(const MarkupDefinition& source) {
+    Definition definition;
+    definition.user_size = source.size;
+    definition.user_min_size = source.min_size;
+    definition.user_max_size = source.max_size;
+    return definition;
+}
+
+std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
+    std::unique_ptr<Element> element;
+    if (node.type == "Border") {
+        auto border = std::make_unique<Border>();
+        border->border_thickness = node.border_thickness;
+        border->padding = node.padding;
+        if (!node.children.empty()) border->SetChild(BuildElement(node.children.front()));
+        element = std::move(border);
+    } else if (node.type == "Grid") {
+        auto grid = std::make_unique<Grid>();
+        for (const MarkupDefinition& definition : node.column_definitions)
+            grid->column_definitions.push_back(ToDefinition(definition));
+        for (const MarkupDefinition& definition : node.row_definitions)
+            grid->row_definitions.push_back(ToDefinition(definition));
+        for (const MarkupNode& child : node.children) grid->AddChild(BuildElement(child));
+        element = std::move(grid);
+    } else if (node.type == "StackPanel") {
+        auto stack = std::make_unique<StackPanel>();
+        stack->orientation = node.orientation;
+        for (const MarkupNode& child : node.children) stack->AddChild(BuildElement(child));
+        element = std::move(stack);
+    } else {
+        throw MarkupError("the type '" + node.type + "' is not implemented");
     }
-    if (auto* panel = dynamic_cast<Panel*>(&parent)) {
-        panel->AddChild(std::move(child));
-        return;
-    }
-    throw MarkupError("the type '" + parent.TypeName() + "' does not take children");
+
+    element->width = node.width;
+    element->height = node.height;
+    element->min_width = node.min_width;
+    element->max_width = node.max_width;
+    element->min_height = node.min_height;
+    element->max_height = node.max_height;
+    element->margin = node.margin;
+    element->horizontal_alignment = node.horizontal_alignment;
+    element->vertical_alignment = node.vertical_alignment;
+    element->grid_column = node.grid_column;
+    element->grid_row = node.grid_row;
+    element->grid_column_span = node.grid_column_span;
+    element->grid_row_span = node.grid_row_span;
+    return element;
 }
 
 }  // namespace
 
-std::unique_ptr<Element> LoadMarkup(const std::string& markup) {
+std::string FullTypeName(const std::string& short_name) {
+    if (short_name == "Border" || short_name == "Grid" || short_name == "StackPanel")
+        return "Windows.UI.Xaml.Controls." + short_name;
+    throw MarkupError("the type '" + short_name + "' is not implemented");
+}
+
+MarkupNode ParseMarkup(const std::string& markup) {
     Scanner scanner(markup);
 
-    std::unique_ptr<Element> root;
+    MarkupNode root;
+    bool have_root = false;
     // Open elements, innermost last. The root is held separately so it can be
     // returned by value once the stack empties.
-    std::vector<std::unique_ptr<Element>> open;
+    std::vector<MarkupNode> open;
     // The property element currently being filled, e.g. Grid.ColumnDefinitions.
     // Empty when ordinary child elements are expected.
     std::string property_element;
@@ -316,14 +361,15 @@ std::unique_ptr<Element> LoadMarkup(const std::string& markup) {
                 continue;
             }
             if (open.empty()) throw MarkupError("</" + tag.name + "> with nothing open");
-            std::unique_ptr<Element> finished = std::move(open.back());
+            MarkupNode finished = std::move(open.back());
             open.pop_back();
-            if (tag.name != finished->TypeName().substr(finished->TypeName().rfind('.') + 1))
+            if (tag.name != finished.type)
                 throw MarkupError("</" + tag.name + "> does not close the open element");
             if (open.empty()) {
                 root = std::move(finished);
+                have_root = true;
             } else {
-                AttachChild(*open.back(), std::move(finished));
+                AttachChild(open.back(), std::move(finished));
             }
             continue;
         }
@@ -338,7 +384,7 @@ std::unique_ptr<Element> LoadMarkup(const std::string& markup) {
                 throw MarkupError("<" + tag.name + "> cannot carry attributes");
             if (tag.name != "Grid.ColumnDefinitions" && tag.name != "Grid.RowDefinitions")
                 throw MarkupError("the property element '" + tag.name + "' is not implemented");
-            if (!dynamic_cast<Grid*>(open.back().get()))
+            if (open.back().type != "Grid")
                 throw MarkupError("<" + tag.name + "> is only valid on a Grid");
             if (tag.self_closing) continue;
             property_element = tag.name;
@@ -350,8 +396,7 @@ std::unique_ptr<Element> LoadMarkup(const std::string& markup) {
             const std::string expected = is_column ? "ColumnDefinition" : "RowDefinition";
             if (tag.name != expected)
                 throw MarkupError("<" + property_element + "> takes <" + expected + "> elements");
-            auto* grid = static_cast<Grid*>(open.back().get());
-            (is_column ? grid->column_definitions : grid->row_definitions)
+            (is_column ? open.back().column_definitions : open.back().row_definitions)
                 .push_back(MakeDefinition(tag, is_column));
             if (!tag.self_closing) {
                 Tag close;
@@ -361,22 +406,32 @@ std::unique_ptr<Element> LoadMarkup(const std::string& markup) {
             continue;
         }
 
-        std::unique_ptr<Element> element = CreateElement(tag.name);
-        ApplyAttributes(*element, tag.attributes);
+        // Rejects an unimplemented type here rather than at build time, so
+        // that a case naming one fails identically whichever consumer is
+        // realising the tree.
+        FullTypeName(tag.name);
+        MarkupNode node;
+        node.type = tag.name;
+        ApplyAttributes(node, tag.attributes);
         if (tag.self_closing) {
             if (open.empty()) {
-                root = std::move(element);
+                root = std::move(node);
+                have_root = true;
             } else {
-                AttachChild(*open.back(), std::move(element));
+                AttachChild(open.back(), std::move(node));
             }
         } else {
-            open.push_back(std::move(element));
+            open.push_back(std::move(node));
         }
     }
 
     if (!open.empty()) throw MarkupError("markup ended with elements still open");
-    if (!root) throw MarkupError("markup contains no root element");
+    if (!have_root) throw MarkupError("markup contains no root element");
     return root;
+}
+
+std::unique_ptr<Element> LoadMarkup(const std::string& markup) {
+    return BuildElement(ParseMarkup(markup));
 }
 
 }  // namespace openxaml

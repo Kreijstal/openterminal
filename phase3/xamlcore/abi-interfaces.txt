@@ -1,0 +1,30 @@
+# The WinRT interfaces the layout DLL implements, fully qualified as the SDK's
+# generated headers declare them. phase3/scripts/generate_abi_stubs.py turns
+# each one into an E_NOTIMPL base; the implementation overrides what it
+# actually supports.
+#
+# This file is the DLL's contract surface. Adding a line is a deliberate act:
+# it claims a caller can QueryInterface for that interface and get an object
+# back, which is a promise the corpus then has to keep.
+
+# The base chain every element carries.
+ABI::Windows::UI::Xaml::IDependencyObject
+ABI::Windows::UI::Xaml::IUIElement
+ABI::Windows::UI::Xaml::IFrameworkElement
+
+# Panels and the decorator.
+ABI::Windows::UI::Xaml::Controls::IPanel
+ABI::Windows::UI::Xaml::Controls::IBorder
+ABI::Windows::UI::Xaml::Controls::IGrid
+ABI::Windows::UI::Xaml::Controls::IStackPanel
+
+# Grid's definition objects. They are DependencyObjects, not UIElements, so
+# they carry no layout of their own -- Grid reads their sizes directly.
+ABI::Windows::UI::Xaml::Controls::IColumnDefinition
+ABI::Windows::UI::Xaml::Controls::IRowDefinition
+
+# Statics. IGridStatics carries the attached Grid.Row/Grid.Column properties;
+# ILayoutInformationStatics is how a caller reads back the slot a parent
+# arranged a child into, which is what the corpus records as the offset.
+ABI::Windows::UI::Xaml::Controls::IGridStatics
+ABI::Windows::UI::Xaml::Controls::Primitives::ILayoutInformationStatics
