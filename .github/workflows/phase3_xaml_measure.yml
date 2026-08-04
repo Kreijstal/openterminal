@@ -176,7 +176,11 @@ jobs:
             --output "$dest/report.json" \
             --summary "$GITHUB_STEP_SUMMARY"
 
+      # Always: a failing report is exactly when the measurements are worth
+      # having, and skipping the upload on failure throws away the only copy
+      # of what the runtime actually said.
       - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('phase3/xaml-db/measurements/**') != ''
         with:
           name: xaml-measurements-${{ env.os_build }}
           path: phase3/xaml-db/measurements/

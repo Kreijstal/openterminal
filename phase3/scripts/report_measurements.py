@@ -56,6 +56,7 @@ def report(cases: Path, measurements: Path) -> dict[str, Any]:
         lambda: {"cases": 0, "measured": 0, "errored": 0, "missing": 0}
     )
     quarantine: list[dict[str, str]] = []
+    missing_ids: list[str] = []
 
     for case_id, case in sorted(by_id.items()):
         level = level_of(case)
@@ -64,6 +65,7 @@ def report(cases: Path, measurements: Path) -> dict[str, Any]:
         result = measured.get(case_id)
         if result is None:
             entry["missing"] += 1
+            missing_ids.append(case_id)
             continue
         if "error" in result:
             entry["errored"] += 1
@@ -86,6 +88,7 @@ def report(cases: Path, measurements: Path) -> dict[str, Any]:
         "schema_version": 1,
         "levels": {str(level): dict(levels[level]) for level in sorted(levels)},
         "quarantine": quarantine,
+        "missing_ids": missing_ids,
         "authored_levels_failing": [str(level) for level in failures],
         "totals": {
             "cases": sum(e["cases"] for e in levels.values()),
@@ -119,7 +122,17 @@ def summarise(payload: dict[str, Any]) -> str:
 
     if payload["authored_levels_failing"]:
         levels = ", ".join("L" + n for n in payload["authored_levels_failing"])
-        lines += ["", f"**Authored levels failing: {levels}**"]
+        lines += ["", f"**Authored levels failing: {levels}**", ""]
+        # These are the fatal ones, so they are the ones worth naming. Listing
+        # only the quarantined harvest left the failure that actually stops the
+        # run identified by a count alone.
+        broken = [q for q in payload["quarantine"] if int(q["level"]) in AUTHORED_LEVELS]
+        for item in broken:
+            error = re.sub(r"\s+", " ", item["error"]).strip()[:300]
+            lines.append(f"- `{item['id']}` — {error or '(no message)'}")
+        missing = payload.get("missing_ids", [])
+        for case_id in missing:
+            lines.append(f"- `{case_id}` — no measurement was written")
     return "\n".join(lines) + "\n"
 
 

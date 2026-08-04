@@ -67,6 +67,21 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(payload["authored_levels_failing"], ["2"])
         self.assertIn("Authored levels failing: L2", summarise(payload))
 
+    def test_authored_failure_is_named_not_just_counted(self) -> None:
+        # The fatal failure is the one a reader most needs to identify. Naming
+        # only the quarantined harvest left it reported as a bare count.
+        self.add_case("g", 2)
+        self.add_measurement("g", error="Failed to create a 'Windows.UI.Xaml.Whatever'")
+        summary = summarise(report(self.cases, self.measurements))
+        self.assertIn("`g`", summary)
+        self.assertIn("Windows.UI.Xaml.Whatever", summary)
+
+    def test_missing_authored_case_is_named(self) -> None:
+        self.add_case("m", 3)
+        payload = report(self.cases, self.measurements)
+        self.assertEqual(payload["missing_ids"], ["m"])
+        self.assertIn("`m`", summarise(payload))
+
     def test_missing_measurement_counts_against_authored_levels(self) -> None:
         # A case the probe never wrote is as bad as one it rejected: either way
         # the level is not actually covered.
