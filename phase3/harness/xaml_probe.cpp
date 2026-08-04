@@ -266,5 +266,23 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     std::cout << ok << " measured, " << failed << " failed\n";
-    return failed ? 1 : 0;
+
+    // A case the runtime rejects is a result, not a harness fault: the level 7
+    // cases are predictions about what will load, and deciding that is the
+    // whole point of running them. They are recorded with their error and
+    // sorted out by level in the reporting step, which is what knows that a
+    // failure means different things for an authored and a harvested case.
+    //
+    // Structural failures still fail: an empty corpus, or nothing at all
+    // measuring, means the harness is broken rather than the cases being wrong.
+    if (files.empty()) {
+        std::cerr << "no cases found under " << cases.string() << "\n";
+        return 4;
+    }
+    if (ok == 0) {
+        std::cerr << "every one of " << files.size() << " cases failed; "
+                     "that is a broken harness, not a corpus result\n";
+        return 5;
+    }
+    return 0;
 }
