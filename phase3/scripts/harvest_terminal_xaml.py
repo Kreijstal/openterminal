@@ -418,6 +418,26 @@ def git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
+def canonical_remote(url: str) -> str:
+    """One spelling of a remote, whoever cloned it.
+
+    The same repository is called ``git@github.com:microsoft/terminal.git`` by
+    one clone and ``https://github.com/microsoft/terminal`` by another --
+    actions/checkout drops the suffix, a manual clone keeps it. Recording the
+    raw string would put the machine that ran the harvest into the output and
+    make the result unreproducible anywhere else.
+    """
+    text = url.strip().rstrip("/")
+    if text.startswith("git@") and ":" in text:
+        host, _, path = text[len("git@"):].partition(":")
+        text = f"https://{host}/{path}"
+    elif text.startswith("ssh://git@"):
+        text = "https://" + text[len("ssh://git@"):]
+    if text.endswith(".git"):
+        text = text[: -len(".git")]
+    return text
+
+
 # --- driver -------------------------------------------------------------------
 def harvest(repo: Path, meta: Metadata) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     files = sorted(
@@ -476,7 +496,7 @@ def harvest(repo: Path, meta: Metadata) -> tuple[dict[str, Any], list[dict[str, 
     inventory = {
         "schema_version": SCHEMA_VERSION,
         "source": {
-            "repository": git(repo, "remote", "get-url", "origin"),
+            "repository": canonical_remote(git(repo, "remote", "get-url", "origin")),
             "commit": git(repo, "rev-parse", "HEAD"),
             "commit_date": git(repo, "show", "-s", "--format=%cI", "HEAD"),
         },

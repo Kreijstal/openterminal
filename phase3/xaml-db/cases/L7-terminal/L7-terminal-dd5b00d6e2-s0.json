@@ -20,7 +20,7 @@
     "path": "/UserControl/UserControl.Resources[0]/Style[0]/Setter[7]/Setter.Value[0]/ControlTemplate[0]/Grid[0]/Grid.Resources[0]/ControlTemplate[0]/Grid[0]"
    }
   ],
-  "repository": "https://github.com/microsoft/terminal.git"
+  "repository": "https://github.com/microsoft/terminal"
  },
  "id": "L7-terminal-dd5b00d6e2-s0",
  "level": 7,

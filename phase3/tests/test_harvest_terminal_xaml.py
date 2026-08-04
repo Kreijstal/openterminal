@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPT_DIRECTORY))
 from harvest_terminal_xaml import (  # noqa: E402
     Metadata,
     build,
+    canonical_remote,
     candidates,
     encode_size,
     harvest,
@@ -78,6 +79,31 @@ class MarkupExtensionTest(unittest.TestCase):
     def test_plain_values_are_not_extensions(self) -> None:
         self.assertIsNone(markup_extension_name("Horizontal"))
         self.assertIsNone(markup_extension_name(""))
+
+
+class CanonicalRemoteTest(unittest.TestCase):
+    """Provenance must not record which machine ran the harvest."""
+
+    CANONICAL = "https://github.com/microsoft/terminal"
+
+    def test_every_spelling_agrees(self) -> None:
+        for url in (
+            "https://github.com/microsoft/terminal",
+            "https://github.com/microsoft/terminal.git",
+            "https://github.com/microsoft/terminal/",
+            "git@github.com:microsoft/terminal.git",
+            "git@github.com:microsoft/terminal",
+            "ssh://git@github.com/microsoft/terminal.git",
+            "  https://github.com/microsoft/terminal.git  ",
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(canonical_remote(url), self.CANONICAL)
+
+    def test_leaves_an_unrecognised_remote_alone(self) -> None:
+        self.assertEqual(
+            canonical_remote("file:///srv/mirrors/terminal"),
+            "file:///srv/mirrors/terminal",
+        )
 
 
 class BlockerTest(unittest.TestCase):
@@ -321,8 +347,9 @@ class HarvestTest(unittest.TestCase):
         )
 
     def test_records_provenance(self) -> None:
+        # Canonical, not the ".git" spelling the fixture cloned with.
         self.assertEqual(
-            self.inventory["source"]["repository"], "https://example.invalid/repo.git"
+            self.inventory["source"]["repository"], "https://example.invalid/repo"
         )
         for case in self.cases:
             self.assertEqual(

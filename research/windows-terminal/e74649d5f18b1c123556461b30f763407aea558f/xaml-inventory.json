@@ -8116,7 +8116,7 @@
  "source": {
   "commit": "e74649d5f18b1c123556461b30f763407aea558f",
   "commit_date": "2026-08-03T17:14:39+02:00",
-  "repository": "https://github.com/microsoft/terminal.git"
+  "repository": "https://github.com/microsoft/terminal"
  },
  "totals": {
   "candidates": 24,

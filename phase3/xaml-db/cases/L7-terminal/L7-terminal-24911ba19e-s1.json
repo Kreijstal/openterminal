@@ -20,7 +20,7 @@
     "path": "/StackPanel/Button[1]/ToolTipService.ToolTip[0]/ToolTip[0]"
    }
   ],
-  "repository": "https://github.com/microsoft/terminal.git"
+  "repository": "https://github.com/microsoft/terminal"
  },
  "id": "L7-terminal-24911ba19e-s1",
  "level": 7,
