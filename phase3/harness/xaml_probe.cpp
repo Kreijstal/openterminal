@@ -2,26 +2,32 @@
 //
 // Reads case files, realises each one's markup with XamlReader::Load, runs the
 // layout contract against the case's available size, and writes the resulting
-// tree out as JSON. This is the oracle: it only runs where a real WinUI 2
-// runtime exists, which is why CI has to run it on windows-latest.
+// tree out as JSON. This is the oracle: it needs the real Windows.UI.Xaml,
+// which is part of Windows and exists nowhere else, so CI runs it on
+// windows-latest.
 //
 // One binary serves the whole corpus. Cases are markup strings loaded at
 // runtime, so adding a case never means compiling anything.
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Markup.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
+#include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 
 #include <windows.h>
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -145,10 +151,13 @@ void walk(const UIElement& el, const std::string& path, std::ostringstream& out,
     if (auto fe = el.try_as<FrameworkElement>()) {
         aw = fe.ActualWidth();
         ah = fe.ActualHeight();
+        // The slot the parent arranged this element into. TransformToVisual
+        // would need the element to be in a live visual tree, and these trees
+        // are measured detached -- they are never shown on screen.
+        auto slot = Controls::Primitives::LayoutInformation::GetLayoutSlot(fe);
+        ox = slot.X;
+        oy = slot.Y;
     }
-    auto tr = el.TransformToVisual(nullptr);
-    auto pt = tr.TransformPoint({0, 0});
-    ox = pt.X; oy = pt.Y;
 
     out << "  {\"path\": \"" << esc(path) << "\""
         << ", \"type\": \"" << esc(type_name(el)) << "\""
@@ -179,6 +188,10 @@ int wmain(int argc, wchar_t** argv) {
     fs::path cases = argv[1], outdir = argv[2];
 
     init_apartment(apartment_type::single_threaded);
+
+    // XAML needs a DispatcherQueue on the thread before it will initialise;
+    // WindowsXamlManager throws without one.
+    auto queue = Windows::System::DispatcherQueueController::CreateOnCurrentThread();
     auto manager = Hosting::WindowsXamlManager::InitializeForCurrentThread();
 
     fs::create_directories(outdir);
