@@ -115,21 +115,54 @@ pinned in the case
 : available size, DPI scale, theme, font family, font size, language
 
 recorded in the measurement
-: Windows build, WinUI package version, font file version
+: Windows build (including UBR), SHA-256 of `segoeui.ttf`
 
-DirectWrite metrics change when a font is serviced. Recording the font version
-turns that from a silent corpus-wide drift into a visible diff.
+DirectWrite metrics change when a font is serviced. A TTF carries no VersionInfo
+resource, so the file hash is what identifies it; it moves for exactly the same
+reason a version would, and cannot come back empty without the run failing.
 
 CI regenerates every measurement twice and byte-compares, the same determinism
 gate `phase0` and `phase1` already apply to their snapshots.
+
+## Using the measurements
+
+The measurements are CI output, not repository content: 541 files regenerated
+deterministically in about two minutes. Fetch them from the artifact of a green
+run.
+
+    python3 phase3/scripts/fetch_measurements.py          # prints the directory
+    python3 phase3/scripts/check_layout.py \
+        --expected <that directory> --actual <your results> --levels L1,L2,L3
+
+`check_layout.py` takes results in the same shape the probe writes, so an
+implementation under test only has to emit what the probe emits. It compares
+`desired`, `actual` and `offset` per node against a tolerance, and treats a
+case the *oracle* could not load as no expectation at all.
+
+What **is** committed is `oracles/<os-build>.json`: a digest of what the runtime
+answered, about a kilobyte per build, with a per-level hash so a change says
+where it happened. Windows is serviced underneath us, and without a stored
+fingerprint an update silently moves every expectation — the next fetch
+re-baselines against the new answers and a real regression in our own code is
+masked by the shift. Both the fetch and CI refuse to proceed when the live
+oracle disagrees with the committed digest. That is drift, not a test failure:
+it is reviewed, then the digest is updated deliberately.
+
+A build with no committed digest yet warns rather than fails, because runner
+images move on their own schedule — but it says plainly that nothing is
+verifying those measurements until the digest lands.
 
 ## Layout
 
     phase3/xaml-db/
       cases/L<n>-<group>/<id>.json         generated, authored or harvested case specs
+      oracles/<os-build>.json              committed digest of what the runtime answered
+      schema/                              JSON Schema for both file kinds
+
+    (CI artifact, not committed)
       measurements/<os-build>/<id>.json    filled in by CI on windows-latest
       measurements/<os-build>/report.json  per-level outcome and quarantine
-      schema/                              JSON Schema for both file kinds
+      measurements/<os-build>/oracle.json  build and font identity of that run
 
 The vocabulary inventory is research data, not corpus data, so it lives with the
 other pinned snapshots:

@@ -1,0 +1,36 @@
+{
+ "digest": {
+  "cases": 541,
+  "levels": {
+   "L0": {
+    "cases": 4,
+    "sha256": "3f2096490a855d37747d0548c287cdd8c8f5ea5ba26efb1028d51bb956824352"
+   },
+   "L1": {
+    "cases": 72,
+    "sha256": "83e39c2e5d69b73d067e7afe2c2ea038e63036213a961a291e61fe62eb1c97dc"
+   },
+   "L2": {
+    "cases": 192,
+    "sha256": "ec52a88b0faf308c4a7ad6dfc68a45f2944eea0284756fc2ac81167cfe41d3c7"
+   },
+   "L3": {
+    "cases": 132,
+    "sha256": "d649cd140c0f96d9e134c14ccb1220a5b15f46cb829e003ca54a6b780cd72a32"
+   },
+   "L4": {
+    "cases": 72,
+    "sha256": "bd4f90d6a9448c183d3f5a2d35d7cddd9a2968a9c36427bb08ebc243f861a5bc"
+   },
+   "L7": {
+    "cases": 69,
+    "sha256": "50dd658a37dba2bff1499b084f142563933ea741cd9c55126ee3df6aee92b87d"
+   }
+  },
+  "sha256": "f673c3ce255edd6a2779cdb3163d60b0bb260b115b42569cda4b2b23022ac6da"
+ },
+ "font_segoeui": "8134DBCD09E7B123C9A7F229D49CFFBCB01352CC72EA5E1076B65D0DCA9F73CD",
+ "os_build": "10.0.26100.33158",
+ "schema_version": 1,
+ "xaml": "Windows.UI.Xaml (in-OS)"
+}

@@ -176,6 +176,16 @@ jobs:
             --output "$dest/report.json" \
             --summary "$GITHUB_STEP_SUMMARY"
 
+      # The measurements are not committed -- they are this job's artifact. The
+      # digest of them is, so that a servicing update to Windows shows up as a
+      # reviewable diff rather than quietly re-baselining every expectation.
+      - name: Oracle has not drifted
+        shell: bash
+        run: |
+          python3 -B phase3/scripts/measurement_digest.py \
+            --measurements "phase3/xaml-db/measurements/${os_build}" \
+            --oracles phase3/xaml-db/oracles
+
       # Always: a failing report is exactly when the measurements are worth
       # having, and skipping the upload on failure throws away the only copy
       # of what the runtime actually said.
