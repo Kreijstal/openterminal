@@ -11,6 +11,10 @@
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
+// Ranged-for over a WinRT collection (Panel::Children) needs this: the
+// Foundation header only *declares* IIterable's begin/end, and they return
+// auto, so iterating without the definitions is a hard error.
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Markup.h>
@@ -20,6 +24,7 @@
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 
 #include <windows.h>
+#include <dispatcherqueue.h>
 
 #include <algorithm>
 #include <cmath>
@@ -187,12 +192,33 @@ int wmain(int argc, wchar_t** argv) {
     }
     fs::path cases = argv[1], outdir = argv[2];
 
-    init_apartment(apartment_type::single_threaded);
+    // Both of these have to outlive every measurement: releasing the queue
+    // controller takes the thread's DispatcherQueue down with it, and
+    // dropping the manager shuts XAML down.
+    com_ptr<::IUnknown> queue;
+    Hosting::WindowsXamlManager manager{nullptr};
 
-    // XAML needs a DispatcherQueue on the thread before it will initialise;
-    // WindowsXamlManager throws without one.
-    auto queue = Windows::System::DispatcherQueueController::CreateOnCurrentThread();
-    auto manager = Hosting::WindowsXamlManager::InitializeForCurrentThread();
+    // Bringing XAML up is the one part of this program that cannot be tried
+    // anywhere but a real Windows machine, so name the step that failed
+    // rather than dying as an unhandled exception.
+    try {
+        init_apartment(apartment_type::single_threaded);
+
+        // XAML needs a DispatcherQueue on the thread before it will
+        // initialise; WindowsXamlManager throws without one. The WinRT
+        // projection can only create a controller on a *dedicated* thread, so
+        // the queue for this thread comes from the CoreMessaging entry point.
+        DispatcherQueueOptions options{sizeof(DispatcherQueueOptions),
+                                       DQTYPE_THREAD_CURRENT, DQTAT_COM_STA};
+        check_hresult(CreateDispatcherQueueController(
+            options, reinterpret_cast<PDISPATCHERQUEUECONTROLLER*>(queue.put())));
+
+        manager = Hosting::WindowsXamlManager::InitializeForCurrentThread();
+    } catch (hresult_error const& e) {
+        std::cerr << "cannot start XAML: " << to_string(e.message())
+                  << " (hresult 0x" << std::hex << static_cast<uint32_t>(e.code()) << ")\n";
+        return 3;
+    }
 
     fs::create_directories(outdir);
     int ok = 0, failed = 0;
