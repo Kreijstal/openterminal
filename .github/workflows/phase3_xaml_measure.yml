@@ -194,3 +194,89 @@ jobs:
         with:
           name: xaml-measurements-${{ env.os_build }}
           path: phase3/xaml-db/measurements/
+
+      # Handed to the layout job, which needs to know both which artifact to
+      # download and which directory inside it the oracle wrote.
+      - name: Publish the oracle identity to dependent jobs
+        id: oracle
+        shell: bash
+        run: |
+          echo "artifact=xaml-measurements-${os_build}" >> "$GITHUB_OUTPUT"
+          echo "os_build=${os_build}" >> "$GITHUB_OUTPUT"
+
+    outputs:
+      artifact: ${{ steps.oracle.outputs.artifact }}
+      os_build: ${{ steps.oracle.outputs.os_build }}
+
+  # The reimplementation, checked against what the runtime just answered. This
+  # is the project's progress number, and unlike a screenshot comparison it
+  # says exactly which primitive is wrong.
+  #
+  # On ubuntu, because the layout core deliberately depends on nothing: the
+  # oracle already ran, and everything downstream of it is arithmetic against a
+  # JSON file.
+  layout:
+    needs: measure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.measure.outputs.artifact }}
+          path: measurements
+
+      - name: Build the layout core
+        run: |
+          cmake -S phase3/layout -B "$RUNNER_TEMP/layout-build" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/layout-build" --parallel
+
+      # Twice, into separate directories. The oracle is held to determinism and
+      # so is the implementation -- a layout that moves between runs cannot be
+      # compared against anything.
+      - name: Results are deterministic
+        run: |
+          for run in 1 2; do
+            "$RUNNER_TEMP/layout-build/measure_cases" \
+              phase3/xaml-db/cases "$RUNNER_TEMP/run$run"
+          done
+          if ! diff -r "$RUNNER_TEMP/run1" "$RUNNER_TEMP/run2" > "$RUNNER_TEMP/nondet.txt"; then
+            echo "::error::layout results differ between two runs on the same machine"
+            head -40 "$RUNNER_TEMP/nondet.txt"
+            exit 1
+          fi
+
+      # Every level, for the record. This step reports and never fails: the
+      # levels that are not implemented yet are expected to be red, and burying
+      # the numbers because of that would hide the progress the corpus exists
+      # to measure.
+      - name: Coverage across every level
+        run: |
+          {
+            echo "### Layout core against ${{ needs.measure.outputs.os_build }}"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 -B phase3/scripts/check_layout.py \
+            --expected "measurements/${{ needs.measure.outputs.os_build }}" \
+            --actual "$RUNNER_TEMP/run1" \
+            --output layout-report.json \
+            >> "$GITHUB_STEP_SUMMARY" || true
+
+      # The levels the implementation claims. A regression here is a real
+      # failure, which is what makes the claim worth anything.
+      - name: Implemented levels still match
+        run: |
+          python3 -B phase3/scripts/check_layout.py \
+            --expected "measurements/${{ needs.measure.outputs.os_build }}" \
+            --actual "$RUNNER_TEMP/run1" \
+            --levels L1,L2,L3
+
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('layout-report.json') != ''
+        with:
+          name: layout-report
+          path: layout-report.json
