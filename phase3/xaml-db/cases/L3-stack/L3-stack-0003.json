@@ -1,0 +1,22 @@
+{
+ "environment": {
+  "available_size": [
+   "Infinity",
+   "Infinity"
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "stack",
+ "id": "L3-stack-0003",
+ "level": 3,
+ "markup": "<StackPanel xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" Orientation=\"Vertical\"></StackPanel>",
+ "note": "StackPanel Vertical children=0 fixed=True",
+ "requires": [
+  "L2-align"
+ ],
+ "schema_version": 1
+}

@@ -1,0 +1,22 @@
+{
+ "environment": {
+  "available_size": [
+   "Infinity",
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "text",
+ "id": "L4-text-0060",
+ "level": 4,
+ "markup": "<TextBlock xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" FontFamily=\"Segoe UI\" FontSize=\"12.0\" TextWrapping=\"Wrap\">The quick brown fox jumps over the lazy dog</TextBlock>",
+ "note": "TextBlock size=12.0 wrap=Wrap len=43",
+ "requires": [
+  "L1-sizing"
+ ],
+ "schema_version": 1
+}

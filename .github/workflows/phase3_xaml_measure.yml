@@ -1,0 +1,170 @@
+name: Phase 3 - XAML behaviour measurements
+
+# Fills in the XAML behaviour database. The oracle is the real Windows.UI.Xaml
+# runtime, which exists only on Windows, so this is the one workflow in the
+# repository that cannot run on ubuntu-latest.
+#
+# Measurements are committed as text. No SDK payload, package, or binary from
+# the run enters the repository.
+
+on:
+  push:
+    paths:
+      - 'phase3/**'
+      - '.github/workflows/phase3_xaml_measure.yml'
+  pull_request:
+    paths:
+      - 'phase3/**'
+      - '.github/workflows/phase3_xaml_measure.yml'
+  workflow_dispatch:
+
+jobs:
+  measure:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The level 7 cases are harvested from Terminal's own markup, so
+      # reproducing them needs the exact source they came from. The commit is
+      # read from the harvest rather than pinned twice.
+      - name: Resolve the harvested Terminal commit
+        id: terminal
+        shell: bash
+        run: |
+          set -euo pipefail
+          # nullglob so an unmatched pattern is an empty list rather than the
+          # literal pattern, which would otherwise read as one missing file.
+          shopt -s nullglob
+          # Exactly one of each, so a second snapshot cannot be silently ignored.
+          inventories=(research/windows-terminal/*/xaml-inventory.json)
+          members=(research/nuget/microsoft.windows.sdk.contracts/*/xaml-members.json)
+          for name in inventories members; do
+            declare -n found="$name"
+            if [ "${#found[@]}" -ne 1 ]; then
+              echo "::error::expected exactly one $name, found ${#found[@]}: ${found[*]}"
+              exit 1
+            fi
+          done
+          commit=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['source']['commit'])" "${inventories[0]}")
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "inventory=${inventories[0]}" >> "$GITHUB_OUTPUT"
+          echo "members=${members[0]}" >> "$GITHUB_OUTPUT"
+          echo "harvested from microsoft/terminal $commit"
+
+      - name: Check out Microsoft Terminal
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/terminal
+          ref: ${{ steps.terminal.outputs.commit }}
+          path: _terminal
+          fetch-depth: 1
+
+      - name: Regenerate the case corpus
+        shell: bash
+        run: |
+          rm -rf phase3/xaml-db/cases
+          python3 -B phase3/scripts/generate_cases.py
+          python3 -B phase3/scripts/harvest_terminal_xaml.py _terminal \
+            --members "${{ steps.terminal.outputs.members }}" \
+            --inventory "${{ steps.terminal.outputs.inventory }}" \
+            --cases phase3/xaml-db/cases/L7-terminal
+
+      # Both the generated and the harvested cases are outputs of checked-in
+      # scripts. A checkout whose cases differ from what those scripts emit
+      # means someone edited cases by hand, which silently decouples the corpus
+      # from its generator, so fail instead of proceeding.
+      - name: Corpus is reproducible
+        shell: bash
+        run: |
+          paths=(phase3/xaml-db/cases "${{ steps.terminal.outputs.inventory }}")
+          # Stage first. A case deleted from the corpus comes back from the
+          # regeneration as an *untracked* file, and `git diff` says nothing
+          # about untracked files -- so diffing the worktree alone would let a
+          # deletion through silently.
+          git add -A -- "${paths[@]}"
+          if ! git diff --cached --quiet -- "${paths[@]}"; then
+            echo "::error::committed cases differ from the generator output"
+            git diff --cached --stat -- "${paths[@]}"
+            exit 1
+          fi
+
+      - name: Run harvester tests
+        shell: bash
+        run: python3 -m unittest discover -s phase3/tests -v
+
+      - name: Record the oracle identity
+        shell: pwsh
+        run: |
+          $os = (Get-CimInstance Win32_OperatingSystem).Version
+          $ubr = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').UBR
+          $font = (Get-Item C:\Windows\Fonts\segoeui.ttf).VersionInfo.FileVersion
+          "os_build=$os.$ubr"   | Out-File -Append $env:GITHUB_ENV -Encoding utf8
+          "font_segoeui=$font"  | Out-File -Append $env:GITHUB_ENV -Encoding utf8
+          Write-Host "oracle: windows $os.$ubr, Segoe UI $font"
+
+      - name: Build the probe
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cl /nologo /std:c++20 /EHsc /await- /DWIN32_LEAN_AND_MEAN ^
+             /Fe:phase3\harness\xaml_probe.exe phase3\harness\xaml_probe.cpp ^
+             /link windowsapp.lib
+
+      # Two independent runs into separate directories. Layout numbers that
+      # differ between them are not usable as expectations, and the corpus is
+      # worth nothing if it is not deterministic, so this gate comes before
+      # anything is published.
+      - name: Measure twice
+        shell: cmd
+        run: |
+          phase3\harness\xaml_probe.exe phase3\xaml-db\cases %RUNNER_TEMP%\run1
+          phase3\harness\xaml_probe.exe phase3\xaml-db\cases %RUNNER_TEMP%\run2
+
+      - name: Measurements are deterministic
+        shell: bash
+        run: |
+          if ! diff -r "$RUNNER_TEMP/run1" "$RUNNER_TEMP/run2" > "$RUNNER_TEMP/nondet.txt"; then
+            echo "::error::measurements differ between two runs on the same machine"
+            head -40 "$RUNNER_TEMP/nondet.txt"
+            exit 1
+          fi
+          echo "deterministic across two runs"
+
+      - name: Publish into the database
+        shell: bash
+        run: |
+          dest="phase3/xaml-db/measurements/${os_build}"
+          mkdir -p "$dest"
+          cp -f "$RUNNER_TEMP"/run1/*.json "$dest/"
+          cat > "$dest/oracle.json" <<EOF
+          {
+           "schema_version": 1,
+           "os_build": "${os_build}",
+           "font_segoeui": "${font_segoeui}",
+           "xaml": "Windows.UI.Xaml (in-OS)"
+          }
+          EOF
+          echo "cases measured: $(ls "$dest"/*.json | wc -l)"
+
+      # Splits the outcome by level, because a failure means different things
+      # for a case we wrote and a case we harvested. Fails the job only for the
+      # former.
+      - name: Report and quarantine
+        shell: bash
+        run: |
+          dest="phase3/xaml-db/measurements/${os_build}"
+          echo "oracle: windows ${os_build}, Segoe UI ${font_segoeui}" >> "$GITHUB_STEP_SUMMARY"
+          python3 -B phase3/scripts/report_measurements.py \
+            --cases phase3/xaml-db/cases \
+            --measurements "$dest" \
+            --output "$dest/report.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xaml-measurements-${{ env.os_build }}
+          path: phase3/xaml-db/measurements/

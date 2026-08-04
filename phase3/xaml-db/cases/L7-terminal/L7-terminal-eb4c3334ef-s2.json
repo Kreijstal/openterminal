@@ -1,0 +1,35 @@
+{
+ "environment": {
+  "available_size": [
+   "Infinity",
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "terminal",
+ "harvest": {
+  "commit": "e74649d5f18b1c123556461b30f763407aea558f",
+  "markup_sha256_prefix": "eb4c3334ef",
+  "occurrences": [
+   {
+    "file": "src/cascadia/TerminalSettingsEditor/MainPage.xaml",
+    "path": "/Page/NavigationView[0]/Grid[0]/ScrollViewer[0]"
+   }
+  ],
+  "repository": "https://github.com/microsoft/terminal.git"
+ },
+ "id": "L7-terminal-eb4c3334ef-s2",
+ "level": 7,
+ "markup": "<ScrollViewer xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Name=\"SettingsMainPage_ScrollViewer\" Grid.Row=\"0\"><Frame x:Name=\"contentFrame\" Grid.Row=\"0\" Padding=\"16,0,16,48\"><Frame.ContentTransitions><TransitionCollection><NavigationThemeTransition><NavigationThemeTransition.DefaultNavigationTransitionInfo><DrillInNavigationTransitionInfo/></NavigationThemeTransition.DefaultNavigationTransitionInfo></NavigationThemeTransition></TransitionCollection></Frame.ContentTransitions></Frame></ScrollViewer>",
+ "note": "ScrollViewer subtree, 7 element(s), from src/cascadia/TerminalSettingsEditor/MainPage.xaml",
+ "requires": [
+  "L3-grid",
+  "L3-stack",
+  "L4-text"
+ ],
+ "schema_version": 1
+}

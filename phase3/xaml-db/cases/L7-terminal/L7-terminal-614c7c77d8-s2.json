@@ -1,0 +1,35 @@
+{
+ "environment": {
+  "available_size": [
+   "Infinity",
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "terminal",
+ "harvest": {
+  "commit": "e74649d5f18b1c123556461b30f763407aea558f",
+  "markup_sha256_prefix": "614c7c77d8",
+  "occurrences": [
+   {
+    "file": "src/cascadia/TerminalApp/MarkdownPaneContent.xaml",
+    "path": "/UserControl/Grid[0]/Grid[1]/ScrollViewer[0]"
+   }
+  ],
+  "repository": "https://github.com/microsoft/terminal.git"
+ },
+ "id": "L7-terminal-614c7c77d8-s2",
+ "level": 7,
+ "markup": "<ScrollViewer xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Name=\"_scrollViewer\" Grid.Column=\"1\" Padding=\"3\" HorizontalAlignment=\"Stretch\" VerticalAlignment=\"Stretch\" Background=\"Transparent\" BringIntoViewOnFocusChange=\"True\" IsVerticalScrollChainingEnabled=\"True\"><StackPanel x:Name=\"RenderedMarkdown\" Grid.Column=\"1\" Padding=\"16\" HorizontalAlignment=\"Stretch\" Background=\"Transparent\" Orientation=\"Vertical\"/></ScrollViewer>",
+ "note": "ScrollViewer subtree, 2 element(s), from src/cascadia/TerminalApp/MarkdownPaneContent.xaml",
+ "requires": [
+  "L3-grid",
+  "L3-stack",
+  "L4-text"
+ ],
+ "schema_version": 1
+}

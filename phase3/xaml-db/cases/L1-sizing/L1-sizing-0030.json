@@ -1,0 +1,22 @@
+{
+ "environment": {
+  "available_size": [
+   "Infinity",
+   "Infinity"
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "sizing",
+ "id": "L1-sizing-0030",
+ "level": 1,
+ "markup": "<Border xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" Margin=\"8\" Height=\"30\"/>",
+ "note": "lone Border w=Auto h=30 margin=8",
+ "requires": [
+  "L0-props"
+ ],
+ "schema_version": 1
+}

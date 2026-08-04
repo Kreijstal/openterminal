@@ -1,0 +1,35 @@
+{
+ "environment": {
+  "available_size": [
+   "Infinity",
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "terminal",
+ "harvest": {
+  "commit": "e74649d5f18b1c123556461b30f763407aea558f",
+  "markup_sha256_prefix": "b55fbb5744",
+  "occurrences": [
+   {
+    "file": "src/cascadia/TerminalApp/TerminalPage.xaml",
+    "path": "/Page/Grid[0]/TeachingTip[4]/TeachingTip.Content[0]/TextBlock[0]"
+   }
+  ],
+  "repository": "https://github.com/microsoft/terminal.git"
+ },
+ "id": "L7-terminal-b55fbb5744-s2",
+ "level": 7,
+ "markup": "<TextBlock xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Name=\"ActionSaveFailedMessage\" Text=\"\"/>",
+ "note": "TextBlock subtree, 1 element(s), from src/cascadia/TerminalApp/TerminalPage.xaml",
+ "requires": [
+  "L3-grid",
+  "L3-stack",
+  "L4-text"
+ ],
+ "schema_version": 1
+}

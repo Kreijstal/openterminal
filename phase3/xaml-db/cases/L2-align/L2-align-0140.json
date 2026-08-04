@@ -1,0 +1,22 @@
+{
+ "environment": {
+  "available_size": [
+   100.0,
+   50.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "align",
+ "id": "L2-align-0140",
+ "level": 2,
+ "markup": "<Border xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Border HorizontalAlignment=\"Right\" VerticalAlignment=\"Stretch\" Margin=\"8\"/></Border>",
+ "note": "child Right/Stretch margin=8 size=AutoxAuto",
+ "requires": [
+  "L1-sizing"
+ ],
+ "schema_version": 1
+}

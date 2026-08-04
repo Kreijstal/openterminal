@@ -1,0 +1,35 @@
+{
+ "environment": {
+  "available_size": [
+   "Infinity",
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "terminal",
+ "harvest": {
+  "commit": "e74649d5f18b1c123556461b30f763407aea558f",
+  "markup_sha256_prefix": "d77a33c88d",
+  "occurrences": [
+   {
+    "file": "src/cascadia/TerminalControl/TermControl.xaml",
+    "path": "/UserControl/Grid[0]/Image[0]"
+   }
+  ],
+  "repository": "https://github.com/microsoft/terminal.git"
+ },
+ "id": "L7-terminal-d77a33c88d-s2",
+ "level": 7,
+ "markup": "<Image xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Name=\"BackgroundImage\" AutomationProperties.AccessibilityView=\"Raw\"/>",
+ "note": "Image subtree, 1 element(s), from src/cascadia/TerminalControl/TermControl.xaml",
+ "requires": [
+  "L3-grid",
+  "L3-stack",
+  "L4-text"
+ ],
+ "schema_version": 1
+}

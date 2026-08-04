@@ -1,0 +1,35 @@
+{
+ "environment": {
+  "available_size": [
+   100.0,
+   50.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "terminal",
+ "harvest": {
+  "commit": "e74649d5f18b1c123556461b30f763407aea558f",
+  "markup_sha256_prefix": "dd5b00d6e2",
+  "occurrences": [
+   {
+    "file": "src/cascadia/TerminalControl/TermControl.xaml",
+    "path": "/UserControl/UserControl.Resources[0]/Style[0]/Setter[7]/Setter.Value[0]/ControlTemplate[0]/Grid[0]/Grid.Resources[0]/ControlTemplate[0]/Grid[0]"
+   }
+  ],
+  "repository": "https://github.com/microsoft/terminal.git"
+ },
+ "id": "L7-terminal-dd5b00d6e2-s1",
+ "level": 7,
+ "markup": "<Grid xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Name=\"Root\" Background=\"Transparent\"><VisualStateManager.VisualStateGroups><VisualStateGroup x:Name=\"CommonStates\"><VisualState x:Name=\"Normal\"/></VisualStateGroup></VisualStateManager.VisualStateGroups></Grid>",
+ "note": "Grid subtree, 4 element(s), from src/cascadia/TerminalControl/TermControl.xaml",
+ "requires": [
+  "L3-grid",
+  "L3-stack",
+  "L4-text"
+ ],
+ "schema_version": 1
+}
