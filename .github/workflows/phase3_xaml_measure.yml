@@ -119,9 +119,12 @@ jobs:
           if not defined VSDIR echo ::error::no Visual Studio with the x64 C++ toolset && exit /b 1
           echo using %VSDIR%
           call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          rem The manifest is not optional: XAML Islands refuses to start in a
+          rem process that does not declare a maxversiontested.
           cl /nologo /std:c++20 /EHsc /DWIN32_LEAN_AND_MEAN ^
              /Fe:phase3\harness\xaml_probe.exe phase3\harness\xaml_probe.cpp ^
-             /link windowsapp.lib || exit /b 1
+             /link windowsapp.lib ^
+             /MANIFEST:EMBED /MANIFESTINPUT:phase3\harness\xaml_probe.manifest || exit /b 1
 
       # Two independent runs into separate directories. Layout numbers that
       # differ between them are not usable as expectations, and the corpus is

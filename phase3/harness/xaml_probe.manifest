@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  XAML Islands refuses to start without this. WindowsXamlManager checks the
+  host process for a declared maxversiontested and fails the activation with
+  "supported for apps targeting Windows version 10.0.18226.0 and later"
+  when there is none, which is what an unmanifested probe gets.
+
+  The probe is also deliberately left DPI-unaware. It never opens a window,
+  so DPI only enters as the scale factor XAML lays out against; leaving the
+  process unaware pins that at 1.0 on any runner, which is what the cases
+  record as their environment. Declaring per-monitor awareness would make
+  the measurements depend on the display the runner happens to have.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+      <maxversiontested Id="10.0.22621.0"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">unaware</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>
