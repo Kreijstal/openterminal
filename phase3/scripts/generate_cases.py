@@ -90,10 +90,16 @@ def level0() -> Iterator[dict[str, Any]]:
         ("default", '<Border xmlns="%s"/>' % XMLNS, "Width", "unset stays NaN"),
         ("local", '<Border xmlns="%s" Width="120"/>' % XMLNS, "Width", "local value wins over default"),
         ("local-opacity", '<Border xmlns="%s" Opacity="0.5"/>' % XMLNS, "Opacity", "local double"),
+        # FontSize has to be set on a Control. This was written on a StackPanel
+        # first, which is a WPF habit -- there TextElement.FontSize is an
+        # inherited attached property that any FrameworkElement takes. WinUI has
+        # no such attached property: FontSize is declared on Control and on
+        # TextBlock and nowhere else, so the runtime rejected the markup with
+        # "The property 'FontSize' was not found in type 'StackPanel'".
         ("inherited-fontsize",
-         '<StackPanel xmlns="%s" FontSize="22"><TextBlock x:Name="t" '
-         'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"/></StackPanel>' % XMLNS,
-         "FontSize", "FontSize inherits down the tree"),
+         '<ContentControl xmlns="%s" FontSize="22"><TextBlock x:Name="t" '
+         'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"/></ContentControl>' % XMLNS,
+         "FontSize", "FontSize inherits from a Control down to its content"),
     ]
     for name, markup, prop, note in probes:
         yield case(f"L0-props-{name}", 0, "props", markup, [400.0, 300.0],

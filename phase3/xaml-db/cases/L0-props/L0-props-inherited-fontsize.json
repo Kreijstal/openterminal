@@ -13,8 +13,8 @@
  "group": "props",
  "id": "L0-props-inherited-fontsize",
  "level": 0,
- "markup": "<StackPanel xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" FontSize=\"22\"><TextBlock x:Name=\"t\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"/></StackPanel>",
- "note": "FontSize inherits down the tree; read FontSize without running layout",
+ "markup": "<ContentControl xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" FontSize=\"22\"><TextBlock x:Name=\"t\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"/></ContentControl>",
+ "note": "FontSize inherits from a Control down to its content; read FontSize without running layout",
  "requires": [],
  "schema_version": 1
 }
