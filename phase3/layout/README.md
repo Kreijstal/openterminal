@@ -18,22 +18,34 @@ Against build `10.0.26100.33158`:
 | L1 | one element: explicit size, margin | 72 | **72** |
 | L2 | one parent, one child: alignment × margin × sizing | 192 | **192** |
 | L3 | panels: `StackPanel`, `Grid` | 132 | **132** |
-| L4 | text | 72 | 0 |
+| L4 | text: `TextBlock` | 72 | needs the font metrics — see below |
 | L7 | Terminal's own pages | 69 | 0 |
 
 L1–L3 is every case that does not need text measurement or a control set —
 `Border`, `Grid`, `StackPanel`, and the `FrameworkElement` semantics under all
-of them. The rest fail as `the type 'TextBlock' is not implemented` rather than
-as wrong numbers, which is the distinction worth keeping: nothing here is
-quietly approximate.
+of them. L7 fails as `the type 'ScrollViewer' is not implemented` and the like,
+rather than as wrong numbers, which is the distinction worth keeping: nothing
+here is quietly approximate.
+
+L4 is implemented and is the one level whose result depends on a file that is
+not in the repository. Text measurement needs Segoe UI's metrics, those metrics
+are harvested on the Windows runner, and without them the text cases fail with
+`no harvested metrics for the font family "Segoe UI"`. With the two numbers that
+can be solved from the recorded measurements alone — the baseline-to-baseline
+distance and the advance width of `M` — the 36 cases that depend on nothing
+else match exactly. See [the fonts directory](../xaml-db/fonts/) and
+[`text.cpp`](src/text.cpp).
 
 ## Running it
 
     cmake -S phase3/layout -B /tmp/layout-build && cmake --build /tmp/layout-build
     python3 phase3/scripts/fetch_measurements.py          # prints a directory
-    /tmp/layout-build/measure_cases phase3/xaml-db/cases /tmp/layout-results
+    python3 phase3/scripts/fetch_measurements.py --fonts  # and the font metrics
+    /tmp/layout-build/measure_cases phase3/xaml-db/cases /tmp/layout-results <fonts>
     python3 phase3/scripts/check_layout.py \
         --expected <that directory> --actual /tmp/layout-results --levels L1,L2,L3
+
+The font metrics argument is optional and defaults to `<cases>/../fonts`.
 
 `measure_cases` takes the same arguments as the oracle probe and writes the same
 files, so the two are directly diffable. A single `g++ -std=c++17 src/*.cpp`

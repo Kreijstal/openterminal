@@ -38,7 +38,11 @@ from build_mingw import (  # noqa: E402
 )
 import json  # noqa: E402
 
-LAYOUT_SOURCES = ["element.cpp", "border.cpp", "grid.cpp", "stack_panel.cpp"]
+# The layout core, which both the DLL and the client link. json.cpp and
+# fonts.cpp are in it because text measurement reads harvested metrics, and
+# those arrive as JSON.
+LAYOUT_SOURCES = ["element.cpp", "border.cpp", "grid.cpp", "stack_panel.cpp",
+                  "text.cpp", "fonts.cpp", "json.cpp"]
 
 # The classes the DLL claims. Registering a class it does not implement would
 # route a caller to us and then fail at DllGetActivationFactory, which is worse
@@ -47,9 +51,13 @@ RUNTIME_CLASSES = [
     "Windows.UI.Xaml.Controls.Border",
     "Windows.UI.Xaml.Controls.Grid",
     "Windows.UI.Xaml.Controls.StackPanel",
+    "Windows.UI.Xaml.Controls.TextBlock",
     "Windows.UI.Xaml.Controls.ColumnDefinition",
     "Windows.UI.Xaml.Controls.RowDefinition",
     "Windows.UI.Xaml.Controls.Primitives.LayoutInformation",
+    # Not a control: a TextBlock's FontFamily is an object, so the ABI needs a
+    # class to make one with.
+    "Windows.UI.Xaml.Media.FontFamily",
 ]
 
 
@@ -132,6 +140,8 @@ def main() -> None:
                         help="where to write measurements (default: <root>/results)")
     parser.add_argument("--skip-run", action="store_true",
                         help="build and register, but do not measure")
+    parser.add_argument("--fonts", type=Path, default=PHASE3_DIR / "xaml-db" / "fonts",
+                        help="harvested font metrics; the DLL reads them from here")
     args = parser.parse_args()
 
     for tool in ("x86_64-w64-mingw32-g++", "wine"):
@@ -175,13 +185,20 @@ def main() -> None:
     client = root / "measure_cases_winrt.exe"
     run(common + ["-o", str(client),
                   str(PHASE3_DIR / "xamlcore" / "client" / "measure_cases_winrt.cpp"),
-                  str(layout_src / "json.cpp"), str(layout_src / "markup.cpp")]
+                  str(layout_src / "markup.cpp")]
         + [str(layout_src / name) for name in LAYOUT_SOURCES]
         + includes + libraries)
 
     environment = os.environ.copy()
     environment["WINEPREFIX"] = str(prefix)
     environment["WINEDEBUG"] = environment.get("WINEDEBUG", "-all")
+    # A DLL has no corpus to find font metrics beside, so it is told where they
+    # are. Absent metrics are not fatal: only the text cases need them, and
+    # they say so individually when they measure.
+    if args.fonts.is_dir():
+        environment["OPENXAML_FONT_METRICS"] = "Z:" + str(args.fonts.resolve())
+    else:
+        print(f"no font metrics at {args.fonts}; the text cases will fail", flush=True)
     if not (prefix / "system.reg").is_file():
         run(["wineboot", "-u"], env=environment)
 

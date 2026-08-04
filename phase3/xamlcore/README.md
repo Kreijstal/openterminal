@@ -12,24 +12,30 @@ runtime or its activation factories".
 
 ## What it implements
 
-Six runtime classes, backed by [the layout core](../layout/):
+Eight runtime classes, backed by [the layout core](../layout/):
 
 | class | interfaces |
 |---|---|
 | `Windows.UI.Xaml.Controls.Border` | `IBorder` |
 | `Windows.UI.Xaml.Controls.Grid` | `IGrid`, `IGridStatics` on the factory |
 | `Windows.UI.Xaml.Controls.StackPanel` | `IStackPanel` |
+| `Windows.UI.Xaml.Controls.TextBlock` | `ITextBlock` |
+| `Windows.UI.Xaml.Media.FontFamily` | `IFontFamily`, `IFontFamilyFactory` on the factory |
 | `Windows.UI.Xaml.Controls.ColumnDefinition` | `IColumnDefinition` |
 | `Windows.UI.Xaml.Controls.RowDefinition` | `IRowDefinition` |
 | `Windows.UI.Xaml.Controls.Primitives.LayoutInformation` | `ILayoutInformationStatics` |
 
 Each element also carries `IDependencyObject`, `IUIElement` and
 `IFrameworkElement`, and the panels carry `IPanel` — plus `IVector`,
-`IIterable` and `IIterator` for the three collections. That is 203 methods
-across 11 interfaces, of which roughly 30 do anything. **The rest return
+`IIterable` and `IIterator` for the three collections. That is 249 methods
+across 14 interfaces, of which roughly 40 do anything. **The rest return
 `E_NOTIMPL`**, and that is the intended answer: there are no brushes here, no
 transforms, no events, no property system. A caller needing one finds out by
 being told so, not by receiving a plausible zero.
+
+`FontFamily` is there because `ITextBlock::put_FontFamily` takes an object, not
+a string: there is no way to say "Segoe UI" through this ABI without a class to
+say it with. It holds a name and nothing else.
 
 ## Where it stands
 
@@ -41,13 +47,21 @@ Against build `10.0.26100.33158`, measured under Wine through the ABI:
 | L1 | 72 | **72** |
 | L2 | 192 | **192** |
 | L3 | 132 | **132** |
-| L4 | 72 | 0 |
+| L4 | 72 | needs the font metrics |
 | L7 | 69 | 0 |
 
 Byte-identical to what `phase3/layout`'s own `measure_cases` produces without
 any of this, which is the result worth having: the ABI wiring adds nothing and
-loses nothing. The levels that are red fail as `the type 'TextBlock' is not
-implemented`, not as wrong numbers.
+loses nothing. That was re-checked across all 541 cases after `TextBlock` was
+added, with the text cases measuring rather than erroring. The levels that are
+red fail as `the type 'ScrollViewer' is not implemented`, not as wrong numbers.
+
+L4 needs Segoe UI's metrics, which are harvested on the Windows runner and are
+not in the repository — see [the fonts directory](../xaml-db/fonts/). The DLL
+is told where they are through `OPENXAML_FONT_METRICS`, because unlike the
+layout core it has no corpus to find them beside; `build_xamlcore.py --fonts`
+sets it. Without them the text cases fail naming the family they could not
+find, and nothing else changes.
 
 ## Running it
 
@@ -139,6 +153,11 @@ Both stop the run before a single case is measured.
   replacing it. Dropping it in under the real name is a later, separate step.
 - **No `XamlReader`.** Terminal ships compiled XBF, and text XAML parsing is
   the client's job here. Nothing in this DLL reads markup.
+- **No font fallback, no shaping, no kerning.** `TextBlock` sums per-character
+  advances out of the harvested metrics. That is what the corpus measures and
+  no more: a script needing glyph substitution, or a pair the font kerns, is
+  not handled and would measure wrong rather than fail. A character with no
+  advance in the metrics does fail, by name.
 - **No property system.** `IGridStatics`' `*Property` getters stay `E_NOTIMPL`:
   returning a `DependencyProperty` would imply a system that does not exist.
   `Get`/`Set` are the whole of what the attached properties support.

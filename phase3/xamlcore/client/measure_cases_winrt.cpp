@@ -35,6 +35,7 @@ namespace wf = ABI::Windows::Foundation;
 namespace wux = ABI::Windows::UI::Xaml;
 namespace wuxc = ABI::Windows::UI::Xaml::Controls;
 namespace wuxcp = ABI::Windows::UI::Xaml::Controls::Primitives;
+namespace wuxm = ABI::Windows::UI::Xaml::Media;
 
 using namespace openxaml;
 
@@ -100,6 +101,19 @@ class HString {
 public:
     explicit HString(const wchar_t* text) {
         Check(WindowsCreateString(text, static_cast<UINT32>(wcslen(text)), &handle_),
+              "WindowsCreateString");
+    }
+    // The corpus text is ASCII, so this widens rather than decoding UTF-8. A
+    // case with a non-ASCII character would need real conversion, and would
+    // fail loudly at the font metrics rather than measure something wrong.
+    explicit HString(const std::string& text) {
+        std::wstring wide;
+        for (unsigned char unit : text) {
+            if (unit > 0x7F)
+                throw std::runtime_error("the corpus text is not ASCII: cannot widen it here");
+            wide += static_cast<wchar_t>(unit);
+        }
+        Check(WindowsCreateString(wide.c_str(), static_cast<UINT32>(wide.size()), &handle_),
               "WindowsCreateString");
     }
     ~HString() { WindowsDeleteString(handle_); }
@@ -184,6 +198,7 @@ const wchar_t* ClassNameFor(const std::string& type) {
     if (type == "Border") return L"Windows.UI.Xaml.Controls.Border";
     if (type == "Grid") return L"Windows.UI.Xaml.Controls.Grid";
     if (type == "StackPanel") return L"Windows.UI.Xaml.Controls.StackPanel";
+    if (type == "TextBlock") return L"Windows.UI.Xaml.Controls.TextBlock";
     throw MarkupError("the type '" + type + "' is not implemented");
 }
 
@@ -255,6 +270,34 @@ Ref<wux::IUIElement> Build(const MarkupNode& node, const Statics& statics) {
             Ref<wux::IUIElement> child = Build(node.children.front(), statics);
             Check(border->put_Child(child.get()), "put_Child");
         }
+        return element;
+    }
+
+    if (node.type == "TextBlock") {
+        auto block = QueryFor<wuxc::ITextBlock>(
+            instance.get(), openxaml::iid::Windows_UI_Xaml_Controls_ITextBlock, "ITextBlock");
+
+        // FontFamily is an object, not a string, so it is constructed through
+        // its own activation factory -- which is the only way a caller with
+        // just the public surface could do it either.
+        auto font_factory = GetStatics<wuxm::IFontFamilyFactory>(
+            L"Windows.UI.Xaml.Media.FontFamily",
+            openxaml::iid::Windows_UI_Xaml_Media_IFontFamilyFactory);
+        const HString family_name(node.font_family);
+        Ref<wuxm::IFontFamily> family;
+        Ref<IInspectable> inner;
+        Check(font_factory->CreateInstanceWithName(family_name.get(), nullptr, inner.put(),
+                                                   family.put()),
+              "FontFamily.CreateInstanceWithName");
+
+        const HString text(node.text);
+        Check(block->put_Text(text.get()), "put_Text");
+        Check(block->put_FontFamily(family.get()), "put_FontFamily");
+        Check(block->put_FontSize(node.font_size), "put_FontSize");
+        Check(block->put_TextWrapping(node.text_wrapping == TextWrapping::Wrap
+                                          ? wux::TextWrapping_Wrap
+                                          : wux::TextWrapping_NoWrap),
+              "put_TextWrapping");
         return element;
     }
 
@@ -334,16 +377,23 @@ void Walk(wux::IUIElement* element, const std::string& path, const Statics& stat
         Check(border->get_Child(child.put()), "get_Child");
         if (child) children.push_back(std::move(child));
     } else {
-        auto panel = QueryFor<wuxc::IPanel>(
-            element, openxaml::iid::Windows_UI_Xaml_Controls_IPanel, "IPanel");
-        Ref<__FIVector_1_Windows__CUI__CXaml__CUIElement> collection;
-        Check(panel->get_Children(collection.put()), "get_Children");
-        unsigned count = 0;
-        Check(collection->get_Size(&count), "Children.Size");
-        for (unsigned i = 0; i < count; ++i) {
-            Ref<wux::IUIElement> child;
-            Check(collection->GetAt(i, child.put()), "Children.GetAt");
-            children.push_back(std::move(child));
+        // Anything that is neither a Border nor a Panel is a leaf -- a
+        // TextBlock holds text, not elements. Asked for rather than assumed,
+        // so an element that should be a Panel and is not still enumerates as
+        // empty here and fails where it is built, which is where IPanel is a
+        // hard requirement.
+        Ref<wuxc::IPanel> panel;
+        if (SUCCEEDED(element->QueryInterface(openxaml::iid::Windows_UI_Xaml_Controls_IPanel,
+                                              reinterpret_cast<void**>(panel.put())))) {
+            Ref<__FIVector_1_Windows__CUI__CXaml__CUIElement> collection;
+            Check(panel->get_Children(collection.put()), "get_Children");
+            unsigned count = 0;
+            Check(collection->get_Size(&count), "Children.Size");
+            for (unsigned i = 0; i < count; ++i) {
+                Ref<wux::IUIElement> child;
+                Check(collection->GetAt(i, child.put()), "Children.GetAt");
+                children.push_back(std::move(child));
+            }
         }
     }
 

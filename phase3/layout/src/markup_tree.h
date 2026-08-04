@@ -15,6 +15,7 @@
 #include "grid.h"
 #include "layout.h"
 #include "stack_panel.h"
+#include "text.h"
 
 namespace openxaml {
 
@@ -50,6 +51,13 @@ struct MarkupNode {
 
     // StackPanel.
     Orientation orientation = Orientation::Vertical;
+
+    // TextBlock. The defaults are XAML's; every case in the corpus sets all
+    // three explicitly, so they are not exercised.
+    std::string text;
+    std::string font_family = "Segoe UI";
+    double font_size = 14.0;
+    TextWrapping text_wrapping = TextWrapping::NoWrap;
 
     // Grid.
     std::vector<MarkupDefinition> column_definitions;

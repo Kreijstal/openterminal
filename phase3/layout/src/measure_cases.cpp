@@ -17,8 +17,10 @@
 #include <vector>
 
 #include "element.h"
+#include "fonts.h"
 #include "json.h"
 #include "markup.h"
+#include "text.h"
 
 namespace fs = std::filesystem;
 using namespace openxaml;
@@ -75,11 +77,14 @@ void Walk(const Element& element, const std::string& path, std::vector<std::stri
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::cerr << "usage: measure_cases <cases-dir> <out-dir>\n";
+        std::cerr << "usage: measure_cases <cases-dir> <out-dir> [fonts-dir]\n";
         return 2;
     }
     const fs::path cases = argv[1];
     const fs::path out_dir = argv[2];
+    // Harvested font metrics sit beside the corpus, so the default needs no
+    // argument and the layout of the database stays the only thing to know.
+    const fs::path fonts = argc >= 4 ? fs::path(argv[3]) : cases.parent_path() / "fonts";
 
     if (!fs::exists(cases)) {
         std::cerr << "no such directory: " << cases.string() << "\n";
@@ -95,6 +100,12 @@ int main(int argc, char** argv) {
         std::cerr << "no cases found under " << cases.string() << "\n";
         return 4;
     }
+
+    // Not fatal when absent: the cases that need a font say so individually,
+    // which names the real problem, where refusing to start would blame the
+    // whole corpus for a level that may not even be under test.
+    const int loaded = LoadFontDirectory(FontLibrary::Default(), fonts.string());
+    std::cerr << "font metrics loaded: " << loaded << " from " << fonts.string() << "\n";
 
     fs::create_directories(out_dir);
     int measured = 0;

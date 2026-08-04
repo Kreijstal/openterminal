@@ -110,6 +110,19 @@ jobs:
           Write-Host "oracle: windows $os.$ubr, Segoe UI sha256 $font"
           if (-not $font) { Write-Error "no Segoe UI hash; the oracle would be unidentified"; exit 1 }
 
+      # Text measurement needs numbers that live inside the font file. The
+      # font cannot be committed, so only the metrics travel -- and they are
+      # checked against what the recorded measurements independently imply, so
+      # a disagreement fails here rather than turning into wrong pixel widths.
+      - name: Harvest the font metrics
+        shell: bash
+        run: |
+          python3 -B phase3/scripts/harvest_font_metrics.py \
+            "C:/Windows/Fonts/segoeui.ttf" \
+            --family "Segoe UI" \
+            --expect phase3/tests/data/font-metrics-from-oracle.json \
+            --output "phase3/xaml-db/fonts/segoe-ui.json"
+
       - name: Build the probe
         shell: cmd
         run: |
@@ -195,6 +208,15 @@ jobs:
           name: xaml-measurements-${{ env.os_build }}
           path: phase3/xaml-db/measurements/
 
+      # Its own artifact rather than a directory inside the measurements one,
+      # so the layout the fetch script and the layout job already expect does
+      # not move.
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('phase3/xaml-db/fonts/**') != ''
+        with:
+          name: xaml-fonts-${{ env.os_build }}
+          path: phase3/xaml-db/fonts/
+
       # Handed to the layout job, which needs to know both which artifact to
       # download and which directory inside it the oracle wrote.
       - name: Publish the oracle identity to dependent jobs
@@ -202,10 +224,12 @@ jobs:
         shell: bash
         run: |
           echo "artifact=xaml-measurements-${os_build}" >> "$GITHUB_OUTPUT"
+          echo "fonts=xaml-fonts-${os_build}" >> "$GITHUB_OUTPUT"
           echo "os_build=${os_build}" >> "$GITHUB_OUTPUT"
 
     outputs:
       artifact: ${{ steps.oracle.outputs.artifact }}
+      fonts: ${{ steps.oracle.outputs.fonts }}
       os_build: ${{ steps.oracle.outputs.os_build }}
 
   # The reimplementation, checked against what the runtime just answered. This
@@ -230,6 +254,11 @@ jobs:
           name: ${{ needs.measure.outputs.artifact }}
           path: measurements
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.measure.outputs.fonts }}
+          path: fonts
+
       - name: Build the layout core
         run: |
           cmake -S phase3/layout -B "$RUNNER_TEMP/layout-build" -DCMAKE_BUILD_TYPE=Release
@@ -242,7 +271,7 @@ jobs:
         run: |
           for run in 1 2; do
             "$RUNNER_TEMP/layout-build/measure_cases" \
-              phase3/xaml-db/cases "$RUNNER_TEMP/run$run"
+              phase3/xaml-db/cases "$RUNNER_TEMP/run$run" fonts
           done
           if ! diff -r "$RUNNER_TEMP/run1" "$RUNNER_TEMP/run2" > "$RUNNER_TEMP/nondet.txt"; then
             echo "::error::layout results differ between two runs on the same machine"

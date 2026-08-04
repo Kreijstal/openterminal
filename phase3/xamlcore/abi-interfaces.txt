@@ -18,6 +18,13 @@ ABI::Windows::UI::Xaml::Controls::IBorder
 ABI::Windows::UI::Xaml::Controls::IGrid
 ABI::Windows::UI::Xaml::Controls::IStackPanel
 
+# Text. FontFamily is a runtime class rather than a string, so putting one on
+# a TextBlock means implementing it too -- there is no way to say "Segoe UI"
+# through this ABI without an object to say it with.
+ABI::Windows::UI::Xaml::Controls::ITextBlock
+ABI::Windows::UI::Xaml::Media::IFontFamily
+ABI::Windows::UI::Xaml::Media::IFontFamilyFactory
+
 # Grid's definition objects. They are DependencyObjects, not UIElements, so
 # they carry no layout of their own -- Grid reads their sizes directly.
 ABI::Windows::UI::Xaml::Controls::IColumnDefinition

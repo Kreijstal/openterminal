@@ -22,12 +22,73 @@
 #include "grid.h"
 #include "openxaml_abi_stubs.h"
 #include "stack_panel.h"
+#include "text.h"
 
 namespace openxaml::winrt {
 
 namespace wf = ABI::Windows::Foundation;
 namespace wux = ABI::Windows::UI::Xaml;
 namespace wuxc = ABI::Windows::UI::Xaml::Controls;
+namespace wuxm = ABI::Windows::UI::Xaml::Media;
+
+// --- strings ------------------------------------------------------------------
+//
+// The layout core carries text as UTF-8 and the ABI carries it as UTF-16, so
+// something has to convert. Doing it here rather than through
+// WideCharToMultiByte keeps the DLL's imports to what it already had.
+
+inline std::string Utf8FromHString(HSTRING text) {
+    UINT32 length = 0;
+    const wchar_t* buffer = WindowsGetStringRawBuffer(text, &length);
+    std::string out;
+    for (UINT32 index = 0; index < length; ++index) {
+        char32_t code = buffer[index];
+        // A surrogate pair is one codepoint written as two UTF-16 units.
+        if (code >= 0xD800 && code <= 0xDBFF && index + 1 < length &&
+            buffer[index + 1] >= 0xDC00 && buffer[index + 1] <= 0xDFFF) {
+            code = 0x10000 + ((code - 0xD800) << 10) + (buffer[++index] - 0xDC00);
+        }
+        if (code < 0x80) {
+            out += static_cast<char>(code);
+        } else if (code < 0x800) {
+            out += static_cast<char>(0xC0 | (code >> 6));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        } else if (code < 0x10000) {
+            out += static_cast<char>(0xE0 | (code >> 12));
+            out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        } else {
+            out += static_cast<char>(0xF0 | (code >> 18));
+            out += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+            out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        }
+    }
+    return out;
+}
+
+inline HRESULT HStringFromUtf8(const std::string& text, HSTRING* out) {
+    if (!out) return E_POINTER;
+    std::wstring wide;
+    size_t index = 0;
+    while (index < text.size()) {
+        const auto lead = static_cast<unsigned char>(text[index]);
+        size_t extra = lead < 0x80 ? 0 : (lead & 0xE0) == 0xC0 ? 1 : (lead & 0xF0) == 0xE0 ? 2 : 3;
+        char32_t code = lead < 0x80 ? lead : lead & (0x3F >> extra);
+        if (index + extra >= text.size()) return E_INVALIDARG;
+        for (size_t step = 1; step <= extra; ++step)
+            code = (code << 6) | (static_cast<unsigned char>(text[index + step]) & 0x3F);
+        index += extra + 1;
+        if (code < 0x10000) {
+            wide += static_cast<wchar_t>(code);
+        } else {
+            code -= 0x10000;
+            wide += static_cast<wchar_t>(0xD800 + (code >> 10));
+            wide += static_cast<wchar_t>(0xDC00 + (code & 0x3FF));
+        }
+    }
+    return WindowsCreateString(wide.c_str(), static_cast<UINT32>(wide.size()), out);
+}
 
 // --- collection traits --------------------------------------------------------
 
@@ -572,6 +633,116 @@ private:
          ::openxaml::iid::PIID_FIIterable_1_Windows__CUI__CXaml__CControls__CRowDefinition,
          ::openxaml::iid::PIID_FIIterator_1_Windows__CUI__CXaml__CControls__CRowDefinition},
         L"Windows.UI.Xaml.Controls.RowDefinitionCollection", this};
+};
+
+// --- FontFamily ---------------------------------------------------------------
+//
+// A name, and nothing else. It exists because ITextBlock::put_FontFamily takes
+// an IFontFamily rather than a string, so there is no way to say "Segoe UI"
+// through this ABI without an object to say it with. It is a DependencyObject
+// in XAML but carries no layout, so it stands on its own here.
+
+class FontFamilyObject final : public ComObject, public abi::NotImpl_IFontFamily {
+public:
+    using PrimaryInterface = wuxm::IFontFamily;
+
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Media.FontFamily"; }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Media_IFontFamily, wuxm::IFontFamily)
+        OPENXAML_QI_ARM(IID_IUnknown, wuxm::IFontFamily)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wuxm::IFontFamily)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_Source(HSTRING* value) override {
+        return HStringFromUtf8(source, value);
+    }
+
+    std::string source;
+};
+
+// --- TextBlock ----------------------------------------------------------------
+
+class TextBlockObject final : public XamlElement, public abi::NotImpl_ITextBlock {
+public:
+    openxaml::Element* Layout() override { return &text_; }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.TextBlock";
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_ITextBlock, wuxc::ITextBlock)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_Text(HSTRING* value) override {
+        return HStringFromUtf8(text_.text, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Text(HSTRING value) override {
+        text_.text = Utf8FromHString(value);
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE get_FontSize(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = text_.font_size;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_FontSize(DOUBLE value) override {
+        text_.font_size = value;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE get_FontFamily(wuxm::IFontFamily** value) override {
+        if (!value) return E_POINTER;
+        // Handed back as a fresh object rather than a retained one: nothing
+        // here keeps the instance that was put, only the name it carried.
+        auto* family = new FontFamilyObject();
+        family->source = text_.font_family;
+        family->AddRef();
+        *value = family;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_FontFamily(wuxm::IFontFamily* value) override {
+        if (!value) return E_INVALIDARG;
+        HSTRING source = nullptr;
+        const HRESULT hr = value->get_Source(&source);
+        if (FAILED(hr)) return hr;
+        text_.font_family = Utf8FromHString(source);
+        WindowsDeleteString(source);
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE get_TextWrapping(wux::TextWrapping* value) override {
+        if (!value) return E_POINTER;
+        *value = text_.text_wrapping == openxaml::TextWrapping::Wrap
+                     ? wux::TextWrapping_Wrap
+                     : wux::TextWrapping_NoWrap;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_TextWrapping(wux::TextWrapping value) override {
+        switch (value) {
+            case wux::TextWrapping_NoWrap:
+                text_.text_wrapping = openxaml::TextWrapping::NoWrap;
+                return S_OK;
+            case wux::TextWrapping_Wrap:
+                text_.text_wrapping = openxaml::TextWrapping::Wrap;
+                return S_OK;
+            default:
+                // WrapWholeWords. Refused rather than approximated, for the
+                // reason given in layout/src/markup.cpp.
+                return E_NOTIMPL;
+        }
+    }
+
+private:
+    openxaml::TextBlock text_;
 };
 
 }  // namespace openxaml::winrt

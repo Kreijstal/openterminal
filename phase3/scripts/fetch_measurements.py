@@ -76,6 +76,19 @@ def download(run_id: str, repo: str | None, into: Path) -> Path:
     return oracles[0].parent
 
 
+def fonts_directory(into: Path) -> Path | None:
+    """The harvested font metrics, which ride in their own artifact.
+
+    Absent from runs made before text measurement existed, so a missing one is
+    reported rather than fatal: everything below L4 works without it.
+    """
+    found = sorted(path for path in into.iterdir()
+                   if path.is_dir() and path.name.startswith("xaml-fonts-"))
+    if len(found) > 1:
+        raise SystemExit(f"expected one font artifact, found {len(found)}")
+    return found[0] if found else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", help="default: the latest successful run")
@@ -86,11 +99,19 @@ def main(argv: list[str] | None = None) -> int:
                         help="cache directory for the download")
     parser.add_argument("--accept-new-oracle", action="store_true",
                         help="write the digest for an oracle that has none yet")
+    parser.add_argument("--fonts", action="store_true",
+                        help="print the harvested font metrics directory instead")
     args = parser.parse_args(argv)
 
     run_id = args.run_id or latest_successful_run(args.repo, args.branch)
     measurements = download(run_id, args.repo, args.dest)
+    fonts = fonts_directory(args.dest)
     fresh = oracle_record(measurements)
+
+    if args.fonts and fonts is None:
+        raise SystemExit(f"run {run_id} has no font metrics artifact; "
+                         f"it predates text measurement")
+    wanted = fonts if args.fonts else measurements
 
     ORACLES.mkdir(parents=True, exist_ok=True)
     stored_path = ORACLES / f"{fresh['os_build']}.json"
@@ -111,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
                   f"         re-run with --accept-new-oracle and commit "
                   f"{stored_path.name} to start checking for drift.",
                   file=sys.stderr)
-        print(measurements)
+        print(wanted)
         return 0
 
     stored = json.loads(stored_path.read_text(encoding="utf-8"))
@@ -127,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"verified {fresh['digest']['cases']} measurements against "
           f"{stored_path.name}", file=sys.stderr)
-    print(measurements)
+    print(wanted)
     return 0
 
 

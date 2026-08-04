@@ -176,7 +176,10 @@ A Linux job runs the reimplementation against the same corpus and diffs.
 "N of M cases matching", per level, is the project's progress number — and
 unlike a page screenshot it says exactly what to fix next.
 
-Against build `10.0.26100.33158`, [`phase3/layout`](../layout/) matches 398 of
-541: all of L1–L3, and nothing above it. The levels that are red fail with
-`the type 'TextBlock' is not implemented` rather than with wrong numbers, which
-is the distinction the metric is there to preserve.
+Against build `10.0.26100.33158`, [`phase3/layout`](../layout/) matches all of
+L1–L3. L4 is implemented but needs [the harvested font metrics](fonts/), which
+are CI output rather than repository content; with the two numbers derivable
+from the measurements alone it matches the 36 cases that need nothing else. The
+levels that are red fail with `the type 'ScrollViewer' is not implemented` and
+the like, rather than with wrong numbers, which is the distinction the metric is
+there to preserve.

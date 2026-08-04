@@ -93,25 +93,89 @@ struct Tag {
     std::map<std::string, std::string> attributes;
     bool self_closing = false;
     bool closing = false;
+    // Character data found between the previous tag and this one, already
+    // unescaped. Only a TextBlock accepts it; anywhere else it is an error.
+    std::string text_before;
 };
+
+// XML character references. Entities are decoded rather than passed through
+// because a TextBlock measures its text: an undecoded "&amp;" would be four
+// characters wide instead of one, and nothing would report a problem.
+std::string Unescape(const std::string& text) {
+    static const std::map<std::string, char32_t> kNamed = {
+        {"amp", U'&'}, {"lt", U'<'}, {"gt", U'>'}, {"quot", U'"'}, {"apos", U'\''},
+    };
+
+    std::string out;
+    size_t position = 0;
+    while (position < text.size()) {
+        if (text[position] != '&') {
+            out += text[position++];
+            continue;
+        }
+        const size_t end = text.find(';', position);
+        if (end == std::string::npos)
+            throw MarkupError("an unterminated character reference in text content");
+        const std::string body = text.substr(position + 1, end - position - 1);
+
+        char32_t code = 0;
+        if (!body.empty() && body[0] == '#') {
+            const bool hex = body.size() > 1 && (body[1] == 'x' || body[1] == 'X');
+            const std::string digits = body.substr(hex ? 2 : 1);
+            if (digits.empty()) throw MarkupError("an empty character reference in text content");
+            size_t consumed = 0;
+            code = static_cast<char32_t>(std::stoul(digits, &consumed, hex ? 16 : 10));
+            if (consumed != digits.size())
+                throw MarkupError("\"&" + body + ";\" is not a character reference");
+        } else {
+            const auto found = kNamed.find(body);
+            if (found == kNamed.end())
+                throw MarkupError("the entity \"&" + body + ";\" is not implemented");
+            code = found->second;
+        }
+
+        // Back to UTF-8, which is how the rest of the pipeline carries text.
+        if (code < 0x80) {
+            out += static_cast<char>(code);
+        } else if (code < 0x800) {
+            out += static_cast<char>(0xC0 | (code >> 6));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        } else if (code < 0x10000) {
+            out += static_cast<char>(0xE0 | (code >> 12));
+            out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        } else {
+            out += static_cast<char>(0xF0 | (code >> 18));
+            out += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+            out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        }
+        position = end + 1;
+    }
+    return out;
+}
 
 class Scanner {
 public:
     explicit Scanner(const std::string& text) : text_(text) {}
 
-    // Returns false at end of input. Text between tags is rejected: no case in
-    // this subset has content, and accepting it would quietly drop it.
+    // Returns false at end of input. Character data between tags is carried on
+    // the tag that follows it; whoever is holding the open element decides
+    // whether it is content or a mistake.
     bool Next(Tag& tag) {
-        while (position_ < text_.size() &&
-               std::isspace(static_cast<unsigned char>(text_[position_]))) {
-            ++position_;
+        const size_t text_start = position_;
+        while (position_ < text_.size() && text_[position_] != '<') ++position_;
+        std::string before = text_.substr(text_start, position_ - text_start);
+
+        if (position_ >= text_.size()) {
+            if (before.find_first_not_of(" \t\r\n") != std::string::npos)
+                throw MarkupError("unexpected text content in markup");
+            return false;
         }
-        if (position_ >= text_.size()) return false;
-        if (text_[position_] != '<')
-            throw MarkupError("unexpected text content in markup");
 
         ++position_;
         tag = Tag{};
+        tag.text_before = Unescape(before);
         if (Peek() == '/') {
             ++position_;
             tag.closing = true;
@@ -196,6 +260,15 @@ const std::map<std::string, Orientation> kOrientations = {
     {"Vertical", Orientation::Vertical},
 };
 
+// XAML also has WrapWholeWords, which differs from Wrap only in whether a word
+// too long for the line may be broken. No case in the corpus uses it, so there
+// is nothing to check an implementation of it against, and a wrong one would
+// look exactly like a right one until some page wrapped oddly.
+const std::map<std::string, TextWrapping> kTextWrappings = {
+    {"NoWrap", TextWrapping::NoWrap},
+    {"Wrap", TextWrapping::Wrap},
+};
+
 // Attributes every FrameworkElement takes. Returns false if the name is not
 // one of them, so the caller can try the type's own properties next.
 bool ApplyCommonAttribute(MarkupNode& node, const std::string& name, const std::string& value) {
@@ -245,6 +318,15 @@ void ApplyAttributes(MarkupNode& node, const std::map<std::string, std::string>&
         if (node.type == "StackPanel") {
             if (name == "Orientation") {
                 node.orientation = ParseEnum(value, kOrientations, "Orientation");
+                continue;
+            }
+        }
+        if (node.type == "TextBlock") {
+            if (name == "Text") { node.text = value; continue; }
+            if (name == "FontFamily") { node.font_family = value; continue; }
+            if (name == "FontSize") { node.font_size = ParseDouble(value, "FontSize"); continue; }
+            if (name == "TextWrapping") {
+                node.text_wrapping = ParseEnum(value, kTextWrappings, "TextWrapping");
                 continue;
             }
         }
@@ -311,6 +393,15 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
         stack->orientation = node.orientation;
         for (const MarkupNode& child : node.children) stack->AddChild(BuildElement(child));
         element = std::move(stack);
+    } else if (node.type == "TextBlock") {
+        auto text = std::make_unique<TextBlock>();
+        text->text = node.text;
+        text->font_family = node.font_family;
+        text->font_size = node.font_size;
+        text->text_wrapping = node.text_wrapping;
+        if (!node.children.empty())
+            throw MarkupError("a TextBlock takes text, not child elements");
+        element = std::move(text);
     } else {
         throw MarkupError("the type '" + node.type + "' is not implemented");
     }
@@ -334,7 +425,8 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
 }  // namespace
 
 std::string FullTypeName(const std::string& short_name) {
-    if (short_name == "Border" || short_name == "Grid" || short_name == "StackPanel")
+    if (short_name == "Border" || short_name == "Grid" || short_name == "StackPanel" ||
+        short_name == "TextBlock")
         return "Windows.UI.Xaml.Controls." + short_name;
     throw MarkupError("the type '" + short_name + "' is not implemented");
 }
@@ -351,8 +443,22 @@ MarkupNode ParseMarkup(const std::string& markup) {
     // Empty when ordinary child elements are expected.
     std::string property_element;
 
+    // Character data belongs to the element it sits inside, and only a
+    // TextBlock has anywhere to put it. Everywhere else the old rule stands:
+    // reject it rather than drop it silently.
+    auto take_text = [&](const Tag& scanned) {
+        if (scanned.text_before.empty()) return;
+        if (!open.empty() && open.back().type == "TextBlock") {
+            open.back().text += scanned.text_before;
+            return;
+        }
+        if (scanned.text_before.find_first_not_of(" \t\r\n") != std::string::npos)
+            throw MarkupError("unexpected text content in markup");
+    };
+
     Tag tag;
     while (scanner.Next(tag)) {
+        take_text(tag);
         if (tag.closing) {
             if (!property_element.empty()) {
                 if (tag.name != property_element)
@@ -402,6 +508,7 @@ MarkupNode ParseMarkup(const std::string& markup) {
                 Tag close;
                 if (!scanner.Next(close) || !close.closing || close.name != expected)
                     throw MarkupError("<" + expected + "> must be empty");
+                take_text(close);
             }
             continue;
         }

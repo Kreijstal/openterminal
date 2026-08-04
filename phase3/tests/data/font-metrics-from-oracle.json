@@ -1,0 +1,14 @@
+{
+ "advances": {
+  "77": 1839
+ },
+ "derivation": "NOT harvested from a font. These two numbers were solved out of the recorded L4 measurements, and exist so the text layout rules can be checked on a machine with no Segoe UI. 'M' is the only character the corpus measures on its own, at sizes 12, 14 and 24, and 1839 is the only integer advance that reproduces all three (10.7767, 12.57, 21.55). Likewise the empty-TextBlock heights give a baseline-to-baseline distance of 2724 design units, but not how it splits between ascender, descender and line gap -- so the whole sum is carried on the ascender here. phase3/xaml-db/fonts is where real harvested metrics go; this file is not one and must not be used as one.",
+ "family": "Segoe UI",
+ "hhea": {
+  "ascender": 2724,
+  "descender": 0,
+  "line_gap": 0
+ },
+ "schema_version": 1,
+ "units_per_em": 2048
+}

@@ -18,6 +18,10 @@ Windows.UI.Xaml.Controls.IStackPanel
 Windows.UI.Xaml.Controls.IColumnDefinition
 Windows.UI.Xaml.Controls.IRowDefinition
 
+Windows.UI.Xaml.Controls.ITextBlock
+Windows.UI.Xaml.Media.IFontFamily
+Windows.UI.Xaml.Media.IFontFamilyFactory
+
 Windows.UI.Xaml.Controls.IGridStatics
 Windows.UI.Xaml.Controls.Primitives.ILayoutInformationStatics
 

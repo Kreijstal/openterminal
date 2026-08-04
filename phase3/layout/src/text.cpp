@@ -1,0 +1,259 @@
+#include "text.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <vector>
+
+namespace openxaml {
+namespace {
+
+// --- what the runtime was observed to do --------------------------------------
+//
+// Three rules, each derived from phase3/xaml-db's recorded measurements rather
+// than ported from a source. The evidence is stated because none of them is
+// guessable, and a later reader should be able to re-check them:
+//
+// 1. Advances and line heights land on multiples of 1/300 of a DIP. A design
+//    unit advance a at font size s contributes round(a * s / upem * 300) / 300.
+//    The snap is per glyph, not per run: no single integer design-unit total
+//    for "Terminal" can produce the measured 44.6133 at 12, 52.04 at 14 and
+//    89.2167 at 24 -- the three sizes each imply a different total, so the
+//    rounding must already have happened by the time the advances are summed.
+//    Where 300 comes from is not explained here; it is what the numbers say.
+//
+// 2. Line height is that same snap applied to the font's baseline-to-baseline
+//    distance -- except for empty text, which keeps the unsnapped value. At
+//    size 12 a line of text is 15.96 and an empty TextBlock is 15.9609, and
+//    both appear in the corpus.
+//
+// 3. Heights accumulate one line at a time in float, not by multiplying. Ten
+//    lines at size 24 measure 319.2334; ten times the line height is
+//    319.2333, and only repeated float addition produces the recorded value.
+//
+// All 72 L4 cases agree with these rules on every number that does not depend
+// on a per-character advance.
+
+inline constexpr double kTextUnitsPerDip = 300.0;
+
+double SnapText(double value) {
+    return std::round(value * kTextUnitsPerDip) / kTextUnitsPerDip;
+}
+
+// A layout engine carries these as 32-bit floats, and at ten lines the
+// difference reaches the fourth decimal the corpus records.
+double AsFloat(double value) {
+    return static_cast<double>(static_cast<float>(value));
+}
+
+// DesiredSize is ceiled, not rounded: the corpus has a TextBlock measuring
+// 89.2167 that reports 90, which rounding cannot produce. Checked against all
+// 144 recorded L4 numbers -- both axes of all 72 cases -- with no exception.
+double CeilLayout(double value, double dpi_scale) {
+    const double scaled = value * dpi_scale;
+    const double nearest = std::nearbyint(scaled);
+    // Already whole to within float noise: ceiling it would add a whole pixel
+    // for nothing.
+    if (AreClose(scaled, nearest)) return nearest / dpi_scale;
+    return std::ceil(scaled) / dpi_scale;
+}
+
+// --- text ---------------------------------------------------------------------
+
+bool IsBreakSpace(char32_t code) { return code == U' ' || code == U'\t'; }
+
+std::vector<char32_t> DecodeUtf8(const std::string& text) {
+    std::vector<char32_t> out;
+    size_t index = 0;
+    while (index < text.size()) {
+        const auto lead = static_cast<unsigned char>(text[index]);
+        size_t extra = 0;
+        char32_t code = 0;
+        if (lead < 0x80) {
+            code = lead;
+        } else if ((lead & 0xE0) == 0xC0) {
+            extra = 1;
+            code = lead & 0x1F;
+        } else if ((lead & 0xF0) == 0xE0) {
+            extra = 2;
+            code = lead & 0x0F;
+        } else if ((lead & 0xF8) == 0xF0) {
+            extra = 3;
+            code = lead & 0x07;
+        } else {
+            throw TextError("the text is not valid UTF-8");
+        }
+        if (index + extra >= text.size()) throw TextError("the text is not valid UTF-8");
+        for (size_t step = 1; step <= extra; ++step) {
+            const auto unit = static_cast<unsigned char>(text[index + step]);
+            if ((unit & 0xC0) != 0x80) throw TextError("the text is not valid UTF-8");
+            code = (code << 6) | (unit & 0x3F);
+        }
+        out.push_back(code);
+        index += extra + 1;
+    }
+    return out;
+}
+
+struct Glyph {
+    char32_t code = 0;
+    double advance = 0.0;  // already snapped, in DIPs
+    bool space = false;
+};
+
+std::string Describe(char32_t code) {
+    char buffer[16];
+    std::snprintf(buffer, sizeof buffer, "U+%04X", static_cast<unsigned>(code));
+    return buffer;
+}
+
+std::vector<Glyph> Shape(const std::string& text, const FontMetrics& font, double font_size) {
+    std::vector<Glyph> glyphs;
+    for (char32_t code : DecodeUtf8(text)) {
+        const auto found = font.advances.find(code);
+        if (found == font.advances.end()) {
+            throw TextError("the harvested font metrics have no advance for " + Describe(code));
+        }
+        Glyph glyph;
+        glyph.code = code;
+        glyph.advance = SnapText(found->second * font_size / font.units_per_em);
+        glyph.space = IsBreakSpace(code);
+        glyphs.push_back(glyph);
+    }
+    return glyphs;
+}
+
+// Advances accumulate left to right across the whole line, one glyph at a
+// time, because that is where rule 3 above says the float rounding happens.
+// Summing a word on its own and adding the subtotal is not the same
+// computation and does not always give the same number.
+double Extend(double width, const std::vector<Glyph>& glyphs, size_t begin, size_t end) {
+    for (size_t index = begin; index < end; ++index) width = AsFloat(width + glyphs[index].advance);
+    return width;
+}
+
+// Greedy line breaking, the standard shape: break after a run of spaces, and
+// only break inside a word when the word cannot fit a line of its own.
+std::vector<double> BreakLines(const std::vector<Glyph>& glyphs, double limit) {
+    std::vector<double> widths;
+    const size_t count = glyphs.size();
+
+    size_t position = 0;
+    size_t line_begin = 0;
+    // Two running totals: what the line measures, which stops at the last
+    // visible glyph, and where the next word would start, which does not.
+    double visible = 0.0;
+    double consumed = 0.0;
+
+    while (position < count) {
+        size_t word_end = position;
+        while (word_end < count && !glyphs[word_end].space) ++word_end;
+        size_t segment_end = word_end;
+        while (segment_end < count && glyphs[segment_end].space) ++segment_end;
+
+        double with_word = Extend(consumed, glyphs, position, word_end);
+
+        if (position != line_begin && GreaterThan(with_word, limit)) {
+            widths.push_back(visible);
+            line_begin = position;
+            visible = 0.0;
+            consumed = 0.0;
+            with_word = Extend(0.0, glyphs, position, word_end);
+        }
+
+        if (position == line_begin && GreaterThan(with_word, limit)) {
+            // No line can hold this word, so break inside it. At least one
+            // glyph per line, otherwise a glyph wider than the limit loops.
+            double running = 0.0;
+            size_t taken = position;
+            while (taken < word_end) {
+                const double next = AsFloat(running + glyphs[taken].advance);
+                if (taken > position && GreaterThan(next, limit)) break;
+                running = next;
+                ++taken;
+            }
+            widths.push_back(running);
+            position = taken;
+            line_begin = position;
+            visible = 0.0;
+            consumed = 0.0;
+            continue;
+        }
+
+        visible = with_word;
+        consumed = Extend(with_word, glyphs, word_end, segment_end);
+        position = segment_end;
+    }
+
+    // A word broken exactly at the end of the text has already closed its last
+    // line, so there is nothing left to push.
+    if (line_begin < count || widths.empty()) widths.push_back(visible);
+    return widths;
+}
+
+}  // namespace
+
+// --- FontLibrary --------------------------------------------------------------
+
+void FontLibrary::Add(std::string family, FontMetrics metrics) {
+    fonts_[std::move(family)] = std::move(metrics);
+}
+
+const FontMetrics* FontLibrary::Find(const std::string& family) const {
+    const auto found = fonts_.find(family);
+    return found == fonts_.end() ? nullptr : &found->second;
+}
+
+FontLibrary& FontLibrary::Default() {
+    static FontLibrary library;
+    return library;
+}
+
+// --- TextBlock ----------------------------------------------------------------
+
+Size TextBlock::LayoutText(double limit) const {
+    const FontMetrics* font = FontLibrary::Default().Find(font_family);
+    if (!font) {
+        throw TextError("no harvested metrics for the font family \"" + font_family +
+                        "\"; see phase3/xaml-db/fonts");
+    }
+    if (font->units_per_em <= 0.0) throw TextError("the font metrics have no units per em");
+
+    const double spacing = font->LineSpacing() * font_size / font->units_per_em;
+
+    // An empty TextBlock still occupies a line, and that line keeps the
+    // unsnapped height. This is the one place the two differ, and the corpus
+    // records both: 15.9609 empty against 15.96 with text, at size 12.
+    if (text.empty()) return {0.0, AsFloat(spacing)};
+
+    const std::vector<Glyph> glyphs = Shape(text, *font, font_size);
+    const double effective_limit = text_wrapping == TextWrapping::Wrap ? limit : kInfinity;
+    const std::vector<double> lines = BreakLines(glyphs, effective_limit);
+
+    const double line_height = SnapText(spacing);
+    double width = 0.0;
+    double height = 0.0;
+    for (double line : lines) {
+        width = std::max(width, line);
+        height = AsFloat(height + line_height);
+    }
+    return {width, height};
+}
+
+Size TextBlock::MeasureOverride(Size available) {
+    const Size text_size = LayoutText(available.width);
+    return {CeilLayout(text_size.width, dpi_scale_x), CeilLayout(text_size.height, dpi_scale_y)};
+}
+
+Size TextBlock::ArrangeOverride(Size final_size) {
+    // Re-laid out, because the arranged width is not always the measured one --
+    // a stretched TextBlock is arranged into the whole slot, and wrapped text
+    // has to be broken against that width to match.
+    //
+    // The result is returned unclipped, which is why a TextBlock in a slot too
+    // narrow for it reports a render size wider than its slot. The corpus has
+    // that case and the runtime does the same.
+    return LayoutText(final_size.width);
+}
+
+}  // namespace openxaml

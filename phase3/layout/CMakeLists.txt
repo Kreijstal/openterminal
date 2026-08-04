@@ -12,12 +12,16 @@ add_library(openxaml_layout STATIC
     src/border.cpp
     src/stack_panel.cpp
     src/grid.cpp
+    src/text.cpp
+    # Text measurement needs numbers out of a font file, and those arrive as
+    # JSON, so the reader moves into the library with them.
+    src/fonts.cpp
+    src/json.cpp
 )
 target_include_directories(openxaml_layout PUBLIC src)
 
 add_executable(measure_cases
     src/measure_cases.cpp
-    src/json.cpp
     src/markup.cpp
 )
 target_link_libraries(measure_cases PRIVATE openxaml_layout)
