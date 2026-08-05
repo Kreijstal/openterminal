@@ -12,8 +12,10 @@
 #include <string>
 #include <vector>
 
+#include "control.h"
 #include "grid.h"
 #include "layout.h"
+#include "property.h"
 #include "stack_panel.h"
 #include "text.h"
 
@@ -25,12 +27,35 @@ struct MarkupDefinition {
     double max_size = kInfinity;
 };
 
+// One property the markup actually wrote, ready for the store.
+//
+// Which properties were written is not the same question as what they are set
+// to, and the property system needs the first one: an inherited property that
+// the markup left alone reads its ancestor's value, and one written out by
+// hand does not -- even when the two happen to be equal.
+struct MarkupProperty {
+    const DependencyProperty* property = nullptr;
+    PropertyValue value;
+};
+
 struct MarkupNode {
     // The short name as written in the markup: "Border", "Grid", "StackPanel".
     std::string type;
 
-    // FrameworkElement. Width and Height are NaN when the markup says Auto or
-    // says nothing, which is how XAML spells "no explicit size".
+    // Everything the markup set on this element, in the form the property
+    // store takes it. This is what the layout core realises.
+    std::vector<MarkupProperty> properties;
+
+    // The same values again, as typed fields.
+    //
+    // Not redundant for the reason it looks: phase3/xamlcore's client realises
+    // the same node through the real WinRT ABI, which has a typed setter per
+    // property and no store to hand a PropertyValue to. Both are filled from
+    // one parse, so the two realisations cannot disagree about what a case
+    // says -- which is the whole reason the parse is shared.
+    //
+    // Width and Height are NaN when the markup says Auto or says nothing,
+    // which is how XAML spells "no explicit size".
     double width = Auto();
     double height = Auto();
     double min_width = 0.0;
@@ -44,6 +69,12 @@ struct MarkupNode {
     int grid_row = 0;
     int grid_column_span = 1;
     int grid_row_span = 1;
+    bool use_layout_rounding = true;
+
+    // UIElement. Opacity changes no size at all; it is carried because a
+    // parser that dropped an attribute it could not use would produce markup
+    // that measures identically and is not the markup that was written.
+    double opacity = 1.0;
 
     // Border.
     Thickness border_thickness;
@@ -52,11 +83,12 @@ struct MarkupNode {
     // StackPanel.
     Orientation orientation = Orientation::Vertical;
 
-    // TextBlock. The defaults are XAML's; every case in the corpus sets all
-    // three explicitly, so they are not exercised.
+    // Text, and the inherited text properties a Control carries as well. The
+    // defaults are XAML's.
     std::string text;
     std::string font_family = "Segoe UI";
     double font_size = 14.0;
+    std::string foreground;
     TextWrapping text_wrapping = TextWrapping::NoWrap;
 
     // Grid.

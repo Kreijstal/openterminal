@@ -21,7 +21,34 @@ constexpr int kLayoutLoopMaxCount = 5;
 bool GridIsZero(double v) { return std::abs(v) < kGridEpsilon; }
 bool GridAreClose(double a, double b) { return std::abs(a - b) < kGridEpsilon; }
 
+// Attached properties are registered under their dotted name, which is also
+// how the markup writes them: the name carries its owner, so it resolves on
+// any element rather than against that element's own type chain.
+const DependencyProperty* const kColumn = RegisterProperty("Grid", "Grid.Column", {0, false, true});
+const DependencyProperty* const kRow = RegisterProperty("Grid", "Grid.Row", {0, false, true});
+const DependencyProperty* const kColumnSpan =
+    RegisterProperty("Grid", "Grid.ColumnSpan", {1, false, true});
+const DependencyProperty* const kRowSpan = RegisterProperty("Grid", "Grid.RowSpan", {1, false, true});
+
+const std::vector<std::string> kOwners = {"Grid", "Panel", "FrameworkElement", "UIElement"};
+
 }  // namespace
+
+const DependencyProperty& Grid::ColumnProperty() { return *kColumn; }
+const DependencyProperty& Grid::RowProperty() { return *kRow; }
+const DependencyProperty& Grid::ColumnSpanProperty() { return *kColumnSpan; }
+const DependencyProperty& Grid::RowSpanProperty() { return *kRowSpan; }
+
+const std::vector<std::string>& Grid::Owners() { return kOwners; }
+
+int Grid::GetColumn(const Element& element) { return element.GetInt(*kColumn); }
+void Grid::SetColumn(Element& element, int value) { element.SetValue(*kColumn, value); }
+int Grid::GetRow(const Element& element) { return element.GetInt(*kRow); }
+void Grid::SetRow(Element& element, int value) { element.SetValue(*kRow, value); }
+int Grid::GetColumnSpan(const Element& element) { return element.GetInt(*kColumnSpan); }
+void Grid::SetColumnSpan(Element& element, int value) { element.SetValue(*kColumnSpan, value); }
+int Grid::GetRowSpan(const Element& element) { return element.GetInt(*kRowSpan); }
+void Grid::SetRowSpan(Element& element, int value) { element.SetValue(*kRowSpan, value); }
 
 void Grid::ValidateDefinitionsLayout(std::vector<Definition>& definitions,
                                      bool treat_star_as_auto) {
@@ -74,10 +101,10 @@ void Grid::ValidateCells() {
         // Out-of-range indices and spans are clamped rather than rejected;
         // that is what the runtime does with Grid.Column="9" on a two-column
         // grid, and rejecting it here would fail cases the oracle accepts.
-        cell.column_index = std::min(child->grid_column, column_count - 1);
-        cell.row_index = std::min(child->grid_row, row_count - 1);
-        cell.column_span = std::min(child->grid_column_span, column_count - cell.column_index);
-        cell.row_span = std::min(child->grid_row_span, row_count - cell.row_index);
+        cell.column_index = std::min(GetColumn(*child), column_count - 1);
+        cell.row_index = std::min(GetRow(*child), row_count - 1);
+        cell.column_span = std::min(GetColumnSpan(*child), column_count - cell.column_index);
+        cell.row_span = std::min(GetRowSpan(*child), row_count - cell.row_index);
 
         // A span covering several definitions takes on the character of all of
         // them at once: spanning one Auto and one Star column is both.
@@ -424,13 +451,14 @@ Size Grid::MeasureOverride(Size available) {
 void Grid::SetFinalSize(std::vector<Definition>& definitions, double final_size, double dpi_scale) {
     std::vector<Definition*> stars;
     double all_preferred_arrange_size = 0.0;
+    const bool rounding = use_layout_rounding();
 
     // Each definition's size before rounding. Rounding every column
     // independently can leave the row a pixel short or long of the Grid, and
     // the leftover is handed to whichever columns lost the most to rounding.
     std::vector<double> rounding_errors(definitions.size(), 0.0);
     const auto round = [&](double value, size_t index) {
-        if (!use_layout_rounding) return value;
+        if (!rounding) return value;
         rounding_errors[index] = value;
         return RoundLayoutValue(value, dpi_scale);
     };
@@ -511,7 +539,7 @@ void Grid::SetFinalSize(std::vector<Definition>& definitions, double final_size,
         for (size_t i = 0; i < order.size(); ++i) {
             const double unrounded = order[i]->size_cache + size_to_distribute / (order.size() - i);
             double final_definition_size = unrounded;
-            if (use_layout_rounding) {
+            if (rounding) {
                 rounding_errors[index_of(order[i])] =
                     std::min(std::max(unrounded, order[i]->min_size), order[i]->size_cache);
                 final_definition_size = RoundLayoutValue(unrounded, dpi_scale);
@@ -534,7 +562,7 @@ void Grid::SetFinalSize(std::vector<Definition>& definitions, double final_size,
     // their declared size and legitimately leave the rest of the Grid empty --
     // handing them the remainder stretches columns that asked for nothing,
     // which the runtime does not do.
-    if (use_layout_rounding && !stars.empty() &&
+    if (rounding && !stars.empty() &&
         !GridAreClose(all_preferred_arrange_size, final_size)) {
         std::vector<Definition*> order;
         order.reserve(definitions.size());

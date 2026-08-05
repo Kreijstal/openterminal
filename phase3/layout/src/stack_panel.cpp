@@ -3,9 +3,21 @@
 #include <algorithm>
 
 namespace openxaml {
+namespace {
+
+const DependencyProperty* const kOrientation = RegisterProperty(
+    "StackPanel", "Orientation", {static_cast<int>(Orientation::Vertical), false, true});
+
+const std::vector<std::string> kOwners = {"StackPanel", "Panel", "FrameworkElement", "UIElement"};
+
+}  // namespace
+
+const DependencyProperty& StackPanel::OrientationProperty() { return *kOrientation; }
+
+const std::vector<std::string>& StackPanel::Owners() { return kOwners; }
 
 Size StackPanel::MeasureOverride(Size available) {
-    const bool horizontal = orientation == Orientation::Horizontal;
+    const bool horizontal = orientation() == Orientation::Horizontal;
 
     // Unbounded along the stacking axis. This is the single most consequential
     // line in the class: children are asked how big they want to be with no
@@ -34,7 +46,7 @@ Size StackPanel::MeasureOverride(Size available) {
 }
 
 Size StackPanel::ArrangeOverride(Size final_size) {
-    const bool horizontal = orientation == Orientation::Horizontal;
+    const bool horizontal = orientation() == Orientation::Horizontal;
 
     Rect slot{0.0, 0.0, final_size.width, final_size.height};
     double previous_child_size = 0.0;

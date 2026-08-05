@@ -209,11 +209,11 @@ public:
     }
     HRESULT STDMETHODCALLTYPE get_UseLayoutRounding(boolean* value) override {
         if (!value) return E_POINTER;
-        *value = Layout()->use_layout_rounding ? 1 : 0;
+        *value = Layout()->use_layout_rounding() ? 1 : 0;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE put_UseLayoutRounding(boolean value) override {
-        Layout()->use_layout_rounding = value != 0;
+        Layout()->set_use_layout_rounding(value != 0);
         return S_OK;
     }
 
@@ -232,11 +232,11 @@ public:
 #define OPENXAML_DOUBLE_PROPERTY(name, field)                          \
     HRESULT STDMETHODCALLTYPE get_##name(DOUBLE* value) override {     \
         if (!value) return E_POINTER;                                  \
-        *value = Layout()->field;                                      \
+        *value = Layout()->field();                                    \
         return S_OK;                                                   \
     }                                                                  \
     HRESULT STDMETHODCALLTYPE put_##name(DOUBLE value) override {      \
-        Layout()->field = value;                                       \
+        Layout()->set_##field(value);                                  \
         return S_OK;                                                   \
     }
 
@@ -250,17 +250,17 @@ public:
 
     HRESULT STDMETHODCALLTYPE get_Margin(wux::Thickness* value) override {
         if (!value) return E_POINTER;
-        const openxaml::Thickness& margin = Layout()->margin;
+        const openxaml::Thickness& margin = Layout()->margin();
         *value = {margin.left, margin.top, margin.right, margin.bottom};
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE put_Margin(wux::Thickness value) override {
-        Layout()->margin = {value.Left, value.Top, value.Right, value.Bottom};
+        Layout()->set_margin({value.Left, value.Top, value.Right, value.Bottom});
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_HorizontalAlignment(wux::HorizontalAlignment* value) override {
         if (!value) return E_POINTER;
-        switch (Layout()->horizontal_alignment) {
+        switch (Layout()->horizontal_alignment()) {
             case openxaml::HorizontalAlignment::Left: *value = wux::HorizontalAlignment_Left; break;
             case openxaml::HorizontalAlignment::Center: *value = wux::HorizontalAlignment_Center; break;
             case openxaml::HorizontalAlignment::Right: *value = wux::HorizontalAlignment_Right; break;
@@ -271,13 +271,13 @@ public:
     HRESULT STDMETHODCALLTYPE put_HorizontalAlignment(wux::HorizontalAlignment value) override {
         switch (value) {
             case wux::HorizontalAlignment_Left:
-                Layout()->horizontal_alignment = openxaml::HorizontalAlignment::Left; break;
+                Layout()->set_horizontal_alignment(openxaml::HorizontalAlignment::Left); break;
             case wux::HorizontalAlignment_Center:
-                Layout()->horizontal_alignment = openxaml::HorizontalAlignment::Center; break;
+                Layout()->set_horizontal_alignment(openxaml::HorizontalAlignment::Center); break;
             case wux::HorizontalAlignment_Right:
-                Layout()->horizontal_alignment = openxaml::HorizontalAlignment::Right; break;
+                Layout()->set_horizontal_alignment(openxaml::HorizontalAlignment::Right); break;
             case wux::HorizontalAlignment_Stretch:
-                Layout()->horizontal_alignment = openxaml::HorizontalAlignment::Stretch; break;
+                Layout()->set_horizontal_alignment(openxaml::HorizontalAlignment::Stretch); break;
             default:
                 return E_INVALIDARG;
         }
@@ -285,7 +285,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE get_VerticalAlignment(wux::VerticalAlignment* value) override {
         if (!value) return E_POINTER;
-        switch (Layout()->vertical_alignment) {
+        switch (Layout()->vertical_alignment()) {
             case openxaml::VerticalAlignment::Top: *value = wux::VerticalAlignment_Top; break;
             case openxaml::VerticalAlignment::Center: *value = wux::VerticalAlignment_Center; break;
             case openxaml::VerticalAlignment::Bottom: *value = wux::VerticalAlignment_Bottom; break;
@@ -296,13 +296,13 @@ public:
     HRESULT STDMETHODCALLTYPE put_VerticalAlignment(wux::VerticalAlignment value) override {
         switch (value) {
             case wux::VerticalAlignment_Top:
-                Layout()->vertical_alignment = openxaml::VerticalAlignment::Top; break;
+                Layout()->set_vertical_alignment(openxaml::VerticalAlignment::Top); break;
             case wux::VerticalAlignment_Center:
-                Layout()->vertical_alignment = openxaml::VerticalAlignment::Center; break;
+                Layout()->set_vertical_alignment(openxaml::VerticalAlignment::Center); break;
             case wux::VerticalAlignment_Bottom:
-                Layout()->vertical_alignment = openxaml::VerticalAlignment::Bottom; break;
+                Layout()->set_vertical_alignment(openxaml::VerticalAlignment::Bottom); break;
             case wux::VerticalAlignment_Stretch:
-                Layout()->vertical_alignment = openxaml::VerticalAlignment::Stretch; break;
+                Layout()->set_vertical_alignment(openxaml::VerticalAlignment::Stretch); break;
             default:
                 return E_INVALIDARG;
         }
@@ -367,22 +367,22 @@ public:
 
     HRESULT STDMETHODCALLTYPE get_BorderThickness(wux::Thickness* value) override {
         if (!value) return E_POINTER;
-        const openxaml::Thickness& t = children_.border_thickness;
+        const openxaml::Thickness& t = children_.border_thickness();
         *value = {t.left, t.top, t.right, t.bottom};
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE put_BorderThickness(wux::Thickness value) override {
-        children_.border_thickness = {value.Left, value.Top, value.Right, value.Bottom};
+        children_.set_border_thickness({value.Left, value.Top, value.Right, value.Bottom});
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_Padding(wux::Thickness* value) override {
         if (!value) return E_POINTER;
-        const openxaml::Thickness& t = children_.padding;
+        const openxaml::Thickness& t = children_.padding();
         *value = {t.left, t.top, t.right, t.bottom};
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE put_Padding(wux::Thickness value) override {
-        children_.padding = {value.Left, value.Top, value.Right, value.Bottom};
+        children_.set_padding({value.Left, value.Top, value.Right, value.Bottom});
         return S_OK;
     }
 
@@ -441,15 +441,15 @@ public:
 
     HRESULT STDMETHODCALLTYPE get_Orientation(wuxc::Orientation* value) override {
         if (!value) return E_POINTER;
-        *value = layout_.orientation == openxaml::Orientation::Horizontal
+        *value = layout_.orientation() == openxaml::Orientation::Horizontal
                      ? wuxc::Orientation_Horizontal
                      : wuxc::Orientation_Vertical;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE put_Orientation(wuxc::Orientation value) override {
-        layout_.orientation = value == wuxc::Orientation_Horizontal
-                                  ? openxaml::Orientation::Horizontal
-                                  : openxaml::Orientation::Vertical;
+        layout_.set_orientation(value == wuxc::Orientation_Horizontal
+                                    ? openxaml::Orientation::Horizontal
+                                    : openxaml::Orientation::Vertical);
         return S_OK;
     }
 };
@@ -682,20 +682,20 @@ public:
     OPENXAML_COM_BOILERPLATE()
 
     HRESULT STDMETHODCALLTYPE get_Text(HSTRING* value) override {
-        return HStringFromUtf8(text_.text, value);
+        return HStringFromUtf8(text_.text(), value);
     }
     HRESULT STDMETHODCALLTYPE put_Text(HSTRING value) override {
-        text_.text = Utf8FromHString(value);
+        text_.set_text(Utf8FromHString(value));
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE get_FontSize(DOUBLE* value) override {
         if (!value) return E_POINTER;
-        *value = text_.font_size;
+        *value = text_.font_size();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE put_FontSize(DOUBLE value) override {
-        text_.font_size = value;
+        text_.set_font_size(value);
         return S_OK;
     }
 
@@ -704,7 +704,7 @@ public:
         // Handed back as a fresh object rather than a retained one: nothing
         // here keeps the instance that was put, only the name it carried.
         auto* family = new FontFamilyObject();
-        family->source = text_.font_family;
+        family->source = text_.font_family();
         family->AddRef();
         *value = family;
         return S_OK;
@@ -714,14 +714,14 @@ public:
         HSTRING source = nullptr;
         const HRESULT hr = value->get_Source(&source);
         if (FAILED(hr)) return hr;
-        text_.font_family = Utf8FromHString(source);
+        text_.set_font_family(Utf8FromHString(source));
         WindowsDeleteString(source);
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE get_TextWrapping(wux::TextWrapping* value) override {
         if (!value) return E_POINTER;
-        *value = text_.text_wrapping == openxaml::TextWrapping::Wrap
+        *value = text_.text_wrapping() == openxaml::TextWrapping::Wrap
                      ? wux::TextWrapping_Wrap
                      : wux::TextWrapping_NoWrap;
         return S_OK;
@@ -729,10 +729,10 @@ public:
     HRESULT STDMETHODCALLTYPE put_TextWrapping(wux::TextWrapping value) override {
         switch (value) {
             case wux::TextWrapping_NoWrap:
-                text_.text_wrapping = openxaml::TextWrapping::NoWrap;
+                text_.set_text_wrapping(openxaml::TextWrapping::NoWrap);
                 return S_OK;
             case wux::TextWrapping_Wrap:
-                text_.text_wrapping = openxaml::TextWrapping::Wrap;
+                text_.set_text_wrapping(openxaml::TextWrapping::Wrap);
                 return S_OK;
             default:
                 // WrapWholeWords. Refused rather than approximated, for the

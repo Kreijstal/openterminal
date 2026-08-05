@@ -57,7 +57,30 @@ struct Definition {
 class Grid : public Panel {
 public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.Grid"; }
+    static const std::vector<std::string>& Owners();
+    const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
 
+    // Attached properties, and genuinely attached: they are registered against
+    // Grid and stored on whichever element carries them, so a Border knows
+    // nothing about them and a Grid can still read them off it. This is why
+    // they are static functions taking an Element rather than fields on one.
+    static int GetColumn(const Element& element);
+    static void SetColumn(Element& element, int value);
+    static int GetRow(const Element& element);
+    static void SetRow(Element& element, int value);
+    static int GetColumnSpan(const Element& element);
+    static void SetColumnSpan(Element& element, int value);
+    static int GetRowSpan(const Element& element);
+    static void SetRowSpan(Element& element, int value);
+
+    static const DependencyProperty& ColumnProperty();
+    static const DependencyProperty& RowProperty();
+    static const DependencyProperty& ColumnSpanProperty();
+    static const DependencyProperty& RowSpanProperty();
+
+    // Collections rather than values: a definition is a mutable object the
+    // sizing algorithm writes its scratch state into, which is not something
+    // the property store carries.
     std::vector<Definition> column_definitions;
     std::vector<Definition> row_definitions;
 

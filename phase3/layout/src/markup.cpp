@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "border.h"
+#include "control.h"
 #include "grid.h"
 #include "stack_panel.h"
 
@@ -15,6 +16,12 @@ namespace openxaml {
 namespace {
 
 // --- value parsing ------------------------------------------------------------
+
+bool ParseBool(const std::string& text, const std::string& where) {
+    if (text == "True" || text == "true") return true;
+    if (text == "False" || text == "false") return false;
+    throw MarkupError("cannot read \"" + text + "\" as a boolean for " + where);
+}
 
 double ParseDouble(const std::string& text, const std::string& where) {
     char* end = nullptr;
@@ -269,69 +276,108 @@ const std::map<std::string, TextWrapping> kTextWrappings = {
     {"Wrap", TextWrapping::Wrap},
 };
 
-// Attributes every FrameworkElement takes. Returns false if the name is not
-// one of them, so the caller can try the type's own properties next.
-bool ApplyCommonAttribute(MarkupNode& node, const std::string& name, const std::string& value) {
-    if (name == "xmlns" || name.rfind("xmlns:", 0) == 0) return true;
-    if (name == "Width") { node.width = ParseLength(value, "Width"); return true; }
-    if (name == "Height") { node.height = ParseLength(value, "Height"); return true; }
-    if (name == "MinWidth") { node.min_width = ParseDouble(value, "MinWidth"); return true; }
-    if (name == "MaxWidth") { node.max_width = ParseDouble(value, "MaxWidth"); return true; }
-    if (name == "MinHeight") { node.min_height = ParseDouble(value, "MinHeight"); return true; }
-    if (name == "MaxHeight") { node.max_height = ParseDouble(value, "MaxHeight"); return true; }
-    if (name == "Margin") { node.margin = ParseThickness(value, "Margin"); return true; }
+// The property owner chain for a markup type name, which is what decides
+// whether an attribute names a property of that type. Asking a freshly built
+// element for it would work; this avoids building one to answer a question
+// about the type.
+const std::vector<std::string>& OwnersFor(const std::string& type) {
+    if (type == "Border") return Border::Owners();
+    if (type == "ContentControl") return ContentControl::Owners();
+    if (type == "Grid") return Grid::Owners();
+    if (type == "StackPanel") return StackPanel::Owners();
+    if (type == "TextBlock") return TextBlock::Owners();
+    throw MarkupError("the type '" + type + "' is not implemented");
+}
+
+// Reads one attribute value onto the node. The property is already known to
+// exist on the type -- the registry decided that -- so all this has to know is
+// how its value is spelled.
+//
+// Each case writes the typed field and hands the same value to the store, so
+// the two realisations of a node cannot drift apart. See markup_tree.h for why
+// there are two.
+void ApplyProperty(MarkupNode& node, const DependencyProperty& property,
+                   const std::string& value) {
+    const std::string& name = property.name();
+    const auto assign = [&](PropertyValue parsed) {
+        node.properties.push_back(MarkupProperty{&property, std::move(parsed)});
+    };
+
+    if (name == "Width") return assign(node.width = ParseLength(value, name));
+    if (name == "Height") return assign(node.height = ParseLength(value, name));
+    if (name == "MinWidth") return assign(node.min_width = ParseDouble(value, name));
+    if (name == "MaxWidth") return assign(node.max_width = ParseDouble(value, name));
+    if (name == "MinHeight") return assign(node.min_height = ParseDouble(value, name));
+    if (name == "MaxHeight") return assign(node.max_height = ParseDouble(value, name));
+    if (name == "Margin") return assign(node.margin = ParseThickness(value, name));
     if (name == "HorizontalAlignment") {
-        node.horizontal_alignment = ParseEnum(value, kHorizontalAlignments, "HorizontalAlignment");
-        return true;
+        node.horizontal_alignment = ParseEnum(value, kHorizontalAlignments, name);
+        return assign(static_cast<int>(node.horizontal_alignment));
     }
     if (name == "VerticalAlignment") {
-        node.vertical_alignment = ParseEnum(value, kVerticalAlignments, "VerticalAlignment");
-        return true;
+        node.vertical_alignment = ParseEnum(value, kVerticalAlignments, name);
+        return assign(static_cast<int>(node.vertical_alignment));
     }
-    if (name == "Grid.Column") { node.grid_column = ParseInt(value, "Grid.Column"); return true; }
-    if (name == "Grid.Row") { node.grid_row = ParseInt(value, "Grid.Row"); return true; }
-    if (name == "Grid.ColumnSpan") {
-        node.grid_column_span = ParseInt(value, "Grid.ColumnSpan");
-        return true;
+    if (name == "UseLayoutRounding")
+        return assign(node.use_layout_rounding = ParseBool(value, name));
+    if (name == "Opacity") return assign(node.opacity = ParseDouble(value, name));
+    if (name == "Grid.Column") return assign(node.grid_column = ParseInt(value, name));
+    if (name == "Grid.Row") return assign(node.grid_row = ParseInt(value, name));
+    if (name == "Grid.ColumnSpan") return assign(node.grid_column_span = ParseInt(value, name));
+    if (name == "Grid.RowSpan") return assign(node.grid_row_span = ParseInt(value, name));
+    if (name == "BorderThickness")
+        return assign(node.border_thickness = ParseThickness(value, name));
+    if (name == "Padding") return assign(node.padding = ParseThickness(value, name));
+    if (name == "Orientation") {
+        node.orientation = ParseEnum(value, kOrientations, name);
+        return assign(static_cast<int>(node.orientation));
     }
-    if (name == "Grid.RowSpan") {
-        node.grid_row_span = ParseInt(value, "Grid.RowSpan");
-        return true;
+    if (name == "TextWrapping") {
+        node.text_wrapping = ParseEnum(value, kTextWrappings, name);
+        return assign(static_cast<int>(node.text_wrapping));
     }
-    return false;
+    if (name == "FontSize") return assign(node.font_size = ParseDouble(value, name));
+    if (name == "FontFamily") return assign(node.font_family = value);
+    // A brush, carried as the text that spells it. Nothing here paints, so the
+    // value is stored and never interpreted -- which is honest about what it
+    // is: enough to show the property system carried it, and not a colour.
+    if (name == "Foreground") return assign(node.foreground = value);
+    // The content property, so it can arrive as an attribute or as character
+    // data between the tags. Both land in node.text, and BuildElement gives
+    // the element whatever is there once the parse is done.
+    if (name == "Text") {
+        node.text = value;
+        return;
+    }
+
+    throw MarkupError("the property '" + name +
+                      "' is registered but this parser cannot read a value for it");
 }
 
 void ApplyAttributes(MarkupNode& node, const std::map<std::string, std::string>& attributes) {
     for (const auto& [name, value] : attributes) {
-        if (ApplyCommonAttribute(node, name, value)) continue;
+        if (name == "xmlns" || name.rfind("xmlns:", 0) == 0) continue;
 
-        if (node.type == "Border") {
-            if (name == "BorderThickness") {
-                node.border_thickness = ParseThickness(value, "BorderThickness");
-                continue;
-            }
-            if (name == "Padding") {
-                node.padding = ParseThickness(value, "Padding");
-                continue;
-            }
+        // Directives are not properties: they instruct the XAML compiler
+        // rather than setting anything on the object. x:Name is accepted and
+        // dropped because nothing here resolves names -- the corpus reads its
+        // results out of the measured tree by path.
+        if (name.rfind("x:", 0) == 0) {
+            if (name == "x:Name") continue;
+            throw MarkupError("the directive '" + name + "' is not implemented");
         }
-        if (node.type == "StackPanel") {
-            if (name == "Orientation") {
-                node.orientation = ParseEnum(value, kOrientations, "Orientation");
-                continue;
-            }
+
+        // The registry decides, not a chain of type tests. This is what makes
+        // Opacity settable on every UIElement, Grid.Column settable on
+        // anything at all, and FontSize a property of a Control and not of a
+        // StackPanel -- which is the error the real runtime gives, and the
+        // reason the corpus has the case it has.
+        const DependencyProperty* property = FindProperty(OwnersFor(node.type), name);
+        if (!property) {
+            throw MarkupError("the property '" + name + "' was not found in type '" +
+                              FullTypeName(node.type) + "'");
         }
-        if (node.type == "TextBlock") {
-            if (name == "Text") { node.text = value; continue; }
-            if (name == "FontFamily") { node.font_family = value; continue; }
-            if (name == "FontSize") { node.font_size = ParseDouble(value, "FontSize"); continue; }
-            if (name == "TextWrapping") {
-                node.text_wrapping = ParseEnum(value, kTextWrappings, "TextWrapping");
-                continue;
-            }
-        }
-        throw MarkupError("the property '" + name + "' was not found in type '" +
-                          FullTypeName(node.type) + "'");
+        ApplyProperty(node, *property, value);
     }
 }
 
@@ -359,6 +405,8 @@ MarkupDefinition MakeDefinition(const Tag& tag, bool is_column) {
 void AttachChild(MarkupNode& parent, MarkupNode child) {
     if (parent.type == "Border" && !parent.children.empty())
         throw MarkupError("a Border takes a single child");
+    if (parent.type == "ContentControl" && !parent.children.empty())
+        throw MarkupError("a ContentControl takes a single piece of content");
     parent.children.push_back(std::move(child));
 }
 
@@ -376,10 +424,12 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
     std::unique_ptr<Element> element;
     if (node.type == "Border") {
         auto border = std::make_unique<Border>();
-        border->border_thickness = node.border_thickness;
-        border->padding = node.padding;
         if (!node.children.empty()) border->SetChild(BuildElement(node.children.front()));
         element = std::move(border);
+    } else if (node.type == "ContentControl") {
+        auto control = std::make_unique<ContentControl>();
+        if (!node.children.empty()) control->SetContent(BuildElement(node.children.front()));
+        element = std::move(control);
     } else if (node.type == "Grid") {
         auto grid = std::make_unique<Grid>();
         for (const MarkupDefinition& definition : node.column_definitions)
@@ -390,43 +440,35 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
         element = std::move(grid);
     } else if (node.type == "StackPanel") {
         auto stack = std::make_unique<StackPanel>();
-        stack->orientation = node.orientation;
         for (const MarkupNode& child : node.children) stack->AddChild(BuildElement(child));
         element = std::move(stack);
     } else if (node.type == "TextBlock") {
         auto text = std::make_unique<TextBlock>();
-        text->text = node.text;
-        text->font_family = node.font_family;
-        text->font_size = node.font_size;
-        text->text_wrapping = node.text_wrapping;
         if (!node.children.empty())
             throw MarkupError("a TextBlock takes text, not child elements");
+        if (!node.text.empty()) text->set_text(node.text);
         element = std::move(text);
     } else {
         throw MarkupError("the type '" + node.type + "' is not implemented");
     }
 
-    element->width = node.width;
-    element->height = node.height;
-    element->min_width = node.min_width;
-    element->max_width = node.max_width;
-    element->min_height = node.min_height;
-    element->max_height = node.max_height;
-    element->margin = node.margin;
-    element->horizontal_alignment = node.horizontal_alignment;
-    element->vertical_alignment = node.vertical_alignment;
-    element->grid_column = node.grid_column;
-    element->grid_row = node.grid_row;
-    element->grid_column_span = node.grid_column_span;
-    element->grid_row_span = node.grid_row_span;
+    // Only what the markup wrote, which is not the same as every property the
+    // element has. An inherited property left alone must stay unset so that it
+    // reads its parent's value; assigning the default here instead would give
+    // every TextBlock a local FontSize of 14 and nothing would ever inherit.
+    //
+    // Set after the children are attached, so that a value flowing down
+    // reaches a subtree that is already there.
+    for (const MarkupProperty& assignment : node.properties)
+        element->SetValue(*assignment.property, assignment.value);
     return element;
 }
 
 }  // namespace
 
 std::string FullTypeName(const std::string& short_name) {
-    if (short_name == "Border" || short_name == "Grid" || short_name == "StackPanel" ||
-        short_name == "TextBlock")
+    if (short_name == "Border" || short_name == "ContentControl" || short_name == "Grid" ||
+        short_name == "StackPanel" || short_name == "TextBlock")
         return "Windows.UI.Xaml.Controls." + short_name;
     throw MarkupError("the type '" + short_name + "' is not implemented");
 }

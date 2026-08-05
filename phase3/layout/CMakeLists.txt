@@ -8,8 +8,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Windows, no Wine. It is verified against measurements recorded from the real
 # runtime, which means it can be built and checked anywhere.
 add_library(openxaml_layout STATIC
+    # The property system everything else stores its values in.
+    src/property.cpp
     src/element.cpp
     src/border.cpp
+    src/control.cpp
     src/stack_panel.cpp
     src/grid.cpp
     src/text.cpp

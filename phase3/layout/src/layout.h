@@ -48,6 +48,14 @@ struct Thickness {
     double vertical() const { return top + bottom; }
 };
 
+// Exact, not AreClose: this answers "is the stored value the same value", which
+// the property store asks before deciding that anything changed. Layout's own
+// comparisons are the tolerant ones further down.
+inline bool operator==(const Thickness& a, const Thickness& b) {
+    return a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
+}
+inline bool operator!=(const Thickness& a, const Thickness& b) { return !(a == b); }
+
 enum class HorizontalAlignment { Left, Center, Right, Stretch };
 enum class VerticalAlignment { Top, Center, Bottom, Stretch };
 enum class Orientation { Horizontal, Vertical };
