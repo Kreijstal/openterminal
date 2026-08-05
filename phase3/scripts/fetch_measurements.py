@@ -13,6 +13,12 @@ re-baseline every expectation.
     python3 phase3/scripts/fetch_measurements.py            # latest green run
     python3 phase3/scripts/fetch_measurements.py --run-id N
     python3 phase3/scripts/fetch_measurements.py --accept-new-oracle
+    python3 phase3/scripts/fetch_measurements.py --fonts    # the font metrics
+
+The font metrics ride in their own artifact and get the same treatment: what
+comes back is checked against `xaml-db/fonts/derived`, the numbers the corpus
+solved for itself, so a harvest of the wrong font is an error rather than
+pixel widths that are slightly off everywhere.
 
 Needs the gh CLI, authenticated.
 """
