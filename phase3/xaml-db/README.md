@@ -37,7 +37,7 @@ authoring, and L7 is a harvest of the real pages.
 ## L5, before the oracle has seen it
 
 Resource lookup is the first thing in the corpus that was authored *after* the
-last oracle run, so its 40 cases are written and pending rather than measured.
+last oracle run, so its 53 cases are written and pending rather than measured.
 That is a different state from the levels above it and is worth naming, because
 "pending" is easy to read as "passing".
 
@@ -74,6 +74,31 @@ Everything else at L5 is accountable in the ordinary way: L5 is an authored
 level, and a case there that the runtime refuses without having declared a
 question fails CI exactly as an L1 case would.
 
+### `L5-theme`: the one group whose value comes from outside the corpus
+
+The 40 `L5-resources` cases declare every key they look up. The 13 `L5-theme`
+cases do not: they name keys **WinUI 2** declares — `ToggleSwitchThemeMinWidth`,
+`FlyoutContentPadding` — and nothing in the markup says what those hold. That
+makes them the only cases whose expected value is quoted from another
+repository, and they are handled accordingly.
+
+The literals live in `generate_cases.py`, quoted from WinUI 2.8.4 at commit
+`4aa80ad6`, so the generator still runs with nothing checked out beside it.
+A quoted literal can go stale, and a stale one is worse than useless — the
+resolved case and its inlined twin would agree with each other and both be
+wrong about WinUI. So
+[`test_extract_winui_theme_resources.py`](../tests/test_extract_winui_theme_resources.py)
+checks every quoted literal against the extracted dictionary whenever it has
+been materialized, and *skips loudly* when it has not.
+
+They carry both a `twin` and a `question`, which no other case does, because
+they are asking two things that are independent. The twin says what the key
+must resolve *to*; the question is whether it resolves at all — that is,
+whether a bare `XamlReader.Load` under the probe's host reaches
+`Application.Resources`, and whether WinUI 2's dictionary is in there or only
+the OS's. Nobody here knows, and it is the answer the 21 harvested cases
+below depend on.
+
 ## Harvesting L7 from Terminal's markup
 
 `phase3/scripts/harvest_terminal_xaml.py` reads a Terminal checkout and emits
@@ -99,30 +124,75 @@ That leaves 23 unique loadable subtrees, emitted at three available sizes each:
 measured today without a resource system, a binding engine, or a code-behind.
 The table above is the roadmap for raising it.
 
-### The resource system did not raise it, and why
+### The resource system did not raise it; the dictionary did
 
 The three blockers a resource system addresses — `markup-extension` where the
 extension is `{StaticResource}`, `x:Key`, and `resource-element` — account for
-much of that table, so implementing lookup looks like it should unlock
-subtrees. It unlocks none, and the classifier was left alone because of it.
+much of that table, so implementing lookup looked like it should unlock
+subtrees. It unlocked none.
 
 The measurement: relax exactly those three, but only where the key referenced
 is defined by an `x:Key` somewhere in the same file, and re-run the extraction.
-The result is **23 unique candidates — the same 23**. Every subtree that would
+The result was **23 unique candidates — the same 23**. Every subtree that would
 have been freed by resource lookup is held by something else as well: an
 `{x:Bind}`, an `x:Uid`, a `muxc:` type, an event handler.
 
-Relax the same three blockers *without* requiring the key to be defined in the
-file — that is, assume every reference resolves — and the count goes to **91**.
-The difference between those two numbers is the whole answer. What Terminal's
-markup needs is not the lookup mechanism, which now exists, but the dictionary
-the lookups land in: 1,054 of its 1,563 resource references name keys it never
-defines, because they are WinUI 2's own theme resources and live in
-`Application.Resources`. Loading those is the next thing that would move the
-number, and it is a content problem rather than a parser one.
+Relax the same three *without* requiring the key to be defined in the file —
+that is, assume every reference resolves — and the count goes to **91**. The
+difference between those two numbers is the size of the content problem: what
+Terminal's markup needed was not the lookup mechanism but the dictionary the
+lookups land in, `Application.Resources`.
 
-Until then the classifier keeps calling those subtrees blocked, which is
-accurate: a standalone `XamlReader.Load` has no `Application`.
+Most of that dictionary turns out to be readable.
+[`extract_winui_theme_resources.py`](../scripts/extract_winui_theme_resources.py)
+reconstructs WinUI 2.8.4's theme dictionary from
+[the pinned open source](../../research/microsoft-ui-xaml/4aa80ad6d272241a6a603f85507063e9fb6bcf92/README.md),
+the classifier consults it, and the count is **23 → 30 unique subtrees, 69 → 90
+cases**. The harvester reports the delta itself rather than leaving it to be
+recovered by diffing two runs: it does the extraction twice, once with the
+dictionary and once without, and writes both numbers into the inventory.
+
+The rule the classifier applies is narrower than "the key exists", and the
+gap between the two is the honest part:
+
+| the key is | keys Terminal names and never defines | unblocks |
+|---|---:|---|
+| in WinUI 2.8.4 with a literal value | 129 | yes |
+| in WinUI 2.8.4 as a `Style`, a template, or a brush built on an OS colour | 30 | no |
+| not in the WinUI 2.8.4 source at all | 28 | no |
+
+A brush counts as a literal value once the extractor has followed its `Color`
+to one, because the attribute form of a brush *is* a colour — `Background="{...}"`
+and `Background="#FF1F1F1F"` reach the property by the same path. A brush whose
+colour is `SystemAccentColor` does not, and neither does a `Style`: the key
+exists, the inventory says so by name, and it still cannot be turned into markup
+that loads.
+
+That leaves 30 rather than 91. The remaining 61 are held by keys **Terminal
+itself defines in a different file** — `SettingContainerIconMargin`,
+`RepeatButtonTemplate`, `StandardIconSize` and the like, page-level dictionaries
+that a lifted subtree leaves behind — and by exactly one key that is the OS's
+alone, `SymbolThemeFontFamily`. Page-scope dictionaries, not the closed OS
+dictionary, are what stands between 30 and 91.
+
+### The 21 new cases are a prediction about the *host*
+
+Every level 7 case is a prediction that the markup loads. These 21 make a
+second one, and a bolder one: that the oracle can resolve the key too. It might
+not. The probe hosts XAML through `WindowsXamlManager`, which supplies the OS's
+theme resources; WinUI 2's arrive only when an application merges
+`XamlControlsResources`, and the probe is not an application that does.
+
+So the next measurement run answers a question rather than confirming a
+result, and the corpus asks it explicitly as well: the `L5-theme` cases carry
+`oracle_decides` and put it in one line. If they come back rejected, the 21
+harvested cases will too, and the finding is that the probe needs
+`XamlControlsResources` merged before any of this is measurable — which is a
+smaller and better-defined piece of work than the one it replaces.
+
+Each affected case names what it needs, in its `harvest.resource_keys` and in
+its note, so a failure says which keys were being counted on rather than only
+that a load failed.
 
 Classification is metadata-driven, not guessed: element names, property names,
 attached-property stems, event names and the `UIElement` derivation chain all
@@ -193,10 +263,11 @@ gate `phase0` and `phase1` already apply to their snapshots.
 
 ## Using the measurements
 
-The measurements are CI output, not repository content: 581 files regenerated
+The measurements are CI output, not repository content: 824 files regenerated
 deterministically in about two minutes. Fetch them from the artifact of a green
 run. The digest committed under `oracles/` still records 541, which is the
-corpus the last run saw — the 40 L5 cases were authored after it.
+corpus the last run saw — everything at L5, and 21 of the L7 cases, was
+authored or unblocked after it.
 
     python3 phase3/scripts/fetch_measurements.py          # prints the directory
     python3 phase3/scripts/check_layout.py \
@@ -228,18 +299,21 @@ images move on their own schedule — but it says plainly that nothing is
 verifying those measurements until the digest lands.
 
 **Growing the corpus trips the same gate, on purpose.** The committed digest for
-`10.0.26100.33158` covers 541 cases and no L5; the corpus now has 581 and does.
+`10.0.26100.33158` covers 541 cases and no L5; the corpus now has 824 and does.
 The first measurement run after that will stop with
 
-    L5: new level, 40 cases
+    L5: new level, 53 cases
 
 which is not the runtime answering differently — it is the corpus asking a
-question the digest has never seen. The gate cannot tell those apart on its own
-and does not try to: it stops, and a person decides. The resolution is to take
-that run's measurement artifact, confirm the L5 answers are what the cases were
-written to ask, and commit the regenerated digest. Every level below L5 is still
-compared as usual in the same run, so a real regression would be reported beside
-the addition rather than hidden by it.
+question the digest has never seen. L7 will report drift in the same run, from
+69 cases to 90, for the same reason and a different cause: the classifier can
+now consult a dictionary and 7 more subtrees came free. The gate cannot tell
+any of those apart from a regression on its own and does not try to: it stops,
+and a person decides. The resolution is to take that run's measurement
+artifact, confirm the answers are what the cases were written to ask, and
+commit the regenerated digest. Every level below L5 is still compared as usual
+in the same run, so a real regression would be reported beside the addition
+rather than hidden by it.
 
 ## Layout
 
@@ -254,6 +328,14 @@ the addition rather than hidden by it.
                                            twice and diffs the runs, and the
                                            measured corpus travels to the layout
                                            job as an artifact
+      theme-resources/winui-2.8.4.json     WinUI 2's Application.Resources,
+                                           extracted from the pinned open source
+                                           by extract_winui_theme_resources.py.
+                                           Somebody else's content, so the
+                                           script is what is committed; CI
+                                           extracts twice and diffs, and hands
+                                           the result to the layout job so both
+                                           answer lookups from one dictionary
 
     (CI artifact, not committed)
       measurements/<os-build>/<id>.json    filled in by CI on windows-latest
@@ -266,6 +348,9 @@ other pinned snapshots:
 
     research/windows-terminal/<commit>/xaml-inventory.json
     research/nuget/microsoft.windows.sdk.contracts/<version>/xaml-members.json
+    research/microsoft-ui-xaml/<commit>/README.md     what the extracted
+                                                      dictionary contains, and
+                                                      which keys it does not
 
 ## Progress metric
 
@@ -274,7 +359,10 @@ A Linux job runs the reimplementation against the same corpus and diffs.
 unlike a page screenshot it says exactly what to fix next.
 
 Against build `10.0.26100.33158`, [`phase3/layout`](../layout/) matches all of
-L0–L3 and 36 of the 69 L7 cases. L4 is implemented and matches 36 of 72 on a
+L0–L3 and 33 of the 69 L7 measurements — 36 until the application dictionary
+merged two harvested subtrees into a larger one that is blocked on `TextBox`,
+which [the layout README](../layout/README.md#why-l7-went-from-36-to-33) sets
+out. L4 is implemented and matches 36 of 72 on a
 bare checkout, against the two numbers [solved out of the
 measurements](fonts/) themselves; the other 36 need [the harvested font
 metrics](fonts/), which are CI output rather than repository content, and say
@@ -295,8 +383,9 @@ it. Three of them are answers this implementation does not have — whether
 `UseLayoutRounding` inherits, how a tie at exactly `.5` breaks, and what a
 `ContentControl` does with content it is not stretching.
 
-A further 235 generated cases in `L1-shape`, `L2-content`, `L3-canvas` and
-`L5-resources` are newer than the last oracle run for the same reason. They do
-not move the numbers above in either direction until CI fills them in; they
-exist because the answers they cover currently rest on one witness each, or on
-none.
+A further 248 generated cases in `L1-shape`, `L2-content`, `L3-canvas`,
+`L5-resources` and `L5-theme` are newer than the last oracle run for the same
+reason, and so are 21 of the 90 L7 cases — the ones the application dictionary
+unblocked. They do not move the numbers above in either direction until CI
+fills them in; they exist because the answers they cover currently rest on one
+witness each, or on none.

@@ -61,8 +61,11 @@ IGNORABLE_NS = {
 ALLOWED_X_DIRECTIVES = {"Name"}
 
 # Elements that are a resource lookup rather than a type. They resolve against a
-# dictionary that a standalone load does not have.
+# dictionary the load has to be able to reach.
 RESOURCE_ELEMENTS = {"StaticResource", "ThemeResource"}
+
+# Extensions that are the same lookup written as an attribute.
+RESOURCE_EXTENSIONS = ("StaticResource", "ThemeResource")
 
 # WPF and WinUI share the presentation namespace URI, so markup alone cannot
 # tell them apart -- and mistaking one for the other yields cases that look
@@ -94,6 +97,82 @@ BASE_ENV: dict[str, Any] = {
 }
 
 MARKUP_EXTENSION = re.compile(r"^\{\s*([A-Za-z_][\w.:]*)")
+
+
+class ThemeResources:
+    """The keys the application dictionary can actually supply.
+
+    A resource reference blocks a standalone load unless something outside the
+    markup answers it. In a running Terminal that something is
+    ``Application.Resources``; here it is the database
+    ``extract_winui_theme_resources.py`` builds out of the pinned WinUI 2.8.4
+    source. Absent, every reference blocks, which is where this harvester
+    started and is still the default.
+
+    Only keys with a *representable* value count. That is a narrower set than
+    "keys WinUI defines", deliberately:
+
+    - a ``Thickness``, a ``CornerRadius``, an ``x:Double`` and the rest carry a
+      literal, and a literal is what an inlined attribute would have carried;
+    - a ``SolidColorBrush`` counts only once the extractor has followed its
+      colour to a literal, because the attribute form of a brush *is* a colour;
+    - a ``Style``, a ``ControlTemplate``, a converter, or a brush built on an
+      OS colour we cannot see does **not** count. The key exists -- the
+      inventory says so -- and it still cannot be turned into markup that loads.
+
+    An unblocked reference remains a prediction, and a more optimistic one than
+    the rest of this file makes: it predicts that the *oracle* can resolve the
+    key too. The probe hosts XAML through ``WindowsXamlManager``, which supplies
+    the OS's own theme resources and not WinUI 2's -- so a case unblocked by a
+    key only WinUI 2 defines will come back with an error until the probe merges
+    ``XamlControlsResources``. That is the corpus asking a question, and
+    ``report_measurements.py`` already treats a rejected harvested case as work
+    to do rather than as coverage.
+    """
+
+    def __init__(self, payload: dict[str, Any], theme: str) -> None:
+        themes = payload["themes"]
+        if theme not in themes:
+            raise SystemExit(f"the theme database has no theme {theme!r}; it has "
+                             f"{', '.join(sorted(k for k in themes if k != 'Shared'))}")
+        self.theme = theme
+        self.source = payload["source"]
+        self.defined: set[str] = set(themes["Shared"]) | set(themes[theme])
+        self.resolvable: set[str] = set()
+        for entries in (themes["Shared"], themes[theme]):
+            for key, entry in entries.items():
+                landed = entry.get("resolved", entry) if entry["status"] == "alias" else entry
+                status = landed.get("status")
+                if status == "value" or (status == "brush" and "color" in landed):
+                    self.resolvable.add(key)
+
+    @classmethod
+    def load(cls, path: Path, theme: str) -> "ThemeResources":
+        return cls(json.loads(path.read_text(encoding="utf-8")), theme)
+
+
+# The empty one, so that every call site can pass a database and the default is
+# "nothing outside the markup answers a lookup" rather than a None check.
+class NoThemeResources:
+    theme = None
+    source: dict[str, Any] = {}
+    defined: set[str] = set()
+    resolvable: set[str] = set()
+
+
+def referenced_key(value: str) -> str | None:
+    """The key a ``{StaticResource X}`` or ``{ThemeResource X}`` names."""
+    text = value.strip()
+    name = markup_extension_name(text)
+    if name not in RESOURCE_EXTENSIONS:
+        return None
+    key = text[text.index(name) + len(name):].strip().rstrip("}").strip()
+    if key.startswith("ResourceKey"):
+        _, _, key = key.partition("=")
+        key = key.strip()
+    # A key with a comma in it is a multi-argument extension this harvester
+    # does not model; treat it as naming nothing, which leaves it blocking.
+    return key if key and "," not in key else None
 
 
 def encode_size(size: Iterable[float]) -> list[Any]:
@@ -188,7 +267,8 @@ def build(element: ET.Element, path: str) -> Node:
 
 
 # --- blockers -----------------------------------------------------------------
-def element_blockers(node: Node, meta: Metadata) -> list[dict[str, str]]:
+def element_blockers(node: Node, meta: Metadata,
+                     resources: Any = NoThemeResources) -> list[dict[str, str]]:
     """Why this single element cannot be loaded on its own. Empty means it can."""
     found: list[dict[str, str]] = []
 
@@ -207,6 +287,14 @@ def element_blockers(node: Node, meta: Metadata) -> list[dict[str, str]]:
 
     if node.local in RESOURCE_ELEMENTS:
         # Its attributes name the key being looked up, not properties of a type.
+        keys = [value for uri, local, value in node.attributes
+                if not uri and local == "ResourceKey"]
+        # An x:Key alongside makes this a dictionary entry rather than a value,
+        # and the entry is only reachable through the dictionary -- which the
+        # lifted subtree does not carry. It keeps the x:Key blocker below.
+        aliasing = any(uri == XAML_X for uri, _, _ in node.attributes)
+        if len(keys) == 1 and not aliasing and keys[0] in resources.resolvable:
+            return found
         add("resource-element", node.local)
         return found
     if node.is_property_element:
@@ -226,8 +314,18 @@ def element_blockers(node: Node, meta: Metadata) -> list[dict[str, str]]:
 
         extension = markup_extension_name(value)
         if extension:
-            add("markup-extension", extension)
-            continue
+            key = referenced_key(value)
+            # The one extension a dictionary can answer. Everything else --
+            # {x:Bind}, {Binding}, {TemplateBinding} -- needs a data context or
+            # a template and is unaffected by any amount of resource content.
+            #
+            # A resolvable key does not exempt the attribute from the checks
+            # below: the value being available says nothing about whether the
+            # property it is being set on exists. Falling through is the whole
+            # point -- an extension used to hide that question.
+            if key is None or key not in resources.resolvable:
+                add("markup-extension", extension)
+                continue
 
         if "." in local:
             owner, _, member = local.partition(".")
@@ -250,8 +348,9 @@ def element_blockers(node: Node, meta: Metadata) -> list[dict[str, str]]:
     return found
 
 
-def subtree_blockers(node: Node, meta: Metadata) -> list[dict[str, str]]:
-    return [b for element in node.walk() for b in element_blockers(element, meta)]
+def subtree_blockers(node: Node, meta: Metadata,
+                     resources: Any = NoThemeResources) -> list[dict[str, str]]:
+    return [b for element in node.walk() for b in element_blockers(element, meta, resources)]
 
 
 # --- serialisation ------------------------------------------------------------
@@ -287,8 +386,24 @@ def uses_x_directives(node: Node) -> bool:
     return any(uri == XAML_X for element in node.walk() for uri, _, _ in element.attributes)
 
 
+def subtree_resource_keys(node: Node) -> set[str]:
+    """Every key this subtree looks up, in either spelling."""
+    keys: set[str] = set()
+    for element in node.walk():
+        for uri, local, value in element.attributes:
+            if uri:
+                continue
+            if element.local in RESOURCE_ELEMENTS and local == "ResourceKey":
+                keys.add(value.strip())
+                continue
+            key = referenced_key(value)
+            if key:
+                keys.add(key)
+    return keys
+
+
 # --- candidate extraction -----------------------------------------------------
-def candidates(node: Node, meta: Metadata) -> Iterator[Node]:
+def candidates(node: Node, meta: Metadata, resources: Any = NoThemeResources) -> Iterator[Node]:
     """Maximal subtrees that can be loaded standalone.
 
     Top-down and non-descending on success: the largest loadable subtree is the
@@ -298,13 +413,13 @@ def candidates(node: Node, meta: Metadata) -> Iterator[Node]:
         node.uri == PRESENTATION
         and not node.is_property_element
         and node.local in meta.ui_elements
-        and not subtree_blockers(node, meta)
+        and not subtree_blockers(node, meta, resources)
     )
     if loadable:
         yield node
         return
     for child in node.children:
-        yield from candidates(child, meta)
+        yield from candidates(child, meta, resources)
 
 
 # --- inventory ----------------------------------------------------------------
@@ -438,8 +553,43 @@ def canonical_remote(url: str) -> str:
     return text
 
 
+def theme_resource_report(resources: Any, referenced: dict[str, Counter],
+                          defined: dict[str, Counter]) -> dict[str, Any]:
+    """How far the supplied dictionary goes against what Terminal asks for.
+
+    The split that matters is not "how many keys does WinUI have" -- it has
+    thousands nobody names -- but how the keys *Terminal* names divide between
+    the three places they can come from: Terminal's own markup, the WinUI 2
+    source we can read, and the OS dictionary we cannot.
+    """
+    # A key Terminal defines nowhere in its own markup has to come from
+    # Application.Resources or from nothing.
+    outside = sorted(key for key in referenced if key not in defined)
+    resolvable = sorted(key for key in outside if key in resources.resolvable)
+    unusable = sorted(key for key in outside
+                      if key in resources.defined and key not in resources.resolvable)
+    absent = sorted(key for key in outside if key not in resources.defined)
+    return {
+        "source": resources.source,
+        "theme": resources.theme,
+        "keys_available": len(resources.defined),
+        "keys_representable": len(resources.resolvable),
+        "referenced_outside_terminal": {
+            "keys": len(outside),
+            "references": sum(sum(referenced[key].values()) for key in outside),
+            # Split three ways rather than two, because "WinUI defines it" and
+            # "we can use it" are different facts and conflating them would
+            # overstate what the dictionary unlocks.
+            "representable_here": resolvable,
+            "defined_but_not_representable": unusable,
+            "not_in_this_source": absent,
+        },
+    }
+
+
 # --- driver -------------------------------------------------------------------
-def harvest(repo: Path, meta: Metadata) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def harvest(repo: Path, meta: Metadata,
+            resources: Any = NoThemeResources) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     files = sorted(
         p for p in repo.rglob("*.xaml") if ".git" not in p.parts
     )
@@ -471,10 +621,10 @@ def harvest(repo: Path, meta: Metadata) -> tuple[dict[str, Any], list[dict[str, 
             record(node, meta, source, inv)
             elements += 1
 
-        for blocker in subtree_blockers(root, meta):
+        for blocker in subtree_blockers(root, meta, resources):
             blocker_counts[blocker["kind"]][blocker["detail"]] += 1
 
-        extracted = list(candidates(root, meta))
+        extracted = list(candidates(root, meta, resources))
         for node in extracted:
             markup = serialise(node, root=True, uses_x=uses_x_directives(node))
             digest = hashlib.sha256(markup.encode("utf-8")).hexdigest()[:10]
@@ -482,6 +632,12 @@ def harvest(repo: Path, meta: Metadata) -> tuple[dict[str, Any], list[dict[str, 
                 "markup": markup,
                 "root_type": node.local,
                 "elements": sum(1 for _ in node.walk()),
+                # Which keys this subtree needs the application dictionary to
+                # answer. Empty for a subtree that stands entirely on its own,
+                # which is what every candidate was before there was a
+                # dictionary -- so the field also says which cases are new and
+                # why, without anyone having to diff two harvests.
+                "resource_keys": sorted(subtree_resource_keys(node)),
                 "occurrences": [],
             })
             entry["occurrences"].append({"file": source, "path": node.path})
@@ -523,6 +679,12 @@ def harvest(repo: Path, meta: Metadata) -> tuple[dict[str, Any], list[dict[str, 
         "resource_keys_defined": flatten(inv["resource_keys_defined"], "files"),
         "resource_keys_referenced": flatten(inv["resource_keys_referenced"], "files"),
         "unknown_types": flatten(inv["unknown_types"], "files"),
+        # What the application dictionary was and what it bought. Written
+        # whether or not one was supplied, so that "no dictionary" is a recorded
+        # state rather than a missing field, and so the unlock is a number in
+        # the output instead of something a reader has to infer from a diff.
+        "theme_resources": theme_resource_report(resources, inv["resource_keys_referenced"],
+                                                 inv["resource_keys_defined"]),
         # Ordered by how much markup each one costs us: the top entry is the
         # single capability that would unlock the most measurable subtrees.
         "blockers": {
@@ -541,24 +703,34 @@ def harvest(repo: Path, meta: Metadata) -> tuple[dict[str, Any], list[dict[str, 
         entry = found[digest]
         for index, size in enumerate(HARVEST_SIZES):
             first = entry["occurrences"][0]
+            harvest_note: dict[str, Any] = {
+                "repository": inventory["source"]["repository"],
+                "commit": inventory["source"]["commit"],
+                "markup_sha256_prefix": digest,
+                "occurrences": entry["occurrences"],
+            }
+            note = (f"{entry['root_type']} subtree, {entry['elements']} element(s), "
+                    f"from {first['file']}")
+            if entry["resource_keys"]:
+                # Said in the note as well as in the metadata, because this is
+                # the one thing about a level 7 case that a reader looking at a
+                # failure needs first: it did not load standalone before, and
+                # whether it loads now is a question about the *host*, not about
+                # the markup.
+                harvest_note["resource_keys"] = entry["resource_keys"]
+                harvest_note["needs_application_resources"] = resources.source
+                note += (f"; needs {len(entry['resource_keys'])} key(s) from "
+                         f"Application.Resources")
             cases.append({
                 "schema_version": SCHEMA_VERSION,
                 "id": f"L7-terminal-{digest}-s{index}",
                 "level": 7,
                 "group": "terminal",
-                "note": (
-                    f"{entry['root_type']} subtree, {entry['elements']} element(s), "
-                    f"from {first['file']}"
-                ),
+                "note": note,
                 "requires": ["L3-grid", "L3-stack", "L4-text"],
                 "markup": entry["markup"],
                 "environment": dict(BASE_ENV, available_size=encode_size(size)),
-                "harvest": {
-                    "repository": inventory["source"]["repository"],
-                    "commit": inventory["source"]["commit"],
-                    "markup_sha256_prefix": digest,
-                    "occurrences": entry["occurrences"],
-                },
+                "harvest": harvest_note,
             })
     return inventory, cases
 
@@ -572,13 +744,33 @@ def main() -> int:
                         help="where to write the vocabulary inventory")
     parser.add_argument("--cases", type=Path,
                         help="directory to write level 7 case files into")
+    parser.add_argument("--theme-resources", type=Path,
+                        help="the database extract_winui_theme_resources.py writes. Without it "
+                             "every resource reference blocks, which is what this harvester did "
+                             "before there was one")
     args = parser.parse_args()
 
     repo = args.repository.resolve()
     if not (repo / ".git").exists():
         parser.error(f"not a Git checkout: {repo}")
 
-    inventory, cases = harvest(repo, Metadata.load(args.members))
+    meta = Metadata.load(args.members)
+    resources: Any = NoThemeResources
+    baseline: dict[str, Any] | None = None
+    if args.theme_resources:
+        resources = ThemeResources.load(args.theme_resources, BASE_ENV["theme"])
+        # The same harvest without the dictionary, so the delta is measured
+        # rather than remembered. It costs one more pass over 43 files and it
+        # is the number this whole exercise is judged on -- leaving it to be
+        # recovered by diffing two runs is how it stops being reported at all.
+        baseline, _ = harvest(repo, meta)
+
+    inventory, cases = harvest(repo, meta, resources)
+    if baseline is not None:
+        inventory["theme_resources"]["unlock"] = {
+            "unique_candidates_without": baseline["totals"]["unique_candidates"],
+            "unique_candidates_with": inventory["totals"]["unique_candidates"],
+        }
 
     if args.inventory:
         args.inventory.parent.mkdir(parents=True, exist_ok=True)
@@ -600,6 +792,22 @@ def main() -> int:
     print(f"  candidates       {totals['candidates']:>5}")
     print(f"  unique subtrees  {totals['unique_candidates']:>5}")
     print(f"  cases written    {len(cases):>5}")
+    report = inventory["theme_resources"]
+    outside = report["referenced_outside_terminal"]
+    if report["theme"] is None:
+        print("  application dictionary: none, so every resource reference blocks")
+    else:
+        print(f"  application dictionary: {report['keys_representable']}"
+              f"/{report['keys_available']} keys representable"
+              f" ({report['source'].get('controls_resources_version', '?')},"
+              f" theme {report['theme']})")
+        print(f"    of {outside['keys']} key(s) Terminal names and never defines:"
+              f" {len(outside['representable_here'])} usable,"
+              f" {len(outside['defined_but_not_representable'])} defined but not usable,"
+              f" {len(outside['not_in_this_source'])} absent")
+        unlock = report["unlock"]
+        print(f"    unique subtrees {unlock['unique_candidates_without']}"
+              f" -> {unlock['unique_candidates_with']}")
     print("  top blockers:")
     for kind, entry in list(inventory["blockers"].items())[:6]:
         print(f"    {kind:<28} {entry['count']:>5}")
