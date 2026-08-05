@@ -40,6 +40,12 @@ const DependencyProperty* const kVerticalAlignment =
     RegisterProperty("FrameworkElement", "VerticalAlignment",
                      {static_cast<int>(VerticalAlignment::Stretch), false, false});
 
+// Registered as not inheriting, and that half is a guess. WPF's is an
+// inherited property; WinUI documents the effect as reaching the subtree
+// without saying what carries it, and every case measured so far sets it
+// nowhere or everywhere. L0-props-rounding-inherited is authored to settle it
+// and has no measurement yet -- if the oracle leaves the inner Border's
+// fraction alone, this flag is wrong.
 const DependencyProperty* const kUseLayoutRounding =
     RegisterProperty("UIElement", "UseLayoutRounding", {true, false, true});
 // Purely visual, so it changes no size. The corpus still has a case for it,

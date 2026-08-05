@@ -11,10 +11,10 @@
   "theme": "Light"
  },
  "group": "props",
- "id": "L0-props-default",
+ "id": "L0-props-rounding-default",
  "level": 0,
- "markup": "<Border xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"/>",
- "note": "Width unset stays Auto, and an Auto Border stretches to its slot",
+ "markup": "<Border xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" Width=\"120.25\"/>",
+ "note": "UseLayoutRounding defaults on, so a fractional Width snaps",
  "requires": [],
  "schema_version": 1
 }

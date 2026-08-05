@@ -11,10 +11,10 @@
   "theme": "Light"
  },
  "group": "props",
- "id": "L0-props-default",
+ "id": "L0-props-inherited-default",
  "level": 0,
- "markup": "<Border xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"/>",
- "note": "Width unset stays Auto, and an Auto Border stretches to its slot",
+ "markup": "<ContentControl xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" ><TextBlock/></ContentControl>",
+ "note": "no FontSize anywhere, so the line height reports the default",
  "requires": [],
  "schema_version": 1
 }

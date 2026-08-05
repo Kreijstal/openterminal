@@ -14,7 +14,7 @@
  "id": "L0-props-local-opacity",
  "level": 0,
  "markup": "<Border xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" Opacity=\"0.5\"/>",
- "note": "local double; read Opacity without running layout",
+ "note": "a local Opacity on a UIElement, which changes no number -- it shows the property is accepted where it is declared",
  "requires": [],
  "schema_version": 1
 }

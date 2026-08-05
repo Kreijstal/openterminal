@@ -81,15 +81,68 @@ def root(inner: str) -> str:
     return f'<Border xmlns="{XMLNS}">{inner}</Border>'
 
 
-# --- L0: property system, no layout ------------------------------------------
-# A dependency property's effective value comes from a precedence chain. These
-# cases read values back without ever running layout, so a failure here cannot
-# be blamed on measure or arrange.
+# --- L0: the property system --------------------------------------------------
+# A dependency property's effective value is chosen from a precedence chain --
+# a local value, then one inherited from an ancestor, then the default it was
+# registered with -- and none of that is visible in a plain field.
+#
+# What a case here can assert is narrower than what the property system does,
+# and the limit is the probe: it records DesiredSize, ActualWidth/Height and the
+# layout slot, and nothing else. A property has to reach a number to be
+# measurable at all. Two consequences, stated rather than left to be
+# rediscovered:
+#
+#  * FontSize is the inherited property the corpus can see, because an empty
+#    TextBlock is exactly one line tall and that line is the font's
+#    baseline-to-baseline distance scaled by it. FontFamily and Foreground
+#    inherit by the same mechanism and neither moves a number -- Foreground
+#    paints, and telling one FontFamily from another would need a second
+#    family's metrics harvested. Their cases are here and say plainly that they
+#    only show the markup loads.
+#
+#  * Clearing a local value has no attribute syntax, so the one thing a field
+#    genuinely cannot do -- go back to reading its ancestor -- cannot be a case
+#    at all. phase3/layout/tests/property_test.cpp is where that is checked.
+
+
+def content_control(attributes: str, inner: str) -> str:
+    return f'<ContentControl xmlns="{XMLNS}" {attributes}>{inner}</ContentControl>'
+
+
 def level0() -> Iterator[dict[str, Any]]:
-    probes = [
-        ("default", '<Border xmlns="%s"/>' % XMLNS, "Width", "unset stays NaN"),
-        ("local", '<Border xmlns="%s" Width="120"/>' % XMLNS, "Width", "local value wins over default"),
-        ("local-opacity", '<Border xmlns="%s" Opacity="0.5"/>' % XMLNS, "Opacity", "local double"),
+    probes: list[tuple[str, str, str]] = [
+        # --- where a value comes from, with no font involved ------------------
+        ("default", f'<Border xmlns="{XMLNS}"/>',
+         "Width unset stays Auto, and an Auto Border stretches to its slot"),
+        ("local", f'<Border xmlns="{XMLNS}" Width="120"/>',
+         "a local Width wins over the default"),
+        ("local-opacity", f'<Border xmlns="{XMLNS}" Opacity="0.5"/>',
+         "a local Opacity on a UIElement, which changes no number -- it shows the "
+         "property is accepted where it is declared"),
+
+        # UseLayoutRounding is the one property outside sizing whose value a
+        # measurement can see: with it on a fractional width snaps to a whole
+        # pixel, and with it off it does not. The pair pins the default and the
+        # effect at once.
+        ("rounding-default", f'<Border xmlns="{XMLNS}" Width="120.25"/>',
+         "UseLayoutRounding defaults on, so a fractional Width snaps"),
+        ("rounding-off", f'<Border xmlns="{XMLNS}" Width="120.25" UseLayoutRounding="False"/>',
+         "a local False leaves the fraction alone"),
+        # Whether it inherits is genuinely open. WPF's is an inherited property;
+        # WinUI documents the effect as reaching the subtree without saying what
+        # carries it, and nothing measured so far separates "inherited" from
+        # "the parent rounded and the child had no fraction to round".
+        ("rounding-inherited",
+         f'<Border xmlns="{XMLNS}" UseLayoutRounding="False"><Border Width="120.25"/></Border>',
+         "does UseLayoutRounding reach a child that never set it"),
+        # Deliberately a half, and the only case in the corpus that is one.
+        # Layout rounding is a Math.Round in the ported source, which breaks
+        # ties to even -- 120.5 to 120 rather than 121 -- and nothing measured
+        # has ever landed on a tie to say whether the runtime agrees.
+        ("rounding-half", f'<Border xmlns="{XMLNS}" Width="120.5"/>',
+         "an exact half, which is where round-half-to-even and round-half-away part"),
+
+        # --- inheritance ------------------------------------------------------
         # FontSize has to be set on a Control. This was written on a StackPanel
         # first, which is a WPF habit -- there TextElement.FontSize is an
         # inherited attached property that any FrameworkElement takes. WinUI has
@@ -99,11 +152,53 @@ def level0() -> Iterator[dict[str, Any]]:
         ("inherited-fontsize",
          '<ContentControl xmlns="%s" FontSize="22"><TextBlock x:Name="t" '
          'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"/></ContentControl>' % XMLNS,
-         "FontSize", "FontSize inherits from a Control down to its content"),
+         "FontSize inherits from a Control down to its content"),
+
+        # Nothing sets FontSize anywhere, so the line height is the registered
+        # default and nothing else. That default is taken from the SDK today,
+        # and is the last number in the property system with no measurement
+        # behind it.
+        ("inherited-default", content_control("", "<TextBlock/>"),
+         "no FontSize anywhere, so the line height reports the default"),
+
+        ("local-beats-inherited", content_control('FontSize="22"', '<TextBlock FontSize="11"/>'),
+         "a local FontSize wins over the one above it"),
+        # The case the precedence chain turns on: 14 is also the default, so an
+        # implementation that treats "written out" as "never set" answers 22
+        # here and is right everywhere else.
+        ("local-default-beats-inherited",
+         content_control('FontSize="22"', '<TextBlock FontSize="14"/>'),
+         "a local value equal to the default is still a local value"),
+
+        # An element with no FontSize of its own must not stop one passing
+        # through it: inheritance walks the tree, it does not hop between the
+        # types that happen to declare the property.
+        ("inherits-through-border",
+         content_control('FontSize="22"', "<Border><TextBlock/></Border>"),
+         "an inherited value passes through a Border, which has no FontSize"),
+        ("inherits-through-stackpanel",
+         content_control('FontSize="22"', "<StackPanel><TextBlock/></StackPanel>"),
+         "and through a StackPanel, which the runtime refuses to let one be set on"),
+
+        ("inherits-nearest-ancestor",
+         content_control('FontSize="22"',
+                         '<ContentControl FontSize="33"><TextBlock/></ContentControl>'),
+         "the nearest ancestor with a value wins, not the outermost"),
+        ("inherits-past-a-silent-control",
+         content_control('FontSize="22"',
+                         "<Border><ContentControl><TextBlock/></ContentControl></Border>"),
+         "a Control that sets no FontSize passes the outer one through"),
+
+        # --- inherited, and invisible to a measurement ------------------------
+        ("inherited-fontfamily", content_control('FontFamily="Segoe UI"', "<TextBlock/>"),
+         "FontFamily inherits, but only one family's metrics are harvested, so no "
+         "number separates this from the default -- it shows the markup loads"),
+        ("inherited-foreground", content_control('Foreground="Red"', "<TextBlock/>"),
+         "Foreground inherits and paints rather than measures, so no number can see "
+         "it -- it shows the markup loads"),
     ]
-    for name, markup, prop, note in probes:
-        yield case(f"L0-props-{name}", 0, "props", markup, [400.0, 300.0],
-                   f"{note}; read {prop} without running layout")
+    for name, markup, note in probes:
+        yield case(f"L0-props-{name}", 0, "props", markup, [400.0, 300.0], note)
 
 
 # --- L1: a single element, no children ---------------------------------------
