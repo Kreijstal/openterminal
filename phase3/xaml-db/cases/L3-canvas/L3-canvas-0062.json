@@ -1,0 +1,22 @@
+{
+ "environment": {
+  "available_size": [
+   100.0,
+   50.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "canvas",
+ "id": "L3-canvas-0062",
+ "level": 3,
+ "markup": "<Canvas xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" HorizontalAlignment=\"Left\" VerticalAlignment=\"Top\"/>",
+ "note": "empty Canvas near",
+ "requires": [
+  "L2-align"
+ ],
+ "schema_version": 1
+}

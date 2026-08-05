@@ -1,0 +1,22 @@
+{
+ "environment": {
+  "available_size": [
+   "Infinity",
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "canvas",
+ "id": "L3-canvas-0060",
+ "level": 3,
+ "markup": "<Canvas xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" Width=\"200\" Height=\"150\"/>",
+ "note": "empty Canvas sized",
+ "requires": [
+  "L2-align"
+ ],
+ "schema_version": 1
+}

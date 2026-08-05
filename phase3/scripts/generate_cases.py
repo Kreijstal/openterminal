@@ -214,7 +214,158 @@ def level4() -> Iterator[dict[str, Any]]:
                     )
 
 
-LEVELS = {0: level0, 1: level1, 2: level2, 3: level3, 4: level4}
+# --- L1: shapes and images ----------------------------------------------------
+# Leaf elements whose size comes from their own content rather than from
+# children, which is what puts them at level 1 next to the lone Border.
+#
+# The geometries are chosen to separate three things an implementation can get
+# wrong and still look right on a figure that starts at the origin: that a
+# shape's desired size is the *right and bottom* of its bounds rather than
+# their width and height, that a figure in negative space does not push those
+# edges outwards, and that a curve's extreme is not the extreme of its control
+# points. The two curved samples both have a control point at 20 and neither
+# curve reaches it.
+GEOMETRIES = [
+    ("origin-line", "M0,0 L10,10"),
+    ("offset-line", "M20,5 L30,25"),
+    ("negative-start", "M-10,-10 L5,5"),
+    ("cubic-arch", "M0,0 C0,20 20,20 20,0 Z"),
+    ("quadratic-arch", "M0,0 Q10,20 20,0 Z"),
+    ("terminal-marker", "M 0 0 L 4 5.5996094 L 4 14 L 5 14 L 5 0 L 0 0 z"),
+]
+
+SHAPE_SIZES = [[400.0, 300.0], [10.0, 10.0], [float("inf"), 300.0]]
+
+
+def level1_shape() -> Iterator[dict[str, Any]]:
+    n = 0
+    for name, data in GEOMETRIES:
+        for sized in [False, True]:
+            for avail in SHAPE_SIZES:
+                n += 1
+                attrs = ' Width="40" Height="40"' if sized else ""
+                markup = f'<Path xmlns="{XMLNS}" Data="{data}"{attrs}/>'
+                yield case(
+                    f"L1-shape-{n:04d}", 1, "shape", markup, avail,
+                    f"Path {name} sized={sized}",
+                    requires=["L1-sizing"],
+                )
+
+    # A PathIcon is a one-child host around a Path, so it should report exactly
+    # what the Path reports -- and it is the icon element whose size does not
+    # depend on a font, which is why it is here and FontIcon is not.
+    for name, data in GEOMETRIES:
+        for avail in SHAPE_SIZES:
+            n += 1
+            markup = f'<PathIcon xmlns="{XMLNS}" Data="{data}"/>'
+            yield case(
+                f"L1-shape-{n:04d}", 1, "shape", markup, avail,
+                f"PathIcon {name}",
+                requires=["L1-sizing"],
+            )
+
+    # An Image with no Source has no natural bounds, so both passes return
+    # nothing. The sized variant is the interesting one: an explicit Width
+    # reaches the desired size through the outer half of the contract but never
+    # reaches ArrangeOverride, so the two should disagree.
+    for sized in [False, True]:
+        for avail in SHAPE_SIZES:
+            n += 1
+            attrs = ' Width="40" Height="40"' if sized else ""
+            markup = f'<Image xmlns="{XMLNS}"{attrs}/>'
+            yield case(
+                f"L1-shape-{n:04d}", 1, "shape", markup, avail,
+                f"Image with no Source sized={sized}",
+                requires=["L1-sizing"],
+            )
+
+
+# --- L2: a content host and its content ---------------------------------------
+# ContentPresenter has a second pair of alignment properties that position the
+# content inside the presenter, and they are not the ones that position the
+# presenter inside its parent. The cross product is over those, because the
+# content's layout slot is the only place their effect is visible.
+def level2_content() -> Iterator[dict[str, Any]]:
+    n = 0
+    for hca in H_ALIGN:
+        for vca in V_ALIGN:
+            for padding in ["0", "8,4,12,6"]:
+                for avail in [[400.0, 300.0], [100.0, 50.0]]:
+                    n += 1
+                    markup = (f'<ContentPresenter xmlns="{XMLNS}" Padding="{padding}" '
+                              f'HorizontalContentAlignment="{hca}" '
+                              f'VerticalContentAlignment="{vca}">'
+                              '<Border Width="40" Height="20"/></ContentPresenter>')
+                    yield case(
+                        f"L2-content-{n:04d}", 2, "content", markup, avail,
+                        f"ContentPresenter content {hca}/{vca} padding={padding}",
+                        requires=["L2-align"],
+                    )
+
+    # With neither alignment set, so that the defaults are measured rather than
+    # assumed. Nothing else in the corpus pins them.
+    for padding in ["0", "8,4,12,6"]:
+        for child in ['Width="40" Height="20"', 'Margin="4"']:
+            for avail in [[400.0, 300.0], [100.0, 50.0]]:
+                n += 1
+                markup = (f'<ContentPresenter xmlns="{XMLNS}" Padding="{padding}">'
+                          f'<Border {child}/></ContentPresenter>')
+                yield case(
+                    f"L2-content-{n:04d}", 2, "content", markup, avail,
+                    f"ContentPresenter default content alignment padding={padding}",
+                    requires=["L2-align"],
+                )
+
+
+# --- L3: Canvas ---------------------------------------------------------------
+# The panel that does no layout, which makes it the one whose *own* size is in
+# question. Every variant here is arranged into a slot bigger than anything it
+# contains, so a Canvas that took its slot and a Canvas that took nothing are
+# two different numbers in every case.
+def level3_canvas() -> Iterator[dict[str, Any]]:
+    n = 0
+    positions = [("0", "0"), ("25", "10"), ("-5", "-5")]
+    variants = [
+        ("auto", ""),
+        # An explicit size is the sharpest form of the question: the outer half
+        # of the contract clamps the arrange size to 200x150 before
+        # ArrangeOverride is ever called.
+        ("sized", ' Width="200" Height="150"'),
+        ("near", ' HorizontalAlignment="Left" VerticalAlignment="Top"'),
+    ]
+    for left, top in positions:
+        for child_fixed in [True, False]:
+            for variant, attrs in variants:
+                for avail in [[400.0, 300.0], [100.0, 50.0], [float("inf"), 300.0]]:
+                    n += 1
+                    dim = 'Width="30" Height="20"' if child_fixed else 'Margin="4"'
+                    kids = (f'<Border Canvas.Left="{left}" Canvas.Top="{top}" {dim}/>'
+                            f'<Border Canvas.Left="40" Canvas.Top="40" {dim}/>')
+                    markup = f'<Canvas xmlns="{XMLNS}"{attrs}>{kids}</Canvas>'
+                    yield case(
+                        f"L3-canvas-{n:04d}", 3, "canvas", markup, avail,
+                        f"Canvas {variant} children at {left},{top} fixed={child_fixed}",
+                        requires=["L2-align"],
+                    )
+
+    for variant, attrs in variants:
+        for avail in [[400.0, 300.0], [100.0, 50.0], [float("inf"), 300.0]]:
+            n += 1
+            markup = f'<Canvas xmlns="{XMLNS}"{attrs}/>'
+            yield case(
+                f"L3-canvas-{n:04d}", 3, "canvas", markup, avail,
+                f"empty Canvas {variant}",
+                requires=["L2-align"],
+            )
+
+
+LEVELS = {
+    0: [level0],
+    1: [level1, level1_shape],
+    2: [level2, level2_content],
+    3: [level3, level3_canvas],
+    4: [level4],
+}
 
 
 def main() -> int:
@@ -227,15 +378,16 @@ def main() -> int:
 
     counts: dict[str, int] = {}
     for level in args.levels:
-        for spec in LEVELS[level]():
-            group = f"L{level}-{spec['group']}"
-            counts[group] = counts.get(group, 0) + 1
-            if args.dry_run:
-                continue
-            d = args.out / group
-            d.mkdir(parents=True, exist_ok=True)
-            text = json.dumps(spec, indent=1, sort_keys=True, allow_nan=False)
-            (d / f"{spec['id']}.json").write_text(text + "\n", encoding="utf-8")
+        for generator in LEVELS[level]:
+            for spec in generator():
+                group = f"L{level}-{spec['group']}"
+                counts[group] = counts.get(group, 0) + 1
+                if args.dry_run:
+                    continue
+                d = args.out / group
+                d.mkdir(parents=True, exist_ok=True)
+                text = json.dumps(spec, indent=1, sort_keys=True, allow_nan=False)
+                (d / f"{spec['id']}.json").write_text(text + "\n", encoding="utf-8")
 
     for group in sorted(counts):
         print(f"  {group:<14} {counts[group]:>5}")

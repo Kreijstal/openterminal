@@ -1,0 +1,22 @@
+{
+ "environment": {
+  "available_size": [
+   10.0,
+   10.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "shape",
+ "id": "L1-shape-0053",
+ "level": 1,
+ "markup": "<PathIcon xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" Data=\"M 0 0 L 4 5.5996094 L 4 14 L 5 14 L 5 0 L 0 0 z\"/>",
+ "note": "PathIcon terminal-marker",
+ "requires": [
+  "L1-sizing"
+ ],
+ "schema_version": 1
+}
