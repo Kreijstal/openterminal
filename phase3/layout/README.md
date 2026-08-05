@@ -173,3 +173,8 @@ The `L1-shape` answers have two witnesses each already, from Terminal's two
 `PathIcon` cases, but both of those geometries start near the origin and
 neither distinguishes a tight curve bound from the hull of its control points
 by more than a rounding step. The generated ones do.
+
+These land in L1, L2 and L3, which is the range CI gates on, so the next
+measured run either keeps the gate green or turns it red on a specific case
+with a specific number. That is the intended outcome of authoring them: an
+unchecked answer that stays unchecked is worse than one that fails loudly.
