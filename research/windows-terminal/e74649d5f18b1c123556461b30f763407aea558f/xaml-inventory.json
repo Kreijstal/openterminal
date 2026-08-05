@@ -285,23 +285,14 @@
    }
   },
   "x-directive": {
-   "count": 736,
+   "count": 762,
    "details": {
     "x:Class": 40,
     "x:DataType": 76,
     "x:DeferLoadStrategy": 1,
-    "x:Key": 374,
+    "x:Key": 400,
     "x:Load": 9,
     "x:Uid": 236
-   }
-  },
-  "x-element": {
-   "count": 37,
-   "details": {
-    "x:Boolean": 2,
-    "x:Double": 12,
-    "x:Int32": 10,
-    "x:String": 13
    }
   }
  },
