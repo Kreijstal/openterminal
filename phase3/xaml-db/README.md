@@ -21,7 +21,7 @@ the ones below it:
 
 | level | subject | authored |
 |-------|---------------------------------------------|-----------|
-| L0 | property system: defaults, local values, precedence | generated |
+| L0 | property system: defaults, local values, inheritance, precedence | generated |
 | L1 | one element, no children: explicit size, margin, padding | generated |
 | L2 | one parent, one child: alignment × margin × sizing | generated |
 | L3 | panels: `StackPanel`, `Grid` (Auto/Star/Pixel, spans), `Canvas` | generated |
@@ -132,7 +132,7 @@ run.
 
     python3 phase3/scripts/fetch_measurements.py          # prints the directory
     python3 phase3/scripts/check_layout.py \
-        --expected <that directory> --actual <your results> --levels L1,L2,L3
+        --expected <that directory> --actual <your results> --levels L0,L1,L2,L3
 
 `check_layout.py` takes results in the same shape the probe writes, so an
 implementation under test only has to emit what the probe emits. It compares
@@ -177,9 +177,18 @@ A Linux job runs the reimplementation against the same corpus and diffs.
 unlike a page screenshot it says exactly what to fix next.
 
 Against build `10.0.26100.33158`, [`phase3/layout`](../layout/) matches all of
-L1–L3. L4 is implemented but needs [the harvested font metrics](fonts/), which
+L0–L3. L4 is implemented but needs [the harvested font metrics](fonts/), which
 are CI output rather than repository content; with the two numbers derivable
 from the measurements alone it matches the 36 cases that need nothing else. The
 levels that are red fail with `the type 'ScrollViewer' is not implemented` and
 the like, rather than with wrong numbers, which is the distinction the metric is
 there to preserve.
+
+"All of L0" is four cases. L0 has eighteen, and the fourteen written since the
+last oracle run have no measurement to match — a case with no measurement is no
+expectation, so it counts neither way. The next run will report L0 as drifted,
+`4 cases -> 18 cases`, which is the corpus-changed signal doing its job: the
+digest is reviewed and updated deliberately, and fourteen answers arrive with
+it. Three of them are answers this implementation does not have — whether
+`UseLayoutRounding` inherits, how a tie at exactly `.5` breaks, and what a
+`ContentControl` does with content it is not stretching.

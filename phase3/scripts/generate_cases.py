@@ -189,6 +189,15 @@ def level0() -> Iterator[dict[str, Any]]:
                          "<Border><ContentControl><TextBlock/></ContentControl></Border>"),
          "a Control that sets no FontSize passes the outer one through"),
 
+        # Not a property-system question, but the one thing a ContentControl
+        # does that the inheritance cases above cannot see. Their content is an
+        # empty TextBlock at the origin, which is where Left/Top and Stretch
+        # both put it. A Border that asks for nothing is not: stretched it
+        # fills the control, and left alone it stays at zero. Every case above
+        # depends on the answer and none of them reveals it.
+        ("content-stretch", content_control("", "<Border/>"),
+         "does a ContentControl stretch its content or leave it at its desired size"),
+
         # --- inherited, and invisible to a measurement ------------------------
         ("inherited-fontfamily", content_control('FontFamily="Segoe UI"', "<TextBlock/>"),
          "FontFamily inherits, but only one family's metrics are harvested, so no "
