@@ -19,11 +19,11 @@ Against build `10.0.26100.33158`:
 | L2 | one parent, one child: alignment × margin × sizing | 192 | **192** |
 | L3 | panels: `StackPanel`, `Grid` | 132 | **132** |
 | L4 | text: `TextBlock` | 72 | **36** without a font — see below |
-| L5 | resources: `x:Key`, `{StaticResource}` | 0 | no oracle yet — see below |
+| L5 | resources: `x:Key`, `{StaticResource}`; the `x:` directives | 0 | no oracle yet — see below |
 | L7 | Terminal's own pages | 69 | **36** |
 
 "Measured" rather than "cases": L0 has eighteen cases and four
-measurements, and L5 has forty cases and none at all. Everything authored
+measurements, and L5 has sixty-three cases and none at all. Everything authored
 after the last oracle run is pending, not passing — see [the property
 system](#the-property-system) and [what is still open](#what-is-still-open).
 
@@ -34,8 +34,8 @@ under all of them. The 33 L7 cases that are still red fail as
 numbers, which is the distinction worth keeping: nothing here is quietly
 approximate.
 
-A further 235 generated cases — `L1-shape`, `L2-content`, `L3-canvas` and all
-of `L5-resources` — have no recorded measurement yet and so are neither passing
+A further 258 generated cases — `L1-shape`, `L2-content`, `L3-canvas` and all
+of `L5` — have no recorded measurement yet and so are neither passing
 nor failing. `Canvas`, `ContentPresenter`, `Path`, `PathIcon` and `Image` are
 implemented and every case that measures one is in that set; the two `PathIcon`
 subtrees Terminal's own markup supplies are the only witnesses any of them has
@@ -131,7 +131,7 @@ no recorded numbers for them and inventing some would defeat the point of
 having an oracle. In the meantime each case that hides a value behind a
 resource is paired with a twin that writes the same value inline, and
 [`check_twins.py`](../scripts/check_twins.py) holds the pair to measuring
-identically — 17 of the 18 pairs agree here, the last needing a glyph width
+identically — 25 of the 26 pairs agree here, the last needing a glyph width
 that cannot be derived from the recorded measurements. That is
 self-consistency, not coverage, and it is reported separately for that reason;
 what it does prove is that a resolved `{StaticResource}` reaches the property
@@ -143,6 +143,54 @@ What a load *refuses* to do has no measurement either, and that is the other
 half: [`tests/resources_test.cpp`](tests/resources_test.cpp) holds a failed
 lookup to naming the key it could not find, and `ctest` runs it beside the
 property tests.
+
+## The x: directives
+
+`x:` names are not properties. They instruct the loader, so the property
+registry cannot judge them — it would report `x:Load` as a missing member of
+`Border`, which is the wrong reason for the right refusal and no reason at all
+for the ones that work. [`src/xdirectives.cpp`](src/xdirectives.cpp) takes the
+whole set off an element's attributes before the registry sees the rest, which
+is what lets the registry keep saying "not a property of this type" and mean it.
+
+**The primitives as elements.** `<Border.Width><x:Double>60</x:Double></Border.Width>`
+is what `Width="60"` is. Terminal writes 37 of these: 26 keyed entries in
+resource dictionaries, which already worked, and 11 as the content of a property
+element — `<ToggleButton.Tag>` with an `<x:Int32>`, `<DiscreteObjectKeyFrame.Value>`
+with an `<x:Boolean>` — on properties whose declared type is `object` and where
+an attribute would supply a string. Both forms now go through the same
+`MakeResource`, so the same type check runs on both: an `x:String` does not
+satisfy a `Width` whether it came out of a dictionary or was written in place.
+The `L5-xprimitives` cases twin each one against the attribute spelling.
+
+**Deferral.** `x:Load="False"` and `x:DeferLoadStrategy="Lazy"` describe an
+element that is not created. Here it is absent: not attached to its parent,
+measured by nothing, occupying no slot — and nothing can bring it back, because
+both directives are realised by a code-behind asking for the element by name and
+a `XamlReader.Load` has none. **That is a provisional reading.** x:Load is a
+compiled-markup feature, the runtime may honour it, ignore it or refuse the
+markup, and those are three different trees; `L5-xdirectives-*` asks, and
+[`tests/xdirectives_test.cpp`](tests/xdirectives_test.cpp) pins what we do in
+the meantime so that "provisional" means written down rather than drifting.
+
+**`x:Uid`.** A uid is a key into a localised string table, and a standalone load
+has no resource map — so by default a uid resolves to nothing and sets nothing,
+which is what both this and the oracle probe do. A table can be supplied:
+[`distil_resw_strings.py`](../scripts/distil_resw_strings.py) reads a pinned
+Terminal checkout's `.resw` files into `uid -> property -> value`, and
+`measure_cases` takes it as a fourth argument beside the fonts. No corpus case
+uses one, because a case measured against a table one side has and the other
+does not would disagree by construction.
+
+Precedence — whether a uid's value beats a local attribute — is a guess, and the
+one this makes is that it does, on the reading that a directive whose purpose is
+translation must beat the author it is translating. Nothing documents it and no
+standalone case can ask it, because there is no way to put a resource map in
+front of the oracle from markup alone.
+
+Everything else stays a named refusal. `x:Bind`, `x:DataType`, `x:Class`,
+`x:FieldModifier` and `x:Key` outside a dictionary fail by their own name, and
+`x:Name` is dropped as it always was.
 
 ## Running it
 
@@ -158,6 +206,15 @@ The font metrics argument is optional and defaults to `<cases>/../fonts`. Pass
 `phase3/xaml-db/fonts/derived` instead to run text against the numbers the
 corpus solved for itself; the two directories are never mixed, and a directory
 holding two sets of metrics for one family is refused rather than resolved.
+
+A fifth argument supplies the table `x:Uid` resolves against. It has no default,
+unlike the fonts: a run that silently found one would measure markup the oracle
+cannot, and every uid case would disagree for a reason nothing reported.
+
+    python3 phase3/scripts/distil_resw_strings.py /tmp/windows-terminal \
+        --out /tmp/terminal-strings.json
+    /tmp/layout-build/measure_cases phase3/xaml-db/cases /tmp/layout-results \
+        phase3/xaml-db/fonts/derived /tmp/terminal-strings.json
 
 Two checks need no oracle at all, and run from a bare checkout:
 
@@ -291,6 +348,8 @@ neither passing nor failing:
 | `L1-shape` | 60 | are a shape's bounds tight, and is its desired size the right edge or the width? |
 | `L0-props` | 14 | does `UseLayoutRounding` inherit, how does a tie at `.5` break, and what does a `ContentControl` do with content it is not stretching? |
 | `L5-resources` | 40 | every one of them: the level has no measurement at all |
+| `L5-xprimitives` | 17 | does a primitive written as an object element reach a typed property, and does an `x:String` convert to an enum? |
+| `L5-xdirectives` | 6 | does a runtime load honour `x:Load` at all, and does it tolerate an `x:Uid` with no resource map? |
 
 The `L1-shape` answers have two witnesses each already, from Terminal's two
 `PathIcon` cases, but both of those geometries start near the origin and

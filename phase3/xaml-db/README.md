@@ -26,7 +26,7 @@ the ones below it:
 | L2 | one parent, one child: alignment × margin × sizing; `ContentPresenter` content alignment | generated |
 | L3 | panels: `StackPanel`, `Grid` (Auto/Star/Pixel, spans), `Canvas` | generated |
 | L4 | text: `TextBlock` with a pinned font | generated |
-| L5 | resources, styles, templates, precedence | authored |
+| L5 | resources, the `x:` directives, styles, templates, precedence | authored |
 | L6 | visual states and storyboards, sampled at t=0 and t=end | authored |
 | L7 | Terminal's own pages | harvested |
 
@@ -37,9 +37,11 @@ authoring, and L7 is a harvest of the real pages.
 ## L5, before the oracle has seen it
 
 Resource lookup is the first thing in the corpus that was authored *after* the
-last oracle run, so its 40 cases are written and pending rather than measured.
-That is a different state from the levels above it and is worth naming, because
-"pending" is easy to read as "passing".
+last oracle run, and the `x:` directives followed it, so all 63 of L5's cases —
+40 in `L5-resources`, 17 in `L5-xprimitives`, 6 in `L5-xdirectives` — are
+written and pending rather than measured. That is a different state from the
+levels above it and is worth naming, because "pending" is easy to read as
+"passing".
 
 They are also the first cases with no axis to sweep. `{StaticResource W}`
 resolves to the same literal at every available size, so the cross product that
@@ -51,8 +53,9 @@ reference uses, and which primitive type the value has.
 Two things stand in for the oracle in the meantime, and neither pretends to be
 one:
 
-**Twins.** Every case that hides a value behind a resource names a `twin` — a
-second case describing the same layout with the value written inline. The two
+**Twins.** Every case that hides a value behind a resource — or behind a
+primitive written as an object element — names a `twin`: a second case
+describing the same layout with the value written inline. The two
 have to measure identically, and
 [`check_twins.py`](../scripts/check_twins.py) checks that against our own
 output, on a laptop, today. It says nothing about whether the layout is right
@@ -60,15 +63,18 @@ or whether the markup is valid XAML; both halves can be wrong together. What it
 does catch is a lookup resolving to the wrong value, which is the entire
 failure mode of a resource system.
 
-**Declared questions.** Four cases carry `oracle_decides` and a `question`,
+**Declared questions.** Eleven cases carry `oracle_decides` and a `question`,
 because WinUI 2's parser is not documented to the depth they need and WPF's
 behaviour is not evidence about it. Does a forward reference resolve? Is an
 element's own dictionary in scope for its own attributes? Can a `GridLength` be
 declared as an object element? Does an `x:Double` satisfy a property whose type
-is `GridLength`? Those have no inline twin — writing one would be inventing the
-answer — and a rejection of them by the runtime is the finding rather than a
-broken corpus. `report_measurements.py` treats them accordingly, and only
-because the case said so before the run.
+is `GridLength`? Does an `x:String` convert to an enum, or is it assigned as a
+string object? Does a runtime load honour `x:Load` at all — and if it does, is
+the element absent from the tree or present at zero size? Does it tolerate an
+`x:Uid` it has no resource map for? Those have no inline twin — writing one
+would be inventing the answer — and a rejection of them by the runtime is the
+finding rather than a broken corpus. `report_measurements.py` treats them
+accordingly, and only because the case said so before the run.
 
 Everything else at L5 is accountable in the ordinary way: L5 is an authored
 level, and a case there that the runtime refuses without having declared a
@@ -88,11 +94,11 @@ make more of this measurable". Against commit `e74649d5`:
 | blocker | count | what it would take |
 |---|---:|---|
 | `markup-extension` | 2,043 | `{StaticResource}`, `{x:Bind}`, `{ThemeResource}`, `{TemplateBinding}` |
-| `x-directive` | 736 | `x:Key`, `x:Uid`, `x:DataType`, `x:Load` |
+| `x-directive` | 762 | `x:Key`, `x:Uid`, `x:DataType`, `x:Load` |
 | `foreign-type` | 288 | WinUI 2 (`muxc:`) and Terminal's own controls |
 | `event-attribute` | 180 | a code-behind to hang handlers on |
 | `resource-element` | 149 | `<StaticResource>` lookup against a dictionary |
-| `x-element` | 37 | `x:String` and friends as elements |
+| `foreign-attribute` | 13 | an attribute from a namespace we do not model |
 
 That leaves 23 unique loadable subtrees, emitted at three available sizes each:
 69 cases. It is a small number, and it is the honest one — it is what can be
@@ -123,6 +129,58 @@ number, and it is a content problem rather than a parser one.
 
 Until then the classifier keeps calling those subtrees blocked, which is
 accurate: a standalone `XamlReader.Load` has no `Application`.
+
+### `x-element` is gone from the table, and it bought nothing either
+
+`x:String` and friends written as elements were 37 occurrences and are now
+implemented, so the row is zero. The blockers table is a roadmap, and a
+capability that exists should not appear on it — but the number that matters is
+the one below it, and that one did not move: **23 unique candidates, the same
+23.** Every subtree that held an `x:Double` held something else too.
+
+Where the 37 went is worth stating, because 26 of them are still blocked and the
+table no longer says so under that name. The rule the classifier applies now is
+that a primitive is a *value*, so it is understood where a value belongs — the
+content of a property element, or an entry in a `<ResourceDictionary>` — and is
+judged on its attributes like anything else. The 11 Terminal writes as property
+content (`<ToggleButton.Tag>` with an `<x:Int32>`,
+`<DiscreteObjectKeyFrame.Value>` with an `<x:Boolean>`) carry no attributes and
+are clean. The 26 in dictionaries carry an `x:Key`, so they moved into the
+`x-directive` count — 736 to 762 — which is where every other `x:Key` already
+was and is a truer statement of what they need: not the type, the dictionary.
+
+### `x:Uid` would raise it, and is not relaxed anyway
+
+This one is not zero, and it is the largest single number this measurement has
+produced. Allow `x:Uid` on an element — nothing else — and the harvest goes from
+23 unique candidates to **54**, from 69 cases to 162. Three of the original 69
+disappear into a larger parent that the directive no longer blocks.
+
+The classifier still calls it blocked, and the reason is not doubt about whether
+the markup loads. It is what the markup would *mean*. A uid is a key into a
+localised string table; a standalone load has no resource map, so those 31 new
+subtrees would realise with none of the text that sizes them — a `TextBlock`
+with nothing in it, a `Button` with no content. They would measure cleanly and
+they would not be measurements of anything Terminal shows. That is a worse
+outcome than a blocked subtree, because it looks like coverage.
+
+What it would take is therefore not the directive, which is implemented, but a
+resource map in the measurement environment on *both* sides — and the oracle
+probe has none either. [`distil_resw_strings.py`](../scripts/distil_resw_strings.py)
+is the half that exists: 579 uids and 747 properties out of the pinned
+checkout's seven `en-US` tables. Of those 747, one property kind — `Text`, 113
+of them — reaches a layout the corpus can measure; 72 are accessibility metadata
+that changes no number by design; and the remaining 562 set `Content`, `Header`,
+`HelpText` and `PlaceholderText` on controls that are not implemented, and fail
+by name rather than silently. So even with the map in hand, the 31 subtrees are
+waiting on the control set, not on the directive.
+
+`x:Load` is the third case and is simply worth nothing today: relaxing it moves
+the count from 23 to 23. It stays blocked for a different reason — whether a
+runtime load honours it at all is the open question `L5-xdirectives-*` exists to
+ask, and a subtree whose realised shape depends on an unanswered question is not
+a prediction anyone can make. The moment the runtime answers, that is a one-line
+change with a measured cost of nothing.
 
 Classification is metadata-driven, not guessed: element names, property names,
 attached-property stems, event names and the `UIElement` derivation chain all
@@ -193,10 +251,10 @@ gate `phase0` and `phase1` already apply to their snapshots.
 
 ## Using the measurements
 
-The measurements are CI output, not repository content: 581 files regenerated
+The measurements are CI output, not repository content: 604 files regenerated
 deterministically in about two minutes. Fetch them from the artifact of a green
 run. The digest committed under `oracles/` still records 541, which is the
-corpus the last run saw — the 40 L5 cases were authored after it.
+corpus the last run saw — the 63 L5 cases were authored after it.
 
     python3 phase3/scripts/fetch_measurements.py          # prints the directory
     python3 phase3/scripts/check_layout.py \
@@ -228,10 +286,10 @@ images move on their own schedule — but it says plainly that nothing is
 verifying those measurements until the digest lands.
 
 **Growing the corpus trips the same gate, on purpose.** The committed digest for
-`10.0.26100.33158` covers 541 cases and no L5; the corpus now has 581 and does.
+`10.0.26100.33158` covers 541 cases and no L5; the corpus now has 604 and does.
 The first measurement run after that will stop with
 
-    L5: new level, 40 cases
+    L5: new level, 63 cases
 
 which is not the runtime answering differently — it is the corpus asking a
 question the digest has never seen. The gate cannot tell those apart on its own
@@ -254,6 +312,13 @@ the addition rather than hidden by it.
                                            twice and diffs the runs, and the
                                            measured corpus travels to the layout
                                            job as an artifact
+      <anywhere>/strings.json              the x:Uid table, emitted by
+                                           distil_resw_strings.py from a pinned
+                                           Terminal checkout. Not part of the
+                                           corpus and never loaded by default:
+                                           the oracle has no resource map, so a
+                                           run that used one would measure
+                                           markup the oracle cannot
 
     (CI artifact, not committed)
       measurements/<os-build>/<id>.json    filled in by CI on windows-latest
@@ -295,8 +360,8 @@ it. Three of them are answers this implementation does not have — whether
 `UseLayoutRounding` inherits, how a tie at exactly `.5` breaks, and what a
 `ContentControl` does with content it is not stretching.
 
-A further 235 generated cases in `L1-shape`, `L2-content`, `L3-canvas` and
-`L5-resources` are newer than the last oracle run for the same reason. They do
+A further 258 generated cases in `L1-shape`, `L2-content`, `L3-canvas` and all
+three L5 groups are newer than the last oracle run for the same reason. They do
 not move the numbers above in either direction until CI fills them in; they
 exist because the answers they cover currently rest on one witness each, or on
 none.
