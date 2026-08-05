@@ -8,12 +8,28 @@
 // zero is a perfectly good Opacity.
 //
 // Ported in shape from dotnet/wpf's DependencyObject and its property store
-// (MIT, 2ca037562c207924e53cfcc99286e523d3694de3), reduced to the two sources
-// the corpus can currently see. WPF's chain has a dozen entries -- coercion,
+// (MIT, 2ca037562c207924e53cfcc99286e523d3694de3), reduced to the sources the
+// corpus can currently see. WPF's chain has a dozen entries -- coercion,
 // animation, triggers, styles, template parents -- and every one of them that
 // is missing here is a level of the corpus that has not been reached yet.
-// Local and inherited are looked up in that order in one place, so a later
-// source slots in between them rather than being threaded through callers.
+//
+// Three of them are here now, in this order, highest first:
+//
+//   local     what the markup wrote on the element itself
+//   style     what the element's Style says, BasedOn already merged
+//   inherited the nearest ancestor's local-or-style value
+//   default   what the property was registered with
+//
+// That order is WPF's `BaseValueSourceInternal`, where Local outranks Style and
+// Style outranks Inherited. The consequence worth stating, because it is the
+// one that surprises: a style setter beats a value inherited from an ancestor,
+// so a TextBlock under a FontSize="22" control measures at whatever its style
+// says and not at 22. Inheritance reads the ancestor's *effective* value, so a
+// FontSize a style set does flow down to elements that have neither.
+//
+// The whole chain is looked up in one place, so the next source -- a trigger,
+// an animation -- slots in beside these rather than being threaded through
+// callers.
 
 #ifndef OPENXAML_PROPERTY_H
 #define OPENXAML_PROPERTY_H
@@ -123,6 +139,11 @@ const DependencyProperty* FindProperty(const std::vector<std::string>& owners,
 // properties the object itself has never been told about.
 const std::vector<const DependencyProperty*>& InheritedProperties();
 
+// The property a store index belongs to, or nullptr. A store is keyed by index
+// rather than by pointer, so anything that walks a store instead of a property
+// list -- clearing every style value, for one -- needs the way back.
+const DependencyProperty* PropertyByIndex(size_t index);
+
 // Anything that carries dependency properties. Element derives from it; so
 // would a Style or a resource dictionary entry, which is the reason it is not
 // folded into Element.
@@ -135,18 +156,34 @@ public:
     // as the property system is concerned, and nothing else here needs one.
     virtual const std::vector<std::string>& PropertyOwners() const = 0;
 
-    // The effective value: local if there is one, then inherited from the
-    // ancestor chain if the property inherits, then the registered default.
+    // The effective value: local if there is one, then the style's, then
+    // inherited from the ancestor chain if the property inherits, then the
+    // registered default.
     const PropertyValue& GetValue(const DependencyProperty& property) const;
 
     void SetValue(const DependencyProperty& property, PropertyValue value);
 
     // Removes the local value, exposing whatever was underneath it. Not the
     // same as setting the default: an inherited property goes back to reading
-    // its ancestor.
+    // its ancestor, and one under a style goes back to reading the style.
     void ClearValue(const DependencyProperty& property);
 
     bool HasLocalValue(const DependencyProperty& property) const;
+
+    // What a style setter writes. Its own slot rather than the local one, so
+    // that a local value set afterwards still wins, and so that replacing the
+    // style exposes what was underneath instead of what the old style left
+    // behind. See style.h for who calls this.
+    void SetStyleValue(const DependencyProperty& property, PropertyValue value);
+
+    // Every style value at once, which is what changing an element's Style
+    // does before the new one is applied. Not a loop over ClearStyleValue for
+    // each property the caller happens to know about: the old style's setters
+    // are exactly what has to go, and the store is the only thing that still
+    // knows what they were.
+    void ClearStyleValues();
+
+    bool HasStyleValue(const DependencyProperty& property) const;
 
     // Typed reads. They throw if the property does not hold that type, which
     // is a registration mistake rather than anything a case can cause.
@@ -179,9 +216,24 @@ private:
     void InvalidateInherited(const DependencyProperty& property, const PropertyValue& before);
     void InvalidateAllInherited(const std::vector<PropertyValue>& before);
 
+    // What this object says about a property on its own account -- the local
+    // value, then the style's -- or nullptr when it says nothing. This is the
+    // value an inheriting descendant reads, and the condition that stops the
+    // inheritance walk, so the two cannot drift apart.
+    const PropertyValue* OwnValue(const DependencyProperty& property) const;
+
+    // Reports an effective value that may have moved: notifies this object and
+    // pushes the change down the inheritance chain. One place, so that every
+    // source writes into its slot and then says the same thing.
+    void ValueMoved(const DependencyProperty& property, const PropertyValue& before);
+
     // Sparse on purpose: an element that sets two attributes stores two
     // values, not one slot per registered property.
     std::map<size_t, PropertyValue> local_;
+    // The same, for what the element's Style supplies. A second map rather
+    // than a tagged one: the two are read in a fixed order and never merged,
+    // and keeping them apart is what makes clearing one of them possible.
+    std::map<size_t, PropertyValue> style_;
     DependencyObject* inheritance_parent_ = nullptr;
 };
 
