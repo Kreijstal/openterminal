@@ -27,16 +27,19 @@ measurements, and L5 has forty cases and none at all. Everything authored
 after the last oracle run is pending, not passing — see [the property
 system](#the-property-system) and [what is still open](#what-is-still-open).
 
-L1–L3 is every case that does not need text measurement or a control set —
-`Border`, `Grid`, `StackPanel`, `Canvas`, and the `FrameworkElement` semantics
+L1–L3 is every measured case that does not need text measurement or a control
+set — `Border`, `Grid`, `StackPanel`, and the `FrameworkElement` semantics
 under all of them. The 33 L7 cases that are still red fail as
 `the type 'ScrollViewer' is not implemented` and the like, rather than as wrong
 numbers, which is the distinction worth keeping: nothing here is quietly
 approximate.
 
-A further 195 generated cases — `L1-shape`, `L2-content`, `L3-canvas` — have no
-recorded measurement yet and so are neither passing nor failing. They are
-listed under [what is still open](#what-is-still-open).
+A further 235 generated cases — `L1-shape`, `L2-content`, `L3-canvas` and all
+of `L5-resources` — have no recorded measurement yet and so are neither passing
+nor failing. `Canvas`, `ContentPresenter`, `Path`, `PathIcon` and `Image` are
+implemented and every case that measures one is in that set; the two `PathIcon`
+subtrees Terminal's own markup supplies are the only witnesses any of them has
+today. They are listed under [what is still open](#what-is-still-open).
 
 ### What the 33 red L7 cases are waiting for
 
