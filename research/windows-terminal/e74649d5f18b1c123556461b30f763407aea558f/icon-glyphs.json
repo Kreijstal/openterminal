@@ -1,0 +1,446 @@
+{
+ "codepoints": [
+  59151,
+  59152,
+  59153,
+  59182,
+  59197,
+  59204,
+  59205,
+  59206,
+  59210,
+  59211,
+  59212,
+  59213,
+  59222,
+  59239,
+  59240,
+  59243,
+  59244,
+  59461,
+  59555,
+  59559,
+  59579,
+  59592,
+  59614,
+  59621,
+  59643,
+  59698,
+  59718,
+  59720,
+  59928,
+  59961,
+  59999,
+  60001,
+  60032,
+  60047,
+  60421,
+  60889,
+  60890,
+  60891,
+  60892,
+  60992,
+  61613,
+  61614,
+  61806,
+  62896
+ ],
+ "deferred_extensions": {
+  "TemplateBinding": 2,
+  "ThemeResource": 1,
+  "x:Bind": 1
+ },
+ "element_types": {
+  "FontIcon": 90
+ },
+ "font_families": {
+  "": 45,
+  "Segoe Fluent Icons, Segoe MDL2 Assets": 1,
+  "Segoe MDL2 Assets": 1,
+  "Segoe UI, Segoe Fluent Icons, Segoe MDL2 Assets": 3,
+  "{StaticResource SymbolThemeFontFamily}": 1,
+  "{ThemeResource SymbolThemeFontFamily}": 39
+ },
+ "font_sizes": {
+  "": 25,
+  "10": 1,
+  "11": 4,
+  "12": 19,
+  "16": 1,
+  "32": 1,
+  "{StaticResource EditButtonIconSize}": 3,
+  "{StaticResource ScrollBarButtonArrowIconFontSize}": 4,
+  "{StaticResource StandardIconSize}": 32
+ },
+ "glyphs": {
+  "U+E70F": {
+   "codepoint": 59151,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/NewTabMenu.xaml"
+   ]
+  },
+  "U+E710": {
+   "codepoint": 59152,
+   "count": 11,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/Actions.xaml",
+    "src/cascadia/TerminalSettingsEditor/AddProfile.xaml",
+    "src/cascadia/TerminalSettingsEditor/Appearances.xaml",
+    "src/cascadia/TerminalSettingsEditor/ColorSchemes.xaml",
+    "src/cascadia/TerminalSettingsEditor/NewTabMenu.xaml",
+    "src/cascadia/TerminalSettingsEditor/Profiles_Appearance.xaml"
+   ]
+  },
+  "U+E711": {
+   "codepoint": 59153,
+   "count": 3,
+   "files": [
+    "src/cascadia/TerminalControl/SearchBoxControl.xaml",
+    "src/cascadia/TerminalSettingsEditor/EditAction.xaml",
+    "src/cascadia/TerminalSettingsEditor/EditColorScheme.xaml"
+   ]
+  },
+  "U+E72E": {
+   "codepoint": 59182,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalApp/CommandPalette.xaml",
+    "src/cascadia/TerminalApp/TabHeaderControl.xaml"
+   ]
+  },
+  "U+E73D": {
+   "codepoint": 59197,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/CommonResources.xaml"
+   ]
+  },
+  "U+E744": {
+   "codepoint": 59204,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/Appearances.xaml"
+   ]
+  },
+  "U+E745": {
+   "codepoint": 59205,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/Appearances.xaml"
+   ]
+  },
+  "U+E746": {
+   "codepoint": 59206,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/Appearances.xaml"
+   ]
+  },
+  "U+E74A": {
+   "codepoint": 59210,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalControl/SearchBoxControl.xaml"
+   ]
+  },
+  "U+E74B": {
+   "codepoint": 59211,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalControl/SearchBoxControl.xaml"
+   ]
+  },
+  "U+E74C": {
+   "codepoint": 59212,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/Extensions.xaml"
+   ]
+  },
+  "U+E74D": {
+   "codepoint": 59213,
+   "count": 11,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/Appearances.xaml",
+    "src/cascadia/TerminalSettingsEditor/EditAction.xaml",
+    "src/cascadia/TerminalSettingsEditor/EditColorScheme.xaml",
+    "src/cascadia/TerminalSettingsEditor/NewTabMenu.xaml",
+    "src/cascadia/TerminalSettingsEditor/Profiles_Advanced.xaml",
+    "src/cascadia/TerminalSettingsEditor/Profiles_Appearance.xaml",
+    "src/cascadia/TerminalSettingsEditor/Profiles_Base.xaml",
+    "src/cascadia/TerminalSettingsEditor/Profiles_Base_Orphaned.xaml"
+   ]
+  },
+  "U+E756": {
+   "codepoint": 59222,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalControl/TermControl.xaml"
+   ]
+  },
+  "U+E767": {
+   "codepoint": 59239,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/Profiles_Advanced.xaml"
+   ]
+  },
+  "U+E768": {
+   "codepoint": 59240,
+   "count": 3,
+   "files": [
+    "src/cascadia/TerminalApp/SnippetsPaneContent.xaml",
+    "src/cascadia/UIMarkdown/CodeBlock.xaml"
+   ]
+  },
+  "U+E76B": {
+   "codepoint": 59243,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalApp/CommandPalette.xaml",
+    "src/cascadia/TerminalApp/SuggestionsControl.xaml"
+   ]
+  },
+  "U+E76C": {
+   "codepoint": 59244,
+   "count": 3,
+   "files": [
+    "src/cascadia/TerminalApp/CommandPalette.xaml",
+    "src/cascadia/TerminalApp/SuggestionsControl.xaml",
+    "src/cascadia/TerminalSettingsEditor/CommonResources.xaml"
+   ]
+  },
+  "U+E845": {
+   "codepoint": 59461,
+   "count": 6,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/SettingContainerStyle.xaml"
+   ]
+  },
+  "U+E8A3": {
+   "codepoint": 59555,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalApp/CommandPalette.xaml",
+    "src/cascadia/TerminalApp/TabHeaderControl.xaml"
+   ]
+  },
+  "U+E8A7": {
+   "codepoint": 59559,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/Extensions.xaml"
+   ]
+  },
+  "U+E8BB": {
+   "codepoint": 59579,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalApp/MarkdownPaneContent.xaml",
+    "src/cascadia/TerminalApp/SnippetsPaneContent.xaml"
+   ]
+  },
+  "U+E8C8": {
+   "codepoint": 59592,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/AddProfile.xaml"
+   ]
+  },
+  "U+E8DE": {
+   "codepoint": 59614,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/NewTabMenu.xaml"
+   ]
+  },
+  "U+E8E5": {
+   "codepoint": 59621,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalApp/MarkdownPaneContent.xaml"
+   ]
+  },
+  "U+E8FB": {
+   "codepoint": 59643,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/EditAction.xaml",
+    "src/cascadia/TerminalSettingsEditor/EditColorScheme.xaml"
+   ]
+  },
+  "U+E932": {
+   "codepoint": 59698,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalApp/MarkdownPaneContent.xaml"
+   ]
+  },
+  "U+E946": {
+   "codepoint": 59718,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/MainPage.xaml"
+   ]
+  },
+  "U+E948": {
+   "codepoint": 59720,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/Profiles_Advanced.xaml"
+   ]
+  },
+  "U+EA18": {
+   "codepoint": 59928,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalApp/TabRowControl.xaml"
+   ]
+  },
+  "U+EA39": {
+   "codepoint": 59961,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalApp/TabHeaderControl.xaml"
+   ]
+  },
+  "U+EA5F": {
+   "codepoint": 59999,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/Appearances.xaml"
+   ]
+  },
+  "U+EA61": {
+   "codepoint": 60001,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/Appearances.xaml"
+   ]
+  },
+  "U+EA80": {
+   "codepoint": 60032,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalControl/TermControl.xaml"
+   ]
+  },
+  "U+EA8F": {
+   "codepoint": 60047,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalApp/CommandPalette.xaml",
+    "src/cascadia/TerminalApp/TabHeaderControl.xaml"
+   ]
+  },
+  "U+EC05": {
+   "codepoint": 60421,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalApp/CommandPalette.xaml",
+    "src/cascadia/TerminalApp/TabHeaderControl.xaml"
+   ]
+  },
+  "U+EDD9": {
+   "codepoint": 60889,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalControl/TermControl.xaml"
+   ]
+  },
+  "U+EDDA": {
+   "codepoint": 60890,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalControl/TermControl.xaml"
+   ]
+  },
+  "U+EDDB": {
+   "codepoint": 60891,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalControl/TermControl.xaml"
+   ]
+  },
+  "U+EDDC": {
+   "codepoint": 60892,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalControl/TermControl.xaml"
+   ]
+  },
+  "U+EE40": {
+   "codepoint": 60992,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalApp/TabRowControl.xaml"
+   ]
+  },
+  "U+F0AD": {
+   "codepoint": 61613,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/NewTabMenu.xaml"
+   ]
+  },
+  "U+F0AE": {
+   "codepoint": 61614,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/NewTabMenu.xaml"
+   ]
+  },
+  "U+F16E": {
+   "codepoint": 61806,
+   "count": 1,
+   "files": [
+    "src/cascadia/TerminalSettingsEditor/Appearances.xaml"
+   ]
+  },
+  "U+F5B0": {
+   "codepoint": 62896,
+   "count": 2,
+   "files": [
+    "src/cascadia/TerminalApp/SnippetsPaneContent.xaml",
+    "src/cascadia/UIMarkdown/CodeBlock.xaml"
+   ]
+  }
+ },
+ "parse_failures": [],
+ "schema_version": 1,
+ "skipped_files": [
+  {
+   "file": "samples/ConPTY/GUIConsole/GUIConsole.WPF/App.xaml",
+   "reason": "built by GUIConsole.WPF.csproj"
+  },
+  {
+   "file": "samples/ConPTY/GUIConsole/GUIConsole.WPF/MainWindow.xaml",
+   "reason": "built by GUIConsole.WPF.csproj"
+  },
+  {
+   "file": "src/cascadia/WpfTerminalControl/TerminalControl.xaml",
+   "reason": "built by WpfTerminalControl.csproj"
+  },
+  {
+   "file": "src/cascadia/WpfTerminalTestNetCore/App.xaml",
+   "reason": "built by WpfTerminalTestNetCore.csproj"
+  },
+  {
+   "file": "src/cascadia/WpfTerminalTestNetCore/MainWindow.xaml",
+   "reason": "built by WpfTerminalTestNetCore.csproj"
+  }
+ ],
+ "source": {
+  "commit": "e74649d5f18b1c123556461b30f763407aea558f",
+  "commit_date": "2026-08-03T17:14:39+02:00",
+  "repository": "https://github.com/microsoft/terminal"
+ },
+ "totals": {
+  "codepoints": 44,
+  "deferred": 4,
+  "files_out_of_scope": 5,
+  "files_scanned": 43,
+  "glyph_attributes": 90
+ }
+}
