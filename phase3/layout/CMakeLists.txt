@@ -29,10 +29,23 @@ add_executable(measure_cases
 )
 target_link_libraries(measure_cases PRIVATE openxaml_layout)
 
+# What the corpus cannot say. A measurement is a tree of numbers, so it cannot
+# distinguish an inherited value from a copied one, or say that an element
+# noticed a value move. Those checks live here instead.
+enable_testing()
+add_executable(property_test
+    tests/property_test.cpp
+    src/markup.cpp
+)
+target_link_libraries(property_test PRIVATE openxaml_layout)
+add_test(NAME property_test COMMAND property_test)
+
 if(MSVC)
     target_compile_options(openxaml_layout PRIVATE /W4)
     target_compile_options(measure_cases PRIVATE /W4)
+    target_compile_options(property_test PRIVATE /W4)
 else()
     target_compile_options(openxaml_layout PRIVATE -Wall -Wextra)
     target_compile_options(measure_cases PRIVATE -Wall -Wextra)
+    target_compile_options(property_test PRIVATE -Wall -Wextra)
 endif()
