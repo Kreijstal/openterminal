@@ -483,6 +483,429 @@ def level3_canvas() -> Iterator[dict[str, Any]]:
             )
 
 
+# --- L3: ScrollViewer ---------------------------------------------------------
+# The one type in the corpus whose recorded cases contradict each other.
+#
+# Terminal supplies three ScrollViewer subtrees and the oracle measured all
+# three. Two of them report their content's desired size plus their own padding
+# and then stretch the content to the viewport -- what a viewer with both scroll
+# directions off does. The third asks for sixteen more pixels in each axis,
+# exactly one scroll bar's worth per axis, and arranges its content at the
+# content's own desired size -- what a viewer with both directions on does.
+# Neither sets a scroll bar visibility, and no property in the markup separates
+# them, so implementing either reading breaks the other. Nine L7 cases are
+# blocked on that and the layout core refuses ScrollViewer rather than guess.
+#
+# This series exists to make the guess unnecessary. The axes are everything a
+# reading of that contradiction could turn on:
+#
+#   * HorizontalScrollBarVisibility x VerticalScrollBarVisibility, all sixteen
+#     combinations of Disabled/Auto/Hidden/Visible -- the properties that are
+#     documented to decide it and that the recorded cases leave at their default
+#   * HorizontalScrollMode x VerticalScrollMode, which decide scrollability
+#     independently of whether a bar is shown, so they separate "a bar is in the
+#     layout" from "the content may exceed the viewport"
+#   * content smaller than, exactly equal to, and larger than the viewport in
+#     each axis independently, which is what an Auto bar's computed visibility
+#     is supposed to turn on -- and the boundary is where an off-by-one lives
+#   * an explicitly sized viewer against an unconstrained one, because the first
+#     asks what arrange does with the reservation and the second asks whether
+#     measure adds it
+#   * padding on the viewer, which the recorded cases show reaching the desired
+#     size, so the question is whether the reservation lands inside or outside it
+#   * six replicas of the three Terminal shapes built out of Border, which is
+#     what tells us whether the disagreement is a property of the viewer or of
+#     the TextBlock that only the odd one out contains
+#
+# Every child is a Border, so nothing here needs a font: a text metric in the
+# middle of the answer would put the ScrollViewer question and the DirectWrite
+# question in the same number.
+#
+# None of these carries `oracle_decides`. Every property set below is a plain
+# enum value on a documented property, so a rejection would be a finding about
+# the corpus rather than an answer we asked for, and declaring the question in
+# advance would only make that finding quiet.
+
+SCROLL_BAR_VISIBILITIES = ["Disabled", "Auto", "Hidden", "Visible"]
+
+# Auto is deprecated on ScrollMode and documented as "do not use", so the axis
+# is the two values that mean something.
+SCROLL_MODES = ["Disabled", "Enabled"]
+
+# A viewer of this size holds `small` with room to spare and cannot hold
+# `large` in either axis. `equal-*` are the two candidate viewports: 200x150 if
+# no bar is in the layout, and 184x134 if one is in each axis.
+SCROLL_VIEWER_SIZE = (200.0, 150.0)
+SCROLL_CONTENTS = {
+    "small": (60.0, 40.0),
+    "large": (300.0, 260.0),
+}
+
+
+def scroll_viewer(attributes: str, child: str) -> str:
+    head = f'<ScrollViewer xmlns="{XMLNS}"'
+    if attributes:
+        head += " " + attributes
+    return f"{head}>{child}</ScrollViewer>"
+
+
+def sized_border(size: tuple[float, float]) -> str:
+    return f'<Border Width="{size[0]:g}" Height="{size[1]:g}"/>'
+
+
+def visibility_attributes(horizontal: str, vertical: str) -> str:
+    # The direct properties, not the ScrollViewer.* attached spelling. They are
+    # the same dependency property in the runtime, but only the direct form is
+    # what a ScrollViewer's own markup would ever say, and a case should ask its
+    # question in the spelling the answer will be used in.
+    return (f'HorizontalScrollBarVisibility="{horizontal}" '
+            f'VerticalScrollBarVisibility="{vertical}"')
+
+
+def level3_scroll() -> Iterator[dict[str, Any]]:
+    needs = ["L2-align", "L3-grid"]
+    sized = f'Width="{SCROLL_VIEWER_SIZE[0]:g}" Height="{SCROLL_VIEWER_SIZE[1]:g}"'
+
+    # --- the cross product, in a viewer whose size is not in question ---------
+    # With the viewer pinned at 200x150 the only thing left to vary is where the
+    # sixteen pixels go, so this is the series that says when a bar is in the
+    # layout at all.
+    for horizontal in SCROLL_BAR_VISIBILITIES:
+        for vertical in SCROLL_BAR_VISIBILITIES:
+            for content, size in sorted(SCROLL_CONTENTS.items()):
+                attributes = f"{sized} {visibility_attributes(horizontal, vertical)}"
+                yield case(
+                    f"L3-scroll-vis-{horizontal.lower()}-{vertical.lower()}-{content}",
+                    3, "scroll", scroll_viewer(attributes, sized_border(size)),
+                    [400.0, 300.0],
+                    f"ScrollViewer 200x150 h={horizontal} v={vertical}, "
+                    f"{content} content {size[0]:g}x{size[1]:g}",
+                    requires=needs,
+                )
+
+    # --- the same cross product with nothing pinning the viewer ---------------
+    # This is the half the three recorded cases actually disagree about: what a
+    # ScrollViewer *asks* for. Three available sizes, including one that cannot
+    # hold the content and one that is infinite in both axes, which is what a
+    # StackPanel would hand it.
+    for horizontal in SCROLL_BAR_VISIBILITIES:
+        for vertical in SCROLL_BAR_VISIBILITIES:
+            for index, avail in enumerate([[400.0, 300.0], [100.0, 50.0],
+                                           [float("inf"), float("inf")]]):
+                yield case(
+                    f"L3-scroll-free-{horizontal.lower()}-{vertical.lower()}-a{index}",
+                    3, "scroll",
+                    scroll_viewer(visibility_attributes(horizontal, vertical),
+                                  sized_border(SCROLL_CONTENTS["small"])),
+                    avail,
+                    f"unconstrained ScrollViewer h={horizontal} v={vertical}, "
+                    f"60x40 content",
+                    requires=needs,
+                )
+
+    # --- scroll mode against scroll bar visibility ----------------------------
+    # Two properties that both claim to decide scrolling. If the sizing rule
+    # follows the bar, these change nothing; if it follows the mode, they change
+    # everything, and the recorded contradiction is a default-mode question
+    # rather than a default-visibility one.
+    for horizontal_mode in SCROLL_MODES:
+        for vertical_mode in SCROLL_MODES:
+            for visibility in ["Disabled", "Auto", "Visible"]:
+                for content, size in sorted(SCROLL_CONTENTS.items()):
+                    attributes = (
+                        f"{sized} {visibility_attributes(visibility, visibility)} "
+                        f'HorizontalScrollMode="{horizontal_mode}" '
+                        f'VerticalScrollMode="{vertical_mode}"'
+                    )
+                    yield case(
+                        f"L3-scroll-mode-{horizontal_mode.lower()}-"
+                        f"{vertical_mode.lower()}-{visibility.lower()}-{content}",
+                        3, "scroll", scroll_viewer(attributes, sized_border(size)),
+                        [400.0, 300.0],
+                        f"ScrollViewer 200x150 bars={visibility}, "
+                        f"hmode={horizontal_mode} vmode={vertical_mode}, "
+                        f"{content} content",
+                        requires=needs,
+                    )
+
+    # --- padding, inside or outside the reservation ---------------------------
+    # One of the recorded cases has Padding="3" and reports its content plus six
+    # pixels, so padding reaches the desired size. Whether the scroll bar sits
+    # inside the padding or beside it is a separate number, and only an
+    # asymmetric padding can tell which edge each one came off.
+    for padding_name, padding in [("none", "0"), ("asym", "8,4,12,6")]:
+        for visibility in ["Disabled", "Auto", "Visible"]:
+            for content, size in sorted(SCROLL_CONTENTS.items()):
+                for box, box_attributes in [("sized", sized), ("free", "")]:
+                    attributes = (f'Padding="{padding}" '
+                                  f"{visibility_attributes(visibility, visibility)}")
+                    if box_attributes:
+                        attributes = f"{box_attributes} {attributes}"
+                    yield case(
+                        f"L3-scroll-pad-{padding_name}-{visibility.lower()}-"
+                        f"{content}-{box}",
+                        3, "scroll", scroll_viewer(attributes, sized_border(size)),
+                        [400.0, 300.0],
+                        f"ScrollViewer {box} padding={padding} bars={visibility}, "
+                        f"{content} content",
+                        requires=needs,
+                    )
+
+    # --- the overflow boundary, one axis at a time ----------------------------
+    # An Auto bar is supposed to appear only when that axis overflows, so the
+    # interesting content sizes are the two candidate viewports themselves.
+    # Crossing the widths against the heights separates a per-axis rule from a
+    # rule that reserves both bars as soon as either axis overflows -- and that
+    # second reading is exactly what the odd recorded case looks like.
+    widths = [140.0, 184.0, 200.0, 260.0]
+    heights = [110.0, 134.0, 150.0, 220.0]
+    for width in widths:
+        for height in heights:
+            attributes = f"{sized} {visibility_attributes('Auto', 'Auto')}"
+            yield case(
+                f"L3-scroll-fit-{width:.0f}x{height:.0f}-auto", 3, "scroll",
+                scroll_viewer(attributes, sized_border((width, height))),
+                [400.0, 300.0],
+                f"ScrollViewer 200x150 bars=Auto, content {width:g}x{height:g}",
+                requires=needs,
+            )
+    # The same four content sizes with the bars forced on, as the control: a
+    # Visible bar is in the layout whether or not anything overflows, so these
+    # say what "reserved" costs before Auto has to decide anything.
+    for width, height in zip(widths, heights):
+        attributes = f"{sized} {visibility_attributes('Visible', 'Visible')}"
+        yield case(
+            f"L3-scroll-fit-{width:.0f}x{height:.0f}-visible", 3, "scroll",
+            scroll_viewer(attributes, sized_border((width, height))),
+            [400.0, 300.0],
+            f"ScrollViewer 200x150 bars=Visible, content {width:g}x{height:g}",
+            requires=needs,
+        )
+
+    # --- the three recorded shapes, rebuilt out of Border ---------------------
+    # Same skeleton, same available sizes as the harvest, no text anywhere. If
+    # these three split the way the recorded three did, the rule is in the
+    # ScrollViewer; if they do not, it is in the TextBlock the odd one contains,
+    # and the last three isolate the two attributes that only that case carries.
+    shapes = [
+        ("maxheight-margin", 'MaxHeight="100" Margin="0,8,0,0"', '<Border Height="16"/>',
+         "the shape of the recorded case that asks for 16 more pixels per axis"),
+        ("padded-stretch",
+         'Padding="3" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" '
+         'Background="Transparent" BringIntoViewOnFocusChange="True" '
+         'IsVerticalScrollChainingEnabled="True"',
+         '<Border Padding="16" HorizontalAlignment="Stretch" Background="Transparent"/>',
+         "the shape of the recorded case that sizes to content plus padding"),
+        ("bare-padded-child", "", '<Border Padding="16,0,16,48"/>',
+         "the shape of the recorded case whose child carries all the padding"),
+        ("maxheight-only", 'MaxHeight="100"', '<Border Height="16"/>',
+         "MaxHeight on its own, which only the odd recorded case sets"),
+        ("margin-only", 'Margin="0,8,0,0"', '<Border Height="16"/>',
+         "Margin on its own, the other attribute only that case sets"),
+        ("zero-width-child", "", '<Border Height="16"/>',
+         "neither, so a zero-width child under a bare viewer"),
+    ]
+    for name, attributes, child, note in shapes:
+        for index, avail in enumerate([[400.0, 300.0], [100.0, 50.0],
+                                       [float("inf"), 300.0]]):
+            yield case(
+                f"L3-scroll-shape-{name}-a{index}", 3, "scroll",
+                scroll_viewer(attributes, child), avail, note, requires=needs,
+            )
+
+
+# --- L4: FontIcon -------------------------------------------------------------
+# The largest single L7 blocker: fifteen harvested cases are one FontIcon each,
+# and every one of them is blocked on glyph metrics for an icon font rather than
+# on layout. Whether a FontIcon measures the glyph it was given or simply
+# reports a FontSize square is not recorded anywhere, and the two are
+# indistinguishable in an icon font where every glyph is exactly one em wide --
+# which most of Segoe MDL2 Assets is.
+#
+# So the series is deliberately not only icon fonts. A FontIcon in Segoe UI
+# holding "M" measures a glyph whose advance the corpus already solved out of
+# its own L4 measurements, and Segoe UI's "M" is not one em. That case alone
+# separates the two readings, without needing the harvest to have run.
+#
+# It sits at L4 because its answer depends on a font, which is the property
+# every other level is kept free of.
+
+# The five glyphs the fifteen blocked L7 cases actually use, plus the two
+# Terminal reaches for most often across its markup (U+E710 "Add" and U+E74D
+# "Delete", eleven uses each). Extracted from the checkout by
+# phase3/scripts/harvest_icon_glyphs.py, which is also what tells the CI font
+# harvest which codepoints to read; the list is pinned here because the
+# generator has no checkout to read.
+ICON_GLYPHS = [0xE710, 0xE74C, 0xE74D, 0xE76C, 0xE8BB, 0xE8E5, 0xE932]
+
+# The one held fixed while another axis moves. U+E76C is the chevron one of the
+# blocked L7 cases uses. Written as a codepoint rather than as the character
+# itself: a private-use glyph pasted into source shows as an empty box in most
+# editors, and a case corpus that cannot be read is a case corpus that cannot be
+# reviewed.
+ICON_SAMPLE = 0xE76C
+
+# Every FontSize a FontIcon in Terminal's markup is given, literal or through a
+# resource: 10, 11, 12, 16 and 32 are written inline, 14 arrives twice through
+# x:Double resources (StandardIconSize, EditButtonIconSize), and 28 of the 94
+# FontIcons set none at all -- so "unset" is a value here, and the one that
+# measures the property's default.
+ICON_FONT_SIZES: list[str | None] = [None, "10", "11", "12", "14", "16", "32"]
+
+# The families Terminal names, spelled exactly as its markup spells them. The
+# unset case matters most: the majority of its FontIcons take whatever the
+# default style supplies, and which font that is on this runner is a
+# measurement rather than a fact we have.
+ICON_FAMILIES: list[tuple[str, str | None]] = [
+    ("default", None),
+    ("mdl2", "Segoe MDL2 Assets"),
+    ("fluent", "Segoe Fluent Icons"),
+    ("fallback", "Segoe UI, Segoe Fluent Icons, Segoe MDL2 Assets"),
+]
+
+
+def font_icon(glyph: str, family: str | None = None,
+              font_size: str | None = None, extra: str = "") -> str:
+    attributes = ""
+    if family is not None:
+        attributes += f' FontFamily="{family}"'
+    if font_size is not None:
+        attributes += f' FontSize="{font_size}"'
+    if extra:
+        attributes += " " + extra
+    return f'<FontIcon xmlns="{XMLNS}"{attributes} Glyph="{glyph}"/>'
+
+
+def level4_icon() -> Iterator[dict[str, Any]]:
+    needs = ["L1-sizing", "L4-text"]
+
+    # --- one glyph, two icon fonts, two sizes --------------------------------
+    # Two sizes rather than one because the whole question is whether the
+    # answer scales with FontSize; two families because the harvest reads both
+    # and the L7 cases name both.
+    for codepoint in ICON_GLYPHS:
+        for slug, family in [("mdl2", "Segoe MDL2 Assets"),
+                             ("fluent", "Segoe Fluent Icons")]:
+            for font_size in ["12", "32"]:
+                yield case(
+                    f"L4-icon-glyph-{codepoint:04x}-{slug}-{font_size}", 4, "icon",
+                    font_icon(chr(codepoint), family, font_size), [400.0, 300.0],
+                    f"FontIcon U+{codepoint:04X} in {family} at {font_size}",
+                    requires=needs,
+                )
+
+    # --- the FontSize axis, including no FontSize at all ----------------------
+    # Swept at three available sizes as well, because an icon is a leaf and a
+    # leaf that changes size with the space around it would be news.
+    for font_size in ICON_FONT_SIZES:
+        for index, avail in enumerate([[400.0, 300.0], [0.0, 0.0],
+                                       [float("inf"), float("inf")]]):
+            name = font_size or "unset"
+            yield case(
+                f"L4-icon-size-{name}-a{index}", 4, "icon",
+                font_icon(chr(ICON_SAMPLE), None, font_size), avail,
+                f"FontIcon U+E76C, default family, FontSize {name}",
+                requires=needs,
+            )
+
+    # --- the family axis, including the fallback list Terminal writes ---------
+    for slug, family in ICON_FAMILIES:
+        for font_size in ["12", "32"]:
+            yield case(
+                f"L4-icon-family-{slug}-{font_size}", 4, "icon",
+                font_icon(chr(ICON_SAMPLE), family, font_size), [400.0, 300.0],
+                f"FontIcon U+E76C at {font_size} in "
+                f"{family or 'whatever the default style supplies'}",
+                requires=needs,
+            )
+
+    # --- what the sizing rule actually is ------------------------------------
+    # The disambiguators. Everything above measures icon fonts we have no
+    # independent numbers for; these are chosen so that the answer can be read
+    # against something already known.
+    rules: list[tuple[str, str, str]] = [
+        # Segoe UI's 'M' is the one advance the corpus solved for itself, and it
+        # is not one em. Glyph-bounds and FontSize-square give different widths
+        # here, and only here.
+        ("segoeui-m-12", font_icon("M", "Segoe UI", "12"),
+         "FontIcon of 'M' in Segoe UI at 12, whose advance the corpus derived"),
+        ("segoeui-m-14", font_icon("M", "Segoe UI", "14"),
+         "the same at 14, the environment's own font size"),
+        ("segoeui-m-24", font_icon("M", "Segoe UI", "24"),
+         "and at 24, so the width either tracks the advance or stays square"),
+        ("segoeui-mm-14", font_icon("MM", "Segoe UI", "14"),
+         "two characters in Glyph: one glyph, or a run of them"),
+        ("segoeui-empty-14", font_icon("", "Segoe UI", "14"),
+         "no glyph at all, which says what the FontSize alone contributes"),
+        ("segoeui-sized-14", font_icon("M", "Segoe UI", "14",
+                                       'Width="40" Height="40"'),
+         "an explicit size on the icon, which should reach it before the glyph does"),
+        # A Latin letter asked of an icon font. Whether it falls back to a font
+        # that has one, draws the notdef box, or measures nothing is three
+        # different numbers, and Terminal's fallback list only makes sense if
+        # the answer is the first.
+        ("mdl2-latin-14", font_icon("M", "Segoe MDL2 Assets", "14"),
+         "a Latin letter asked of an icon font: fallback, notdef, or nothing"),
+        ("mdl2-margin-14", font_icon(chr(ICON_SAMPLE), "Segoe MDL2 Assets", "14",
+                                     'Margin="4,8,12,16"'),
+         "margin on the icon, so the reported desired size splits into two parts"),
+        ("mdl2-weight-14", font_icon(chr(ICON_SAMPLE), "Segoe MDL2 Assets", "14",
+                                     'FontWeight="Black"'),
+         "FontWeight on an icon font, which one of the L7 cases sets"),
+        ("mdl2-near-14", font_icon(chr(ICON_SAMPLE), "Segoe MDL2 Assets", "14",
+                                   'HorizontalAlignment="Left" VerticalAlignment="Top"'),
+         "pinned to the corner, so an icon that stretches is visible as one"),
+    ]
+    for slug, markup, note in rules:
+        yield case(f"L4-icon-rule-{slug}", 4, "icon", markup, [400.0, 300.0],
+                   note, requires=needs)
+
+    # In a container and nothing else -- no Viewbox, which would scale the icon
+    # and make the number a Viewbox measurement instead. Padding on the Border
+    # so the icon's contribution to its parent is separable from the parent's.
+    for slug, attributes in [("bare", ""), ("padded", ' Padding="8,4,12,6"')]:
+        yield case(
+            f"L4-icon-in-border-{slug}", 4, "icon",
+            f'<Border xmlns="{XMLNS}"{attributes}>'
+            f'<FontIcon FontFamily="Segoe MDL2 Assets" FontSize="14" '
+            f'Glyph="{chr(ICON_SAMPLE)}"/></Border>',
+            [400.0, 300.0],
+            f"FontIcon inside a {slug} Border, which is the only container here "
+            f"-- a Viewbox would scale it and measure itself instead",
+            requires=needs,
+        )
+
+
+# --- L4: Text= against element content -----------------------------------------
+# The corpus writes a TextBlock's text both ways and has never checked that the
+# two are the same thing. L4-text uses element content; the L5 string-resource
+# and brace-escape cases use the Text attribute, and the brace-escape twin
+# deliberately crosses the two -- so a disagreement there today would be read as
+# the escape failing when it might be the spelling.
+#
+# These pairs are the unconfounded version: same text, same font, one written
+# each way, twinned so check_twins.py holds them together with no oracle at all.
+def level4_source() -> Iterator[dict[str, Any]]:
+    attributes = 'FontFamily="Segoe UI" FontSize="14"'
+    for slug, text in [("empty", ""), ("one", "M"), ("word", "Terminal")]:
+        case_id = f"L4-source-{slug}-attribute"
+        twin_id = f"L4-source-{slug}-content"
+        yield case(
+            case_id, 4, "source",
+            f'<TextBlock xmlns="{XMLNS}" {attributes} Text="{text}"/>',
+            [400.0, 300.0],
+            f"TextBlock {text!r} written as Text=",
+            requires=["L4-text"], twin=twin_id,
+        )
+        yield case(
+            twin_id, 4, "source",
+            f'<TextBlock xmlns="{XMLNS}" {attributes}>{text}</TextBlock>',
+            [400.0, 300.0],
+            f"TextBlock {text!r} written as element content",
+            requires=["L4-text"],
+        )
+
+
 # --- L5: resources ------------------------------------------------------------
 # Authored, not crossed. Resource lookup has rules rather than axes: a
 # {StaticResource} resolves to the same literal whatever the available size is,
@@ -837,8 +1260,8 @@ LEVELS = {
     0: [level0],
     1: [level1, level1_shape],
     2: [level2, level2_content],
-    3: [level3, level3_canvas],
-    4: [level4],
+    3: [level3, level3_canvas, level3_scroll],
+    4: [level4, level4_icon, level4_source],
     5: [level5],
 }
 
