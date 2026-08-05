@@ -244,10 +244,16 @@ the addition rather than hidden by it.
 ## Layout
 
     phase3/xaml-db/
-      cases/L<n>-<group>/<id>.json         generated, authored or harvested case specs
       oracles/<os-build>.json              committed digest of what the runtime answered
       fonts/derived/<family>.json          committed metrics solved from the measurements
       schema/                              JSON Schema for both file kinds
+
+    (generated, not committed)
+      cases/L<n>-<group>/<id>.json         emitted by generate_cases.py and
+                                           harvest_terminal_xaml.py; CI generates
+                                           twice and diffs the runs, and the
+                                           measured corpus travels to the layout
+                                           job as an artifact
 
     (CI artifact, not committed)
       measurements/<os-build>/<id>.json    filled in by CI on windows-latest

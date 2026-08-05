@@ -63,32 +63,37 @@ jobs:
           path: _terminal
           fetch-depth: 1
 
-      - name: Regenerate the case corpus
+      # The cases are not committed: the generators are the source and this
+      # step materializes their output. It runs twice into separate trees and
+      # diffs them, because an untracked corpus can no longer be checked
+      # against a committed copy -- determinism is what stands in for that.
+      - name: Generate the case corpus
         shell: bash
         run: |
-          rm -rf phase3/xaml-db/cases
-          python3 -B phase3/scripts/generate_cases.py
-          python3 -B phase3/scripts/harvest_terminal_xaml.py _terminal \
-            --members "${{ steps.terminal.outputs.members }}" \
-            --inventory "${{ steps.terminal.outputs.inventory }}" \
-            --cases phase3/xaml-db/cases/L7-terminal
+          rm -rf phase3/xaml-db/cases _corpus-check
+          for out in phase3/xaml-db/cases _corpus-check; do
+            python3 -B phase3/scripts/generate_cases.py --out "$out"
+            python3 -B phase3/scripts/harvest_terminal_xaml.py _terminal \
+              --members "${{ steps.terminal.outputs.members }}" \
+              --inventory "${{ steps.terminal.outputs.inventory }}" \
+              --cases "$out/L7-terminal"
+          done
+          if ! diff -r phase3/xaml-db/cases _corpus-check >/dev/null; then
+            echo "::error::two generator runs disagree; the corpus is not deterministic"
+            diff -r phase3/xaml-db/cases _corpus-check | head -40
+            exit 1
+          fi
+          rm -rf _corpus-check
 
-      # Both the generated and the harvested cases are outputs of checked-in
-      # scripts. A checkout whose cases differ from what those scripts emit
-      # means someone edited cases by hand, which silently decouples the corpus
-      # from its generator, so fail instead of proceeding.
-      - name: Corpus is reproducible
+      # The harvest also rewrites the committed inventory under research/;
+      # that one is tracked, so hand edits still show as a diff.
+      - name: Harvest inventory is reproducible
         shell: bash
         run: |
-          paths=(phase3/xaml-db/cases "${{ steps.terminal.outputs.inventory }}")
-          # Stage first. A case deleted from the corpus comes back from the
-          # regeneration as an *untracked* file, and `git diff` says nothing
-          # about untracked files -- so diffing the worktree alone would let a
-          # deletion through silently.
-          git add -A -- "${paths[@]}"
-          if ! git diff --cached --quiet -- "${paths[@]}"; then
-            echo "::error::committed cases differ from the generator output"
-            git diff --cached --stat -- "${paths[@]}"
+          git add -A -- "${{ steps.terminal.outputs.inventory }}"
+          if ! git diff --cached --quiet -- "${{ steps.terminal.outputs.inventory }}"; then
+            echo "::error::committed inventory differs from the harvester output"
+            git diff --cached --stat -- "${{ steps.terminal.outputs.inventory }}"
             exit 1
           fi
 
@@ -239,6 +244,16 @@ jobs:
           name: xaml-fonts-${{ env.os_build }}
           path: phase3/xaml-db/fonts/*.json
 
+      # The cases are generator output and not committed, so the corpus the
+      # oracle just measured travels as an artifact. The layout job measures
+      # this exact corpus rather than regenerating its own, so both jobs are
+      # answering the same question by construction.
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('phase3/xaml-db/cases/**') != ''
+        with:
+          name: xaml-cases-${{ env.os_build }}
+          path: phase3/xaml-db/cases/
+
       # Handed to the layout job, which needs to know both which artifact to
       # download and which directory inside it the oracle wrote.
       - name: Publish the oracle identity to dependent jobs
@@ -247,11 +262,13 @@ jobs:
         run: |
           echo "artifact=xaml-measurements-${os_build}" >> "$GITHUB_OUTPUT"
           echo "fonts=xaml-fonts-${os_build}" >> "$GITHUB_OUTPUT"
+          echo "cases=xaml-cases-${os_build}" >> "$GITHUB_OUTPUT"
           echo "os_build=${os_build}" >> "$GITHUB_OUTPUT"
 
     outputs:
       artifact: ${{ steps.oracle.outputs.artifact }}
       fonts: ${{ steps.oracle.outputs.fonts }}
+      cases: ${{ steps.oracle.outputs.cases }}
       os_build: ${{ steps.oracle.outputs.os_build }}
 
   # The reimplementation, checked against what the runtime just answered. This
@@ -280,6 +297,12 @@ jobs:
         with:
           name: ${{ needs.measure.outputs.fonts }}
           path: fonts
+
+      # The corpus the oracle measured; cases are not committed.
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.measure.outputs.cases }}
+          path: phase3/xaml-db/cases
 
       - name: Build the layout core
         run: |
