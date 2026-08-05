@@ -19,6 +19,7 @@ Against build `10.0.26100.33158`:
 | L2 | one parent, one child: alignment × margin × sizing | 192 | **192** |
 | L3 | panels: `StackPanel`, `Grid` | 132 | **132** |
 | L4 | text: `TextBlock` | 72 | needs the font metrics — see below |
+| L5 | resources: `x:Key`, `{StaticResource}` | 40 | no oracle yet — see below |
 | L7 | Terminal's own pages | 69 | 0 |
 
 L1–L3 is every case that does not need text measurement or a control set —
@@ -26,6 +27,20 @@ L1–L3 is every case that does not need text measurement or a control set —
 of them. L7 fails as `the type 'ScrollViewer' is not implemented` and the like,
 rather than as wrong numbers, which is the distinction worth keeping: nothing
 here is quietly approximate.
+
+L5 is implemented and is the one level with nothing to check it against yet:
+the resource cases were authored after the last measurement run, so there are
+no recorded numbers for them and inventing some would defeat the point of
+having an oracle. In the meantime each case that hides a value behind a
+resource is paired with a twin that writes the same value inline, and
+[`check_twins.py`](../scripts/check_twins.py) holds the pair to measuring
+identically — 17 of the 18 pairs agree here, the last needing a glyph width
+that cannot be derived from the recorded measurements. That is
+self-consistency, not coverage, and it is reported separately for that reason;
+what it does prove is that a resolved `{StaticResource}` reaches the property
+with the value the dictionary holds. Four further cases are questions rather
+than assertions, and have no twin at all — see
+[the corpus README](../xaml-db/README.md#l5-before-the-oracle-has-seen-it).
 
 L4 is implemented and is the one level whose result depends on a file that is
 not in the repository. Text measurement needs Segoe UI's metrics, those metrics
@@ -46,6 +61,12 @@ else match exactly. See [the fonts directory](../xaml-db/fonts/) and
         --expected <that directory> --actual /tmp/layout-results --levels L1,L2,L3
 
 The font metrics argument is optional and defaults to `<cases>/../fonts`.
+
+Two checks need no oracle at all, and run from a bare checkout:
+
+    ctest --test-dir /tmp/layout-build      # what a load refuses, and by what name
+    python3 phase3/scripts/check_twins.py \
+        --cases phase3/xaml-db/cases --results /tmp/layout-results
 
 `measure_cases` takes the same arguments as the oracle probe and writes the same
 files, so the two are directly diffable. A single `g++ -std=c++17 src/*.cpp`
@@ -95,3 +116,24 @@ does not do, so that a passing run is not read as more than it is:
   about.
 - **Round-half-to-even is unconfirmed.** No case in the corpus lands on an exact
   half, so the tie-break is the ported behaviour rather than a measured one.
+- **No `Application.Resources`, no merged dictionaries, no theme dictionaries.**
+  A resource lookup walks the element and its ancestors and then stops. That is
+  where WinUI's own theme resources would be, and it is why
+  `{StaticResource SystemControlForegroundBaseHighBrush}` resolves in Terminal
+  and not here. A lookup that would have needed one of the three fails by name;
+  it never falls back on something plausible.
+- **No `{ThemeResource}`, no `{Binding}`, no `{x:Bind}`, no
+  `{TemplateBinding}`.** `{StaticResource}` is the only markup extension that
+  resolves. Every other one is a named refusal, including on properties where
+  the difference would not show in the numbers.
+- **No styles, no setters, no control templates.** L5 in the corpus is scoped
+  to resource lookup; the rest of what that level names is not started.
+- **Resources are literal text, not objects.** A resource holds the string its
+  declaring element carried, and resolution hands that string to the same
+  property parser an inline attribute would reach. It is why a resolved case
+  and its inlined twin cannot drift apart — and it is also why a resource type
+  with no textual form is not expressible.
+- **The `x:` prefix is matched literally.** Every case binds `x` to the XAML
+  language namespace, and this parser assumes that binding rather than
+  resolving prefixes. A document that spelled it differently would not be
+  understood.
