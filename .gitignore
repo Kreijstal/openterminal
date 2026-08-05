@@ -17,3 +17,10 @@ dist/
 *.xbf
 __pycache__/
 *.pyc
+
+# CI output that lands in the working tree: the recorded measurements, and the
+# metrics read off the runner's fonts. What is committed about them is the
+# digest in xaml-db/oracles and the numbers in xaml-db/fonts/derived, which
+# these patterns deliberately do not cover.
+phase3/xaml-db/measurements/
+phase3/xaml-db/fonts/*.json
