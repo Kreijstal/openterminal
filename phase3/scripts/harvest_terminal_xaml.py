@@ -64,6 +64,15 @@ ALLOWED_X_DIRECTIVES = {"Name"}
 # dictionary that a standalone load does not have.
 RESOURCE_ELEMENTS = {"StaticResource", "ThemeResource"}
 
+# The x-namespace primitives the markup parser reads as object elements. These
+# are values written as elements -- <x:Double>60</x:Double> is what Width="60"
+# is -- so they are not a blocker where a value belongs. Where one belongs is
+# the second half of the rule; see element_blockers.
+#
+# The set is what phase3/layout implements, which is also exactly what Terminal
+# writes. An x:Null or an x:Static is still an x-element blocker, and says so.
+X_PRIMITIVE_ELEMENTS = {"String", "Double", "Boolean", "Int32"}
+
 # WPF and WinUI share the presentation namespace URI, so markup alone cannot
 # tell them apart -- and mistaking one for the other yields cases that look
 # clean and then fail to load, because WPF-only members like ScrollChanged are
@@ -150,6 +159,10 @@ class Node:
         self.path = path
         self.text = (element.text or "").strip()
         self.attributes: list[tuple[str, str, str]] = []  # (uri, local, value)
+        # Set by build(). None on the document root. Classification needs it for
+        # exactly one question -- whether an x-primitive sits where a value
+        # belongs -- and nothing else reads it.
+        self.parent: "Node | None" = None
         self.ignored = 0
         for name, value in element.attrib.items():
             uri, local = split_tag(name)
@@ -183,8 +196,24 @@ def build(element: ET.Element, path: str) -> Node:
         _, local = split_tag(child.tag)
         index = counts[local]
         counts[local] += 1
-        node.children.append(build(child, f"{path}/{local}[{index}]"))
+        built = build(child, f"{path}/{local}[{index}]")
+        built.parent = node
+        node.children.append(built)
     return node
+
+
+def holds_a_value(node: Node | None) -> bool:
+    """Whether a child of ``node`` is a value rather than a child element.
+
+    Two places in XAML take one: the content of a property element -- a
+    ``<ToggleButton.Tag>``, a ``<Border.Width>``, or a ``<X.Resources>`` -- and
+    an entry of a ``<ResourceDictionary>``. Everywhere else a child is a child,
+    and a primitive standing there is markup the parser cannot realise.
+    """
+    if node is None:
+        return False
+    return node.is_property_element or (node.uri == PRESENTATION
+                                        and node.local == "ResourceDictionary")
 
 
 # --- blockers -----------------------------------------------------------------
@@ -196,7 +225,22 @@ def element_blockers(node: Node, meta: Metadata) -> list[dict[str, str]]:
         found.append({"kind": kind, "detail": detail, "path": node.path})
 
     if node.uri == XAML_X:
-        add("x-element", f"x:{node.local}")
+        # A primitive standing where a value belongs is a value, and the parser
+        # reads it: <ToggleButton.Tag><x:Int32>17</x:Int32> is the form Terminal
+        # writes for a property typed `object`. It is no longer a blocker on the
+        # element's own account -- but its attributes still are, so an
+        # <x:Double x:Key="W"> in a dictionary keeps the x:Key blocker it shares
+        # with every other keyed resource, counted where the other keys are
+        # counted rather than under a name that says the type was the problem.
+        if not (node.local in X_PRIMITIVE_ELEMENTS and holds_a_value(node.parent)):
+            add("x-element", f"x:{node.local}")
+            return found
+        for uri, local, _ in node.attributes:
+            if uri == XAML_X:
+                if local not in ALLOWED_X_DIRECTIVES:
+                    add("x-directive", f"x:{local}")
+            else:
+                add("unknown-attribute", f"x:{node.local}.{local}")
         return found
     if node.uri != PRESENTATION:
         # Judging this element's attributes against framework metadata would

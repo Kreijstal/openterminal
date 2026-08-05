@@ -142,6 +142,45 @@ class BlockerTest(unittest.TestCase):
         self.assertIn("x-directive", kinds(f'<Grid xmlns="{PRESENTATION}" {x} x:Uid="U"/>'))
         self.assertIn("x-directive", kinds(f'<Grid xmlns="{PRESENTATION}" {x} x:Key="K"/>'))
 
+    def test_an_x_primitive_where_a_value_belongs_does_not_block(self) -> None:
+        # <ToggleButton.Tag><x:Int32>17</x:Int32> is the form Terminal writes
+        # for a property whose type is `object`; the parser reads it, so the
+        # element is no longer a blocker on its own account.
+        x = 'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'
+        markup = (
+            f'<Grid xmlns="{PRESENTATION}" {x}><Grid.Margin>'
+            "<x:Double>8</x:Double></Grid.Margin></Grid>"
+        )
+        self.assertEqual(kinds(markup), set())
+
+    def test_an_x_primitive_in_a_dictionary_blocks_on_its_key_alone(self) -> None:
+        x = 'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'
+        markup = (
+            f'<Grid xmlns="{PRESENTATION}" {x}><Grid.Resources>'
+            '<x:Double x:Key="W">60</x:Double></Grid.Resources></Grid>'
+        )
+        found = kinds(markup)
+        # The type is understood; what is missing is a dictionary an x:Key can
+        # land in, which is counted with every other x:Key rather than under a
+        # name that says the type was the problem.
+        self.assertNotIn("x-element", found)
+        self.assertIn("x-directive", found)
+        self.assertIn("x:Key", details(markup))
+
+    def test_an_x_primitive_as_a_child_element_still_blocks(self) -> None:
+        x = 'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'
+        markup = f'<Grid xmlns="{PRESENTATION}" {x}><x:Double>8</x:Double></Grid>'
+        self.assertIn("x-element", kinds(markup))
+
+    def test_an_x_element_outside_the_implemented_set_still_blocks(self) -> None:
+        x = 'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'
+        markup = (
+            f'<Grid xmlns="{PRESENTATION}" {x}><Grid.Margin>'
+            "<x:Null/></Grid.Margin></Grid>"
+        )
+        self.assertIn("x-element", kinds(markup))
+        self.assertIn("x:Null", details(markup))
+
     def test_foreign_type_blocks_and_stops_there(self) -> None:
         markup = (
             f'<Grid xmlns="{PRESENTATION}" xmlns:mux="using:Microsoft.UI.Xaml.Controls">'
