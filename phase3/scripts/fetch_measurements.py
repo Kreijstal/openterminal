@@ -29,10 +29,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from harvest_font_metrics import check_against  # noqa: E402
 from measurement_digest import compare, oracle_record  # noqa: E402
 
 WORKFLOW = "Phase 3 - XAML behaviour measurements"
 ORACLES = Path(__file__).resolve().parents[1] / "xaml-db" / "oracles"
+# The numbers the corpus solved for itself, which the harvest is checked
+# against. See xaml-db/fonts/README.md.
+DERIVED_FONTS = Path(__file__).resolve().parents[1] / "xaml-db" / "fonts" / "derived"
 
 
 def gh(*args: str) -> str:
@@ -89,6 +93,45 @@ def fonts_directory(into: Path) -> Path | None:
     return found[0] if found else None
 
 
+def verify_fonts(fonts: Path, derived: Path = DERIVED_FONTS) -> list[str]:
+    """Check a downloaded harvest against what the corpus implies on its own.
+
+    The same check CI runs at harvest time, repeated here, because the artifact
+    that arrives is not necessarily the one that job built -- it is whichever
+    run was picked, and a metrics file that disagrees with the measurements
+    turns into pixel widths that are slightly off everywhere rather than into
+    an error. Comparing it against the committed derived numbers is cheap and
+    it is the only independent statement about the font we have.
+    """
+    solved = {}
+    for path in sorted(derived.glob("*.json")):
+        metrics = json.loads(path.read_text(encoding="utf-8"))
+        solved[metrics["family"]] = metrics
+
+    problems: list[str] = []
+    harvested = sorted(fonts.glob("*.json"))
+    if not harvested:
+        return [f"no font metrics in {fonts}: the artifact is empty"]
+
+    for path in harvested:
+        metrics = json.loads(path.read_text(encoding="utf-8"))
+        family = metrics.get("family", path.name)
+        if metrics.get("provenance") != "harvested":
+            problems.append(
+                f"{family}: {path.name} has provenance "
+                f"{metrics.get('provenance')!r}, but this artifact holds readings "
+                f"taken off the font")
+            continue
+        expected = solved.get(family)
+        if expected is None:
+            problems.append(
+                f"{family}: nothing in xaml-db/fonts/derived covers this family, "
+                f"so nothing checks what was harvested for it")
+            continue
+        problems += [f"{family}: {problem}" for problem in check_against(metrics, expected)]
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", help="default: the latest successful run")
@@ -108,9 +151,22 @@ def main(argv: list[str] | None = None) -> int:
     fonts = fonts_directory(args.dest)
     fresh = oracle_record(measurements)
 
-    if args.fonts and fonts is None:
-        raise SystemExit(f"run {run_id} has no font metrics artifact; "
-                         f"it predates text measurement")
+    if args.fonts:
+        if fonts is None:
+            raise SystemExit(
+                f"run {run_id} has no font metrics artifact; it either predates "
+                f"text measurement or its harvest step did not run.\n"
+                f"phase3/xaml-db/fonts/derived is committed and covers the text "
+                f"cases that need only a line height and the advance of 'M'.")
+        problems = verify_fonts(fonts)
+        if problems:
+            print(f"the harvested metrics in run {run_id} disagree with what the "
+                  f"recorded measurements imply:", file=sys.stderr)
+            for problem in problems:
+                print(f"  {problem}", file=sys.stderr)
+            return 1
+        print("verified the harvested metrics against xaml-db/fonts/derived",
+              file=sys.stderr)
     wanted = fonts if args.fonts else measurements
 
     ORACLES.mkdir(parents=True, exist_ok=True)
