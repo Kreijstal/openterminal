@@ -11,10 +11,18 @@ on:
   push:
     paths:
       - 'phase3/**'
+      # The pinned snapshots the harvests are held to reproducing. Without
+      # these, editing one by hand would not run the job that checks it.
+      - 'research/windows-terminal/**'
+      - 'research/nuget/microsoft.windows.sdk.contracts/**'
       - '.github/workflows/phase3_xaml_measure.yml'
   pull_request:
     paths:
       - 'phase3/**'
+      # The pinned snapshots the harvests are held to reproducing. Without
+      # these, editing one by hand would not run the job that checks it.
+      - 'research/windows-terminal/**'
+      - 'research/nuget/microsoft.windows.sdk.contracts/**'
       - '.github/workflows/phase3_xaml_measure.yml'
   workflow_dispatch:
 
@@ -53,6 +61,11 @@ jobs:
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "inventory=${inventories[0]}" >> "$GITHUB_OUTPUT"
           echo "members=${members[0]}" >> "$GITHUB_OUTPUT"
+          # Beside the inventory, and pinned to the same commit: the icon-font
+          # codepoints Terminal's markup names. The font harvest below is told
+          # which glyphs to read from this file rather than from a hand-typed
+          # list that would go stale the first time Terminal changed an icon.
+          echo "glyphs=$(dirname "${inventories[0]}")/icon-glyphs.json" >> "$GITHUB_OUTPUT"
           echo "harvested from microsoft/terminal $commit"
 
       - name: Check out Microsoft Terminal
@@ -85,15 +98,26 @@ jobs:
           fi
           rm -rf _corpus-check
 
-      # The harvest also rewrites the committed inventory under research/;
-      # that one is tracked, so hand edits still show as a diff.
-      - name: Harvest inventory is reproducible
+      # The icon-font codepoints Terminal's markup names, extracted from the
+      # same checkout by the same scoping rules the level 7 harvest uses. This
+      # is research data rather than corpus data, so it is committed and held to
+      # reproducing, exactly like the vocabulary inventory beside it.
+      - name: Harvest the icon glyph set
         shell: bash
         run: |
-          git add -A -- "${{ steps.terminal.outputs.inventory }}"
-          if ! git diff --cached --quiet -- "${{ steps.terminal.outputs.inventory }}"; then
-            echo "::error::committed inventory differs from the harvester output"
-            git diff --cached --stat -- "${{ steps.terminal.outputs.inventory }}"
+          python3 -B phase3/scripts/harvest_icon_glyphs.py _terminal \
+            --output "${{ steps.terminal.outputs.glyphs }}"
+
+      # The harvests also rewrite the committed files under research/; those are
+      # tracked, so hand edits still show as a diff.
+      - name: Harvests are reproducible
+        shell: bash
+        run: |
+          tracked=("${{ steps.terminal.outputs.inventory }}" "${{ steps.terminal.outputs.glyphs }}")
+          git add -A -- "${tracked[@]}"
+          if ! git diff --cached --quiet -- "${tracked[@]}"; then
+            echo "::error::a committed harvest differs from the harvester output"
+            git diff --cached --stat -- "${tracked[@]}"
             exit 1
           fi
 
@@ -115,6 +139,18 @@ jobs:
           Write-Host "oracle: windows $os.$ubr, Segoe UI sha256 $font"
           if (-not $font) { Write-Error "no Segoe UI hash; the oracle would be unidentified"; exit 1 }
 
+          # The icon fonts the FontIcon cases measure, on the same terms. These
+          # are recorded rather than required: which of them the runner image
+          # ships is not ours to assume, and an absent one is a fact about the
+          # oracle rather than a broken run. Empty means "this runner had none".
+          foreach ($pair in @(@('font_segmdl2', 'segmdl2.ttf'),
+                              @('font_segoeicons', 'SegoeIcons.ttf'))) {
+            $path = "C:\Windows\Fonts\$($pair[1])"
+            $hash = if (Test-Path $path) { (Get-FileHash $path -Algorithm SHA256).Hash } else { '' }
+            "$($pair[0])=$hash" | Out-File -Append $env:GITHUB_ENV -Encoding utf8
+            Write-Host "  $($pair[1]) sha256 $(if ($hash) { $hash } else { '(absent)' })"
+          }
+
       # Text measurement needs numbers that live inside the font file. The
       # font cannot be committed, so only the metrics travel -- and they are
       # checked against what the recorded measurements independently imply, so
@@ -132,6 +168,47 @@ jobs:
             --expect phase3/xaml-db/fonts/derived/segoe-ui.json \
             --output "phase3/xaml-db/fonts/segoe-ui.json"
           test -s phase3/xaml-db/fonts/segoe-ui.json
+
+      # The icon fonts, for the codepoints Terminal's markup actually names.
+      # Fifteen level 7 cases are one FontIcon each and every one of them is
+      # blocked on these numbers rather than on layout.
+      #
+      # Three differences from the text harvest above, all deliberate:
+      #
+      #  * `--missing record` — an icon font is allowed not to have a glyph.
+      #    Segoe Fluent Icons and Segoe MDL2 Assets do not cover the same set,
+      #    which is the entire reason Terminal writes them as a fallback list,
+      #    so an absent codepoint is a fact to record and not a failed harvest.
+      #    A font covering *none* of them still fails, inside the script: that
+      #    is the wrong file rather than a font with a gap.
+      #  * no `--expect` — nothing has solved an icon font's metrics out of the
+      #    recorded measurements yet, because until this run there were no
+      #    FontIcon cases to solve from. The L4-icon series is what makes that
+      #    possible next time; see phase3/xaml-db/fonts/README.md.
+      #  * a missing file is a warning, not a failure. Which icon fonts ship is
+      #    the runner image's business, and losing the whole measurement run
+      #    over one absent font would throw away the oracle for everything else.
+      - name: Harvest the icon font metrics
+        shell: bash
+        run: |
+          set -euo pipefail
+          harvest() {
+            local file="$1" family="$2" out="$3"
+            if [ ! -f "$file" ]; then
+              echo "::warning::$file is not on this runner; no metrics for \"$family\""
+              return 0
+            fi
+            python3 -B phase3/scripts/harvest_font_metrics.py "$file" \
+              --family "$family" \
+              --codepoints-from "${{ steps.terminal.outputs.glyphs }}" \
+              --missing record \
+              --output "$out"
+          }
+          harvest "C:/Windows/Fonts/segmdl2.ttf"   "Segoe MDL2 Assets"  \
+                  "phase3/xaml-db/fonts/segoe-mdl2-assets.json"
+          harvest "C:/Windows/Fonts/SegoeIcons.ttf" "Segoe Fluent Icons" \
+                  "phase3/xaml-db/fonts/segoe-fluent-icons.json"
+          ls -l phase3/xaml-db/fonts/*.json
 
       - name: Build the probe
         shell: cmd
@@ -175,11 +252,23 @@ jobs:
           dest="phase3/xaml-db/measurements/${os_build}"
           mkdir -p "$dest"
           cp -f "$RUNNER_TEMP"/run1/*.json "$dest/"
+          # font_segoeui stays a top-level field: it is what the committed
+          # digest compares against, and moving it would re-baseline every
+          # stored oracle. The icon fonts go beside it in "fonts", which the
+          # digest carries but does not yet compare -- nothing has been measured
+          # against them before this run, so there is no stored value to drift
+          # from. Once the L4-icon measurements exist, that is the moment to
+          # start comparing them.
           cat > "$dest/oracle.json" <<EOF
           {
            "schema_version": 1,
            "os_build": "${os_build}",
            "font_segoeui": "${font_segoeui}",
+           "fonts": {
+            "Segoe UI": "${font_segoeui}",
+            "Segoe MDL2 Assets": "${font_segmdl2}",
+            "Segoe Fluent Icons": "${font_segoeicons}"
+           },
            "xaml": "Windows.UI.Xaml (in-OS)"
           }
           EOF
@@ -392,6 +481,16 @@ jobs:
       # not got. A case that instead lands close-but-wrong would mean the
       # derived file had started standing in for a harvest, which is the one
       # way this half could quietly stop meaning anything.
+      #
+      # L4 holds three groups now and they are held to different rules, so the
+      # check splits on the case id rather than on the level:
+      #
+      #  * L4-text and L4-source are the TextBlock cases. The rule above is
+      #    theirs and is unchanged: match, or name the advance you have not got.
+      #  * L4-icon is FontIcon, which the layout core does not implement at all.
+      #    Those must fail by name too, but by a different name, and holding
+      #    them to the text rule would have failed this step for saying exactly
+      #    what it is supposed to say.
       - name: The derived metrics match or say why not
         run: |
           "$RUNNER_TEMP/layout-build/measure_cases" \
@@ -408,19 +507,42 @@ jobs:
           if level is None:
               print("::error::no L4 case was compared; the text corpus has gone missing")
               sys.exit(1)
-          expected = "implementation failed: the metrics derived from"
-          wrong = [m for m in report["mismatches"] if not m["detail"].startswith(expected)]
+          def group(prefix):
+              return [m for m in report["mismatches"]
+                      if m["case_id"].startswith(prefix)]
+          text = group("L4-text-") + group("L4-source-")
+          icons = group("L4-icon-")
+          known = {"L4-text-", "L4-source-", "L4-icon-"}
+          other = [m for m in report["mismatches"]
+                   if not any(m["case_id"].startswith(p) for p in known)]
           print(f"L4 on the derived metrics alone: {level['passed']} of "
                 f"{level['cases']} match, {level['failed']} await the harvest")
+
+          failed = False
+          missing_advance = "implementation failed: the metrics derived from"
+          wrong = [m for m in text if not m["detail"].startswith(missing_advance)]
           if wrong:
               print("::error::a text case measured against the derived metrics "
                     "neither matched nor named a missing advance")
-              for mismatch in wrong[:10]:
-                  print(f"  {mismatch['case_id']} {mismatch['path']}: {mismatch['detail']}")
-              sys.exit(1)
+              failed = True
+          # FontIcon is a deliberate omission in the layout core, so an icon case
+          # has to fail as a refusal. One that produced a number instead would
+          # mean an icon metric had been invented somewhere.
+          guessed = [m for m in icons
+                     if not m["detail"].startswith("implementation failed:")]
+          if guessed:
+              print("::error::an icon case produced a number rather than a "
+                    "refusal; something is inventing icon-font metrics")
+              failed = True
+          if other:
+              print("::error::an L4 case belongs to no known group")
+              failed = True
+          for mismatch in (wrong + guessed + other)[:10]:
+              print(f"  {mismatch['case_id']} {mismatch['path']}: {mismatch['detail']}")
           if not level["passed"]:
               print("::error::the derived metrics matched no text case at all")
-              sys.exit(1)
+              failed = True
+          sys.exit(1 if failed else 0)
           PY
 
       - uses: actions/upload-artifact@v4

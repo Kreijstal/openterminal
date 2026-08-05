@@ -126,6 +126,24 @@ class HarvestFontMetricsTest(unittest.TestCase):
         with self.assertRaises(FontError):
             Font(b"this is not a font at all, not even close")
 
+    def test_a_codepoint_the_font_does_not_cover_is_recorded(self) -> None:
+        # An icon font is allowed not to have a glyph -- Segoe Fluent Icons and
+        # Segoe MDL2 Assets do not cover the same set, which is why Terminal
+        # writes them as a fallback list. The harvest has to say which ones are
+        # absent rather than pretend the request was satisfied.
+        path = self.write(build_font(
+            units_per_em=2048, ascender=2210, descender=-514, line_gap=0,
+            advances=[500, 1111], ranges=[(0xE710, 0xE710, 1)]))
+        metrics = harvest(path, "Synthetic Icons", [0xE710, 0xE74D, 0xF5B0])
+        self.assertEqual(metrics["advances"], {"59152": 1111})
+        self.assertEqual(metrics["missing"], [0xE74D, 0xF5B0])
+
+    def test_a_covered_set_records_nothing_missing(self) -> None:
+        path = self.write(build_font(
+            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
+            advances=[500, 600], ranges=[(0x41, 0x41, 1)]))
+        self.assertEqual(harvest(path, "Synthetic", [0x41])["missing"], [])
+
     def test_reports_a_missing_table(self) -> None:
         data = build_font(units_per_em=1000, ascender=800, descender=-200, line_gap=0,
                           advances=[500], ranges=[(0x41, 0x41, 1)])

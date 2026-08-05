@@ -24,9 +24,17 @@ import struct
 import sys
 from pathlib import Path
 
-# The corpus is ASCII. Emitting a declared range rather than every codepoint
-# the font covers keeps the output small enough to read, and makes the covered
-# set a stated decision instead of a side effect of which font was harvested.
+# The corpus's text is ASCII. Emitting a declared range rather than every
+# codepoint the font covers keeps the output small enough to read, and makes the
+# covered set a stated decision instead of a side effect of which font was
+# harvested.
+#
+# An icon font is the other case and is not a range at all: what it is asked for
+# is the set of glyphs Terminal's markup names, which
+# `harvest_icon_glyphs.py` extracts from the checkout and `--codepoints-from`
+# reads. An icon font is also allowed not to have one of them, which is what
+# `--missing record` is for -- a Fluent glyph absent from MDL2 is the reason
+# Terminal writes a fallback list, not a bad harvest.
 DEFAULT_CODEPOINTS = range(0x20, 0x7F)
 
 
@@ -208,6 +216,11 @@ def harvest(path: Path, family: str, codepoints: list[int]) -> dict:
         # Keyed by decimal codepoint, because JSON object keys are strings and
         # a decimal one sorts and diffs predictably.
         "advances": {str(cp): advances[glyph] for cp, glyph in sorted(mapping.items())},
+        # Requested and not covered. For a text font this list has to be empty,
+        # and main() still fails when it is not; for an icon font it is the
+        # answer to "which of Terminal's glyphs does this family actually have",
+        # which is exactly what decides whether its fallback list is doing work.
+        "missing": [cp for cp in sorted(set(codepoints)) if cp not in mapping],
     }
 
 
@@ -249,22 +262,47 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--codepoints", default=None,
                         help="inclusive hex range, e.g. 20-7E (default: 20-7E)")
+    parser.add_argument("--codepoints-from", type=Path, default=None,
+                        help="a JSON file with a 'codepoints' list of decimal "
+                             "integers, as harvest_icon_glyphs.py writes")
+    parser.add_argument("--missing", choices=("fail", "record"), default="fail",
+                        help="what to do about a requested codepoint the font "
+                             "does not cover. 'fail' is right for a text font, "
+                             "where an absent ASCII glyph means the wrong file "
+                             "was read; 'record' is right for an icon font, "
+                             "where not covering a glyph is a fact about the "
+                             "font and is what a fallback list exists for")
     parser.add_argument("--expect", type=Path, default=None,
                         help="metrics solved from the oracle; fail if the font disagrees")
     args = parser.parse_args()
 
-    if args.codepoints:
+    if args.codepoints and args.codepoints_from:
+        raise SystemExit("--codepoints and --codepoints-from name two different "
+                         "sets; pass one")
+    if args.codepoints_from:
+        requested = json.loads(args.codepoints_from.read_text(encoding="utf-8"))
+        codepoints = sorted({int(cp) for cp in requested["codepoints"]})
+        if not codepoints:
+            raise SystemExit(f"{args.codepoints_from}: names no codepoints")
+    elif args.codepoints:
         low, _, high = args.codepoints.partition("-")
         codepoints = list(range(int(low, 16), int(high or low, 16) + 1))
     else:
         codepoints = list(DEFAULT_CODEPOINTS)
 
     metrics = harvest(args.font, args.family, codepoints)
-    missing = [cp for cp in codepoints if str(cp) not in metrics["advances"]]
-    if missing:
+    missing = metrics["missing"]
+    if missing and args.missing == "fail":
         raise SystemExit(
             f"{args.font}: no glyph for {len(missing)} requested codepoints, "
             f"first is U+{missing[0]:04X}")
+    if not metrics["advances"]:
+        # Every requested codepoint absent is not a font with a gap, it is the
+        # wrong file: a metrics file with no advances would load happily and
+        # then fail every case that read it, by the wrong name.
+        raise SystemExit(
+            f"{args.font}: covers none of the {len(codepoints)} requested "
+            f"codepoints, so it is not the font this family names")
 
     if args.expect:
         expected = json.loads(args.expect.read_text(encoding="utf-8"))
@@ -283,6 +321,7 @@ def main() -> None:
     args.output.write_text(json.dumps(metrics, indent=1, sort_keys=True) + "\n",
                            encoding="utf-8")
     print(f"{args.family}: {len(metrics['advances'])} advances, "
+          f"{len(missing)} requested codepoints not covered, "
           f"upem {metrics['units_per_em']}, "
           f"hhea {metrics['hhea']['ascender']}/{metrics['hhea']['descender']}",
           file=sys.stderr)
