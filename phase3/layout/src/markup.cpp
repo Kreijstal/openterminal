@@ -721,7 +721,7 @@ void AddResourceEntry(MarkupNode& owner, const Tag& tag, Scanner& scanner,
         content = close.text_before;
     }
 
-    if (tag.name == "StaticResource") {
+    if (tag.name == "StaticResource" || tag.name == "ThemeResource") {
         // An alias: this key stands for whatever another key holds. Resolved
         // now, against the dictionaries already in scope -- including the one
         // being filled, so an alias may name an earlier entry beside it.
@@ -918,11 +918,18 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
     // erase that distinction is one of the questions the L5 probe cases exist
     // to put to it; until it answers, this is the WPF behaviour, where
     // StaticResource is resolved at parse time against what has been parsed.
+    // The chain ends at the application dictionary, which is where WinUI's own
+    // theme resources live. It is loaded from the extracted database if there
+    // is one and is absent otherwise, so a bare checkout behaves exactly as it
+    // did before -- one dictionary shorter, and failing the same lookups by
+    // the same names.
     auto scope = [&open]() {
         ResourceScope chain;
         for (auto it = open.rbegin(); it != open.rend(); ++it) {
             if (!it->resources.empty()) chain.push_back(&it->resources);
         }
+        if (const ResourceDictionary* application = ThemeResourceLibrary::Default().Active())
+            chain.push_back(application);
         return chain;
     };
 
@@ -1135,14 +1142,19 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
                 continue;
             }
 
-            if (tag.name != "StaticResource") {
+            // What is left is the element spelling of the two lookup
+            // extensions. They resolve identically here for the reason
+            // ResolveAttributeValue gives, so both are accepted and the
+            // refusal names the third case: an element that is neither a
+            // lookup nor a primitive.
+            if (tag.name != "StaticResource" && tag.name != "ThemeResource") {
                 throw MarkupError("<" + property_element + "> takes a <StaticResource> or a "
                                   "primitive such as <x:Double>, not <" + tag.name + ">");
             }
             if (!tag.self_closing) {
                 Tag close;
-                if (!scanner.Next(close) || !close.closing || close.name != "StaticResource")
-                    throw MarkupError("<StaticResource> must be empty");
+                if (!scanner.Next(close) || !close.closing || close.name != tag.name)
+                    throw MarkupError("<" + tag.name + "> must be empty");
             }
             const std::string key = StaticResourceElementKey(tag.attributes, /*allow_key=*/false);
             // Resolved to its literal and then applied through the ordinary

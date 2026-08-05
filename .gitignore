@@ -30,3 +30,10 @@ phase3/xaml-db/fonts/*.json
 # loop locally. Only the generators are source; the emitted JSON is not
 # committed.
 phase3/xaml-db/cases/
+
+# The application dictionary, extracted from the pinned WinUI 2.8.4 tree by
+# extract_winui_theme_resources.py. Same rule as the cases: the extractor and
+# the pinned commit are the source, and the several megabytes it produces are
+# materialized rather than committed. It is also somebody else's code -- what
+# belongs in this repository is a script that reads it, not a copy of it.
+phase3/xaml-db/theme-resources/

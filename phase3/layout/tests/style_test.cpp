@@ -343,8 +343,20 @@ void References() {
             "'Style' takes a {StaticResource}");
 
     Rejects("a Style= behind an extension that is not implemented",
+            Document("Grid", "", "<Border Style=\"{Binding Boxy}\"/>"),
+            "the markup extension '{Binding}' is not implemented");
+
+    // {ThemeResource} is the other spelling of the same lookup, so a Style=
+    // written that way reaches the style path rather than being refused as an
+    // extension -- and a key nothing declares fails as a missing key, which is
+    // what says the reference was resolved and not merely accepted.
+    Loads("a Style= written as a {ThemeResource}",
+          Document("Grid", "",
+                   Resources("Grid", kBoxy) + "<Border Style=\"{ThemeResource Boxy}\"/>"));
+
+    Rejects("a Style= naming a key no dictionary in scope declares",
             Document("Grid", "", "<Border Style=\"{ThemeResource Boxy}\"/>"),
-            "the markup extension '{ThemeResource}' is not implemented");
+            "resource 'Boxy' not found for 'Style'");
 
     Rejects("two implicit styles for one type in one dictionary",
             Document("Grid", "",

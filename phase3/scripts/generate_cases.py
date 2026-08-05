@@ -2003,6 +2003,106 @@ def level5_x_directives() -> Iterator[dict[str, Any]]:
                    note, requires=requires, question=question)
 
 
+# --- L5: the application dictionary -------------------------------------------
+# Every case above declares the key it looks up. These do not: they name keys
+# WinUI 2 declares, and nothing in the markup says what those keys hold. That
+# makes them a different kind of case in three ways.
+#
+# **They are the only cases whose value comes from outside the corpus.** The
+# literals in the twins below are quoted from WinUI 2.8.4 at commit 4aa80ad6,
+# where `extract_winui_theme_resources.py` reads them. Quoting them here rather
+# than reading the extract keeps this generator dependent on nothing, and
+# `phase3/tests/test_theme_resource_cases.py` holds the two to agreeing, so a
+# literal that drifts is a failing test instead of a twin that passes by
+# comparing two copies of the same mistake.
+#
+# **They ask the host a question the corpus has never asked.** A resource case
+# so far has been answerable by the markup alone. These are answerable only by
+# whatever the probe's XAML host has in `Application.Resources`, and that is
+# unknown: `WindowsXamlManager` supplies the OS's theme resources, and WinUI 2's
+# arrive only when an application merges `XamlControlsResources`, which the
+# probe does not. So each carries the question, and a rejection is the answer --
+# specifically, the answer to whether the 21 harvested cases that were unblocked
+# by the same dictionary can be measured at all.
+#
+# **They are twinned anyway.** The question is whether the lookup resolves; the
+# twin says what it must resolve *to* if it does. Those are separate claims and
+# only the first is unknown.
+
+THEME_RESOURCE_CASES: list[tuple[str, str, str, str, list[str]]] = [
+    # (slug, key, the literal WinUI 2.8.4 holds for it, property, requires)
+    ("double-width", "ToggleSwitchThemeMinWidth", "154", "Width", ["L1-sizing"]),
+    ("double-height", "ScrollBarVerticalThumbMinHeight", "30", "Height", ["L1-sizing"]),
+    ("thickness-margin", "ToggleSwitchTopHeaderMargin", "0,0,0,4", "Margin", ["L2-align"]),
+    ("thickness-padding", "FlyoutContentPadding", "16,15,16,17", "Padding", ["L2-align"]),
+    ("thickness-border", "FlyoutBorderThemeThickness", "1", "BorderThickness", ["L2-align"]),
+]
+
+
+def level5_theme() -> Iterator[dict[str, Any]]:
+    unknown_host = (
+        "Whether a bare XamlReader.Load resolves a key from Application.Resources "
+        "at all, and whether the probe's host has WinUI 2's theme dictionary in it "
+        "rather than only the OS's. The value is not the question -- the twin "
+        "asserts that -- the reachability is. A rejection here says the level 7 "
+        "cases unblocked by the same dictionary cannot be measured until the probe "
+        "merges XamlControlsResources, which is the finding this case exists for."
+    )
+
+    for slug, key, literal, prop, requires in THEME_RESOURCE_CASES:
+        # Border, sized on one axis by the theme and pinned on the other, so a
+        # lookup that silently resolved to nothing would change the number
+        # rather than leaving the case looking plausible.
+        other = 'Height="30"' if prop == "Width" else 'Width="50"'
+        if prop in ("Margin", "Padding", "BorderThickness"):
+            body = (f'<Border {prop}="{{ph}}"><Border Width="20" Height="20"/></Border>')
+            inline_body = body.replace("{ph}", literal)
+            themed_body = body.replace("{ph}", f"{{ThemeResource {key}}}")
+        else:
+            themed_body = f'<Border {prop}="{{ThemeResource {key}}}" {other}/>'
+            inline_body = f'<Border {prop}="{literal}" {other}/>'
+
+        case_id = f"L5-theme-{slug}"
+        twin_id = f"{case_id}-inline"
+        note = f"{prop} from the theme key {key}"
+        yield case(case_id, 5, "theme", l5_document("Grid", themed_body), [400.0, 300.0],
+                   note, requires=requires, twin=twin_id, question=unknown_host)
+        yield case(twin_id, 5, "theme", l5_document("Grid", inline_body), [400.0, 300.0],
+                   f"inline twin of {case_id}: {prop}=\"{literal}\", the value WinUI 2.8.4 "
+                   f"holds for {key}",
+                   requires=requires)
+
+    # The two spellings of one lookup. If they resolve differently the corpus
+    # has to say which, and no other case in the corpus can: every StaticResource
+    # case above resolves against markup, where a ThemeResource would be a
+    # different question again.
+    key, literal = "ToggleSwitchThemeMinWidth", "154"
+    yield case("L5-theme-staticresource-spelling", 5, "theme",
+               l5_document("Grid", f'<Border Width="{{StaticResource {key}}}" Height="30"/>'),
+               [400.0, 300.0],
+               f"the same application-dictionary key reached by {{StaticResource}} instead",
+               requires=["L1-sizing"], twin="L5-theme-double-width-inline",
+               question=unknown_host)
+
+    # A brush, which cannot move a number and is here for exactly that reason:
+    # it is the one resource type the corpus can check the *acceptance* of and
+    # not the value, and the application dictionary is mostly brushes.
+    yield case("L5-theme-brush-background", 5, "theme",
+               l5_document("Grid",
+                           '<Border Background="{ThemeResource SystemControlTransparentBrush}"'
+                           ' Width="50" Height="30"/>'),
+               [400.0, 300.0],
+               "a brush from the theme dictionary on Background, which no measurement can see",
+               requires=["L1-sizing"], twin="L5-theme-brush-background-inline",
+               question=unknown_host)
+    yield case("L5-theme-brush-background-inline", 5, "theme",
+               l5_document("Grid", '<Border Background="Transparent" Width="50" Height="30"/>'),
+               [400.0, 300.0],
+               "inline twin of L5-theme-brush-background: Background=\"Transparent\", the colour "
+               "WinUI 2.8.4 gives SystemControlTransparentBrush",
+               requires=["L1-sizing"])
+
+
 # A list per level rather than one generator, because a level is a question
 # and not a file: level 1 asks what a lone element does, and a Path is as much
 # a lone element as a Border is.
@@ -2012,7 +2112,7 @@ LEVELS = {
     2: [level2, level2_content],
     3: [level3, level3_canvas, level3_scroll],
     4: [level4, level4_icon, level4_source],
-    5: [level5, level5_styles, level5_x_primitives, level5_x_directives],
+    5: [level5, level5_styles, level5_theme, level5_x_primitives, level5_x_directives],
 }
 
 

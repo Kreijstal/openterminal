@@ -1,7 +1,12 @@
 #include "resources.h"
 
+#include <algorithm>
 #include <cctype>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
+#include "json.h"
 #include "markup.h"
 
 namespace openxaml {
@@ -23,6 +28,10 @@ std::string KindName(ValueKind kind) {
         case ValueKind::String: return "a string";
         case ValueKind::Boolean: return "a Boolean";
         case ValueKind::Style: return "a Style";
+        case ValueKind::Color: return "a Color";
+        case ValueKind::Brush: return "a Brush";
+        case ValueKind::CornerRadius: return "a CornerRadius";
+        case ValueKind::Duration: return "a Duration";
         case ValueKind::Unknown: break;
     }
     return "a value of no declared shape";
@@ -123,6 +132,16 @@ ValueKind ExpectedValueKind(const std::string& property) {
         {"ColumnDefinition.MaxWidth", ValueKind::Number},
         {"RowDefinition.MinHeight", ValueKind::Number},
         {"RowDefinition.MaxHeight", ValueKind::Number},
+        // The brush properties, which only became worth declaring once the
+        // application dictionary arrived: it is full of colours *and* of
+        // brushes made from them, and the two are spelled the same way.
+        {"Background", ValueKind::Brush},
+        {"Foreground", ValueKind::Brush},
+        {"BorderBrush", ValueKind::Brush},
+        {"Spacing", ValueKind::Number},
+        {"Opacity", ValueKind::Number},
+        {"Canvas.Left", ValueKind::Number},
+        {"Canvas.Top", ValueKind::Number},
     };
     const auto found = kProperties.find(property);
     return found == kProperties.end() ? ValueKind::Unknown : found->second;
@@ -198,15 +217,23 @@ const ResourceValue& ResolveResourceReference(const ResourceScope& scope,
     if (!TryParseMarkupExtension(raw, extension))
         throw MarkupError("'" + property + "' takes a {StaticResource}, got \"" + raw + "\"");
 
-    if (extension.name != "StaticResource") {
+    // {ThemeResource} and {StaticResource} take the same argument and search the
+    // same chain. They differ in *when*: a ThemeResource is re-evaluated when
+    // the application's theme changes, a StaticResource is resolved once and
+    // frozen. Nothing here ever changes theme -- a case declares one and is
+    // measured under it -- so the two are the same operation, and resolving
+    // them by one path keeps a {ThemeResource} case comparable to its inlined
+    // twin for the same reason a {StaticResource} one is.
+    if (extension.name != "StaticResource" && extension.name != "ThemeResource") {
         throw MarkupError("the markup extension '{" + extension.name + "}' is not implemented, on '" +
                           property + "'");
     }
+    const std::string spelled = "'{" + extension.name + "}'";
     if (extension.argument.empty())
-        throw MarkupError("'{StaticResource}' on '" + property + "' names no resource key");
+        throw MarkupError(spelled + " on '" + property + "' names no resource key");
     if (extension.argument.find(',') != std::string::npos) {
-        throw MarkupError("'{StaticResource}' takes one argument, got \"" + extension.argument +
-                          "\" on '" + property + "'");
+        throw MarkupError(spelled + " takes one argument, got \"" + extension.argument + "\" on '" +
+                          property + "'");
     }
 
     std::string key = extension.argument;
@@ -214,13 +241,13 @@ const ResourceValue& ResolveResourceReference(const ResourceScope& scope,
     if (equals != std::string::npos) {
         const std::string name = Trim(key.substr(0, equals));
         if (name != "ResourceKey") {
-            throw MarkupError("'{StaticResource}' has no argument named '" + name + "', on '" +
-                              property + "'");
+            throw MarkupError(spelled + " has no argument named '" + name + "', on '" + property +
+                              "'");
         }
         key = Trim(key.substr(equals + 1));
     }
     if (key.empty())
-        throw MarkupError("'{StaticResource}' on '" + property + "' names no resource key");
+        throw MarkupError(spelled + " on '" + property + "' names no resource key");
     return CheckedResource(scope, key, property);
 }
 
@@ -251,6 +278,181 @@ std::string StaticResourceElementKey(const std::map<std::string, std::string>& a
     }
     if (key.empty()) throw MarkupError("<StaticResource> needs a ResourceKey");
     return key;
+}
+
+// --- the application dictionary -----------------------------------------------
+
+namespace {
+
+// The types the extracted database uses, mapped to the shapes this parser
+// checks against. A type outside this set is a key the database carries and
+// this implementation cannot use -- a Style, a ControlTemplate, a brush whose
+// colour never resolved -- and it is *dropped at load* rather than stored as an
+// unusable entry, so that a lookup for it fails with "not found" like any other
+// key we cannot supply, instead of resolving to text no property can read.
+const std::map<std::string, ValueKind>& ThemeResourceTypes() {
+    static const std::map<std::string, ValueKind> kTypes = {
+        {"x:Double", ValueKind::Number},
+        {"x:Int32", ValueKind::Integer},
+        {"x:String", ValueKind::String},
+        {"x:Boolean", ValueKind::Boolean},
+        {"Thickness", ValueKind::Thickness},
+        {"GridLength", ValueKind::GridLength},
+        {"CornerRadius", ValueKind::CornerRadius},
+        {"Color", ValueKind::Color},
+        {"Duration", ValueKind::Duration},
+        {"FontFamily", ValueKind::String},
+    };
+    return kTypes;
+}
+
+const JsonValue* Member(const JsonValue& object, const std::string& name) {
+    const auto found = object.object.find(name);
+    return found == object.object.end() ? nullptr : &found->second;
+}
+
+const JsonValue& Text(const JsonValue& object, const std::string& name, const std::string& where) {
+    const JsonValue* value = Member(object, name);
+    if (!value || value->kind != JsonValue::Kind::String)
+        throw JsonError(where + ": \"" + name + "\" is not a string");
+    return *value;
+}
+
+// One database entry as this implementation can use it, or nothing.
+//
+// An alias is followed by the *extractor*, which records where the chain landed
+// alongside the chain itself; this reads the landing. Following it here as well
+// would be a second implementation of the same walk, free to disagree with the
+// first.
+bool ReadEntry(const JsonValue& entry, const std::string& key, ResourceValue& out) {
+    const JsonValue* status = Member(entry, "status");
+    if (!status || status->kind != JsonValue::Kind::String)
+        throw JsonError("the entry for '" + key + "' has no status");
+
+    const JsonValue* resolved = status->string == "alias" ? Member(entry, "resolved") : &entry;
+    if (!resolved || resolved->kind != JsonValue::Kind::Object) return false;
+
+    const JsonValue* kind = Member(*resolved, "status");
+    if (!kind || kind->kind != JsonValue::Kind::String) return false;
+
+    if (kind->string == "brush") {
+        // A brush is usable here for one reason only: the attribute form of a
+        // brush is a colour, so a brush whose colour the extractor resolved
+        // hands the property exactly the text `Background="#FF1F1F1F"` would.
+        // A brush whose colour it could not resolve -- one built on the OS's
+        // SystemAccentColor, say -- has no such text and is not loaded.
+        const JsonValue* colour = Member(*resolved, "color");
+        if (!colour || colour->kind != JsonValue::Kind::String) return false;
+        // No style object: the application dictionary carries no Style this
+        // parser can use, and one that named a Style is dropped at load above.
+        out = ResourceValue{"SolidColorBrush", colour->string, ValueKind::Brush, nullptr};
+        return true;
+    }
+    if (kind->string != "value") return false;
+
+    const JsonValue* type = Member(*resolved, "type");
+    const JsonValue* text = Member(*resolved, "text");
+    if (!type || type->kind != JsonValue::Kind::String) return false;
+    if (!text || text->kind != JsonValue::Kind::String) return false;
+    const auto known = ThemeResourceTypes().find(type->string);
+    if (known == ThemeResourceTypes().end()) return false;
+    out = ResourceValue{type->string, text->string, known->second, nullptr};
+    return true;
+}
+
+void ReadDatabase(const std::string& json, const std::string& where, ThemeResourceLibrary& library) {
+    const JsonValue document = ParseJson(json);
+    const JsonValue* themes = Member(document, "themes");
+    if (!themes || themes->kind != JsonValue::Kind::Object)
+        throw JsonError(where + ": no \"themes\" object");
+
+    // Recorded so a database that silently came from somewhere else is visible
+    // in the one place a reader looks.
+    Text(document.At("source"), "commit", where);
+
+    const JsonValue* shared = Member(*themes, "Shared");
+    for (const auto& [name, entries] : themes->object) {
+        if (name == "Shared") continue;
+        if (entries.kind != JsonValue::Kind::Object)
+            throw JsonError(where + ": theme \"" + name + "\" is not an object");
+
+        ResourceDictionary dictionary;
+        ResourceValue value;
+        // Theme-independent entries first, so that a theme's own entry for the
+        // same key would be the one that wins. The merge upstream already makes
+        // that impossible -- a key in a theme dictionary is removed from the
+        // root one -- so this is belt and braces, not a rule being relied on.
+        if (shared && shared->kind == JsonValue::Kind::Object) {
+            for (const auto& [key, entry] : shared->object) {
+                if (ReadEntry(entry, key, value)) dictionary.Add(key, value);
+            }
+        }
+        for (const auto& [key, entry] : entries.object) {
+            if (ReadEntry(entry, key, value)) dictionary.Add(key, value);
+        }
+        library.Add(name, std::move(dictionary));
+    }
+}
+
+}  // namespace
+
+ThemeResourceLibrary& ThemeResourceLibrary::Default() {
+    static ThemeResourceLibrary library;
+    return library;
+}
+
+void ThemeResourceLibrary::Add(const std::string& theme, ResourceDictionary dictionary) {
+    if (themes_.count(theme))
+        throw JsonError("the theme '" + theme + "' is already loaded; two dictionaries claiming "
+                        "one theme have no defensible resolution");
+    themes_.emplace(theme, std::move(dictionary));
+}
+
+void ThemeResourceLibrary::SetActiveTheme(const std::string& theme) {
+    if (!themes_.empty() && !themes_.count(theme)) {
+        std::string loaded;
+        for (const auto& entry : themes_) loaded += (loaded.empty() ? "" : ", ") + entry.first;
+        throw MarkupError("no theme dictionary for '" + theme + "'; loaded: " + loaded);
+    }
+    active_ = theme;
+}
+
+const ResourceDictionary* ThemeResourceLibrary::Active() const {
+    const auto found = themes_.find(active_);
+    return found == themes_.end() ? nullptr : &found->second;
+}
+
+std::vector<std::string> ThemeResourceLibrary::themes() const {
+    std::vector<std::string> names;
+    for (const auto& entry : themes_) names.push_back(entry.first);
+    return names;
+}
+
+int LoadThemeResources(ThemeResourceLibrary& library, const std::string& path) {
+    namespace fs = std::filesystem;
+    std::error_code failure;
+
+    std::vector<fs::path> files;
+    if (fs::is_directory(path, failure)) {
+        for (const auto& entry : fs::directory_iterator(path)) {
+            if (entry.path().extension() == ".json") files.push_back(entry.path());
+        }
+        std::sort(files.begin(), files.end());
+    } else if (fs::is_regular_file(path, failure)) {
+        files.push_back(path);
+    } else {
+        return 0;
+    }
+
+    for (const fs::path& file : files) {
+        std::ifstream in(file, std::ios::binary);
+        std::ostringstream buffer;
+        buffer << in.rdbuf();
+        ReadDatabase(buffer.str(), file.filename().string(), library);
+    }
+
+    const ResourceDictionary* active = library.Active();
+    return static_cast<int>(active ? active->size() : 0);
 }
 
 }  // namespace openxaml
