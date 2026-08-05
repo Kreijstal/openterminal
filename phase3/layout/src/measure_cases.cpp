@@ -20,6 +20,7 @@
 #include "fonts.h"
 #include "json.h"
 #include "markup.h"
+#include "resources.h"
 #include "text.h"
 
 namespace fs = std::filesystem;
@@ -77,7 +78,7 @@ void Walk(const Element& element, const std::string& path, std::vector<std::stri
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::cerr << "usage: measure_cases <cases-dir> <out-dir> [fonts-dir]\n";
+        std::cerr << "usage: measure_cases <cases-dir> <out-dir> [fonts-dir] [theme-resources]\n";
         return 2;
     }
     const fs::path cases = argv[1];
@@ -85,6 +86,11 @@ int main(int argc, char** argv) {
     // Harvested font metrics sit beside the corpus, so the default needs no
     // argument and the layout of the database stays the only thing to know.
     const fs::path fonts = argc >= 4 ? fs::path(argv[3]) : cases.parent_path() / "fonts";
+    // The application dictionary, on the same convention: generated output that
+    // sits beside the corpus. Absent on a bare checkout, which is not an error
+    // -- every lookup that needed it then fails naming its key.
+    const fs::path theme_resources =
+        argc >= 5 ? fs::path(argv[4]) : cases.parent_path() / "theme-resources";
 
     if (!fs::exists(cases)) {
         std::cerr << "no such directory: " << cases.string() << "\n";
@@ -116,6 +122,19 @@ int main(int argc, char** argv) {
     }
     std::cerr << "font metrics loaded: " << loaded << " from " << fonts.string() << "\n";
 
+    // Same rule, and for the same reason: a database that is there but
+    // unreadable is one fault, not one per case that looks up a key.
+    int keys = 0;
+    try {
+        keys = LoadThemeResources(ThemeResourceLibrary::Default(), theme_resources.string());
+    } catch (const std::exception& e) {
+        std::cerr << "cannot load theme resources from " << theme_resources.string() << ": "
+                  << e.what() << "\n";
+        return 4;
+    }
+    std::cerr << "theme resources loaded: " << keys << " key(s) from " << theme_resources.string()
+              << "\n";
+
     fs::create_directories(out_dir);
     int measured = 0;
     int failed = 0;
@@ -128,7 +147,14 @@ int main(int argc, char** argv) {
         try {
             const JsonValue document = ParseJson(Slurp(file));
             id = document.At("id").string;
-            const JsonValue& extent = document.At("environment").At("available_size");
+            const JsonValue& environment = document.At("environment");
+            // The case pins a theme, so the application dictionary answers as
+            // that theme. Only a database that has been loaded can refuse a
+            // theme name; with none loaded this is inert, which is what keeps a
+            // bare checkout behaving as it did.
+            if (environment.Has("theme"))
+                ThemeResourceLibrary::Default().SetActiveTheme(environment.At("theme").string);
+            const JsonValue& extent = environment.At("available_size");
             if (extent.array.size() != 2) throw JsonError("available_size needs two entries");
             const Size available{ReadExtent(extent.array[0]), ReadExtent(extent.array[1])};
 

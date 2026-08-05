@@ -42,6 +42,14 @@ enum class ValueKind {
     GridLength,
     String,
     Boolean,
+    // The shapes only the application dictionary supplies. A Color is not a
+    // Brush: WinUI refuses a Color handed to a Background, and the extracted
+    // dictionary holds plenty of both, so collapsing them would let a case
+    // resolve something the real runtime rejects.
+    Color,
+    Brush,
+    CornerRadius,
+    Duration,
 };
 
 struct ResourceValue {
@@ -65,10 +73,53 @@ private:
     std::map<std::string, ResourceValue> entries_;
 };
 
-// The dictionaries a lookup walks, innermost first. In WinUI that is the
-// element, then each ancestor, then Application.Resources -- see the note on
-// LookUpResource for what is missing from the tail of that chain.
+// The dictionaries a lookup walks, innermost first: the element, then each
+// ancestor, then Application.Resources.
 using ResourceScope = std::vector<const ResourceDictionary*>;
+
+// The application-level dictionary -- the tail of every lookup chain, and the
+// one no markup declares.
+//
+// In a running Terminal this is what `<XamlControlsResources/>` puts in
+// `Application.Resources`: WinUI 2's theme dictionary, merged over the OS's own
+// `Windows.UI.Xaml` one. Only the first of those two is open source, so only
+// the first is here; `phase3/scripts/extract_winui_theme_resources.py` builds
+// it out of the pinned WinUI 2.8.4 tree, and the OS half is still missing. A
+// key from the missing half fails by name exactly as it did before, which is
+// the point of loading a real dictionary rather than a permissive one.
+//
+// One dictionary per theme, each already merged with the theme-independent
+// entries, because that is the only shape a lookup needs. The theme is set per
+// case: the corpus declares one, and Default and Light really do differ -- in
+// 106 colours and in one x:Double.
+class ThemeResourceLibrary {
+public:
+    static ThemeResourceLibrary& Default();
+
+    void Add(const std::string& theme, ResourceDictionary dictionary);
+    // Throws naming the themes that are loaded, so a case asking for one that
+    // is not says which are.
+    void SetActiveTheme(const std::string& theme);
+    const std::string& active_theme() const { return active_; }
+
+    // Null when nothing is loaded, which is a bare checkout and not an error:
+    // every lookup that would have needed it then fails naming its key, the
+    // way it did before there was a dictionary at all.
+    const ResourceDictionary* Active() const;
+    bool empty() const { return themes_.empty(); }
+    std::vector<std::string> themes() const;
+
+private:
+    std::map<std::string, ResourceDictionary> themes_;
+    std::string active_ = "Default";
+};
+
+// Loads the extracted database into `library`, and returns how many keys the
+// largest theme carried. `path` may be a file or a directory of them; a
+// directory that is not there loads nothing and is not an error, because the
+// database is generated rather than committed and a checkout without it must
+// still run.
+int LoadThemeResources(ThemeResourceLibrary& library, const std::string& path);
 
 // True for the element names that declare a resource of a type this parser
 // knows: the x-namespace primitives and Thickness.
@@ -85,14 +136,12 @@ ValueKind ExpectedValueKind(const std::string& property);
 // Walks `scope` for `key`. Throws MarkupError naming the key when no
 // dictionary in the chain has it.
 //
-// The chain ends at the root of the markup. A real runtime continues into
-// Application.Resources, which is where WinUI's own theme resources live --
-// that is why {StaticResource SystemControlForegroundBaseHighBrush} resolves in
-// Terminal and would not resolve here. There is no Application in a
-// XamlReader.Load case, so the corpus cannot express one either; merged
-// dictionaries and theme dictionaries are the same kind of gap. All three are
-// TODO rather than done, and a lookup that would have needed them fails by
-// name instead of returning something plausible.
+// The chain runs from the element to the root of the markup and then into the
+// application dictionary, which is what makes
+// {ThemeResource SystemControlForegroundBaseHighBrush} resolve here at all.
+// Merged dictionaries inside a page are still a gap, and so is the OS half of
+// the application dictionary; a lookup that needed either fails by name instead
+// of returning something plausible.
 const ResourceValue& LookUpResource(const ResourceScope& scope, const std::string& key,
                                     const std::string& where);
 

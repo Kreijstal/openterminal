@@ -19,13 +19,35 @@ Against build `10.0.26100.33158`:
 | L2 | one parent, one child: alignment × margin × sizing | 192 | **192** |
 | L3 | panels: `StackPanel`, `Grid` | 132 | **132** |
 | L4 | text: `TextBlock` | 72 | **36** without a font — see below |
-| L5 | resources: `x:Key`, `{StaticResource}` | 0 | no oracle yet — see below |
-| L7 | Terminal's own pages | 69 | **36** |
+| L5 | resources: `x:Key`, `{StaticResource}`, `{ThemeResource}` | 0 | no oracle yet — see below |
+| L7 | Terminal's own pages | 69 | **33**, down from 36 — see below |
 
-"Measured" rather than "cases": L0 has eighteen cases and four
-measurements, and L5 has forty cases and none at all. Everything authored
-after the last oracle run is pending, not passing — see [the property
-system](#the-property-system) and [what is still open](#what-is-still-open).
+"Measured" rather than "cases": L0 has eighteen cases and four measurements,
+L5 has fifty-three and none at all, and L7 has ninety cases against sixty-nine
+measurements — the twenty-one the application dictionary unblocked are newer
+than the last oracle run. Everything authored after that run is pending, not
+passing — see [the property system](#the-property-system) and [what is still
+open](#what-is-still-open).
+
+### Why L7 went from 36 to 33
+
+Nothing measures differently. Six of the sixty-nine recorded measurements no
+longer have a case, and three of those six were matching.
+
+A harvested case is identified by the hash of its markup, and the harvester
+emits *maximal* loadable subtrees — the largest subtree with no blocker, never
+the ones inside it. Two subtrees in `MyPage.xaml` used to be maximal because
+their parent `Grid` was blocked by a `{ThemeResource}`. The application
+dictionary answers that key, so the parent is loadable now, and the two children
+stopped being candidates: one thirteen-element `Grid` stands where a
+three-element `StackPanel` and a six-element `Grid` did.
+
+That larger `Grid` contains a `TextBox`, so this implementation cannot load it,
+and it has no measurement yet either. The three matching cases are inside
+something we will match again the moment `TextBox` is — the coverage moved
+behind a bigger door, it did not go away. It is worth stating plainly rather
+than smoothing over, because a number that falls is exactly the kind of thing a
+summary tends to lose.
 
 L1–L3 is every measured case that does not need text measurement or a control
 set — `Border`, `Grid`, `StackPanel`, and the `FrameworkElement` semantics
@@ -41,7 +63,7 @@ implemented and every case that measures one is in that set; the two `PathIcon`
 subtrees Terminal's own markup supplies are the only witnesses any of them has
 today. They are listed under [what is still open](#what-is-still-open).
 
-### What the 33 red L7 cases are waiting for
+### What the 36 red L7 cases are waiting for
 
 Ranked by how many they are, since that is the order they are worth doing in:
 
@@ -49,9 +71,12 @@ Ranked by how many they are, since that is the order they are worth doing in:
 |---|---:|---|
 | `FontIcon` | 15 | its size is a glyph measured in Segoe MDL2 Assets or Segoe Fluent Icons, and no metrics for either are harvested |
 | `ScrollViewer` | 9 | see below |
+| a measurement whose case was absorbed | 6 | [see above](#why-l7-went-from-36-to-33); the next oracle run retires them |
 | `ToolTip`, `Run` | 3 | a templated control whose content is an inline |
-| `TextBox`, `Button` | 3 | templated controls with text in them |
 | `Thumb`, `ControlTemplate`, `Rectangle` | 3 | applying a control template is not implemented |
+
+The `TextBox` row that used to be here is gone for the same reason the six
+appeared: its three cases were one of the two absorbed subtrees.
 
 Three more were waiting on a `TextBlock` in Segoe UI, and are not any longer:
 the two numbers the corpus solves for itself are enough for them, so they match
@@ -144,6 +169,57 @@ half: [`tests/resources_test.cpp`](tests/resources_test.cpp) holds a failed
 lookup to naming the key it could not find, and `ctest` runs it beside the
 property tests.
 
+### The application dictionary
+
+A lookup no longer stops at the root of the markup. Past it is one more
+dictionary, the one no markup declares: in a running Terminal it is what
+`<XamlControlsResources/>` puts in `Application.Resources`, and here it is
+WinUI 2.8.4's half of that, extracted from the pinned open source by
+[`extract_winui_theme_resources.py`](../scripts/extract_winui_theme_resources.py)
+and loaded at startup on the same convention the fonts use — a directory beside
+the corpus, an optional argument to override it, and nothing at all on a bare
+checkout.
+
+`{ThemeResource}` resolves too, by exactly the code `{StaticResource}` does.
+The two differ in *when*: a `ThemeResource` is re-evaluated when the
+application's theme changes and a `StaticResource` is frozen at parse time.
+Nothing here ever changes theme — a case pins one and is measured under it — so
+here they are one operation, and resolving them by one path is what keeps a
+`{ThemeResource}` case comparable to its inlined twin.
+
+Two things this does *not* do, and both matter more than they look:
+
+**A resource whose value has no textual form is not loaded at all.** The
+dictionary holds 2,852 keys for the `Light` theme and this loads 2,208 of them.
+The other 644 are `Style`s, `ControlTemplate`s, converters and brushes built on
+`SystemAccentColor` — a colour the OS supplies and the source does not have.
+They are dropped at load rather than stored as unusable entries, so a lookup
+for one fails with "not found", the same as a key that does not exist. Storing
+them would mean resolving to text no property can read, which is a worse
+failure and a later one.
+
+**A `Color` still cannot supply a `Background`.** The dictionary is full of both
+colours and the brushes made from them, spelled identically —
+`TextFillColorPrimary` is a `Color` and `TextFillColorPrimaryBrush` is a brush
+on it. WinUI refuses the first where a `Brush` is wanted, and so does this;
+without that check the database would happily resolve markup the runtime
+rejects, which would turn a shared dictionary from a source of coverage into a
+source of false green.
+
+A brush *is* loadable, and only because of what a brush's attribute form is: a
+colour. `Background="{ThemeResource ControlFillColorDefaultBrush}"` and
+`Background="#B3FFFFFF"` reach the property by the same path and through the
+same parser, which is the identity the whole resource design rests on. The
+extractor follows each brush's `Color` reference to a literal and records where
+it landed; a brush whose colour it could not reach is one of the 644.
+
+The theme is per case, from the case's own `environment.theme`. That is more
+than the probe does — the probe takes whatever theme its XAML host defaults to
+and does not pin one, which is a real determinism hole on the oracle side and
+is named here rather than mirrored. It costs nothing today: `Default` and
+`Light` differ in 106 colours and in exactly one other value,
+`InfoBadgeIconHeight`, which nothing in the corpus measures.
+
 ## Running it
 
     cmake -S phase3/layout -B /tmp/layout-build && cmake --build /tmp/layout-build
@@ -158,6 +234,19 @@ The font metrics argument is optional and defaults to `<cases>/../fonts`. Pass
 `phase3/xaml-db/fonts/derived` instead to run text against the numbers the
 corpus solved for itself; the two directories are never mixed, and a directory
 holding two sets of metrics for one family is refused rather than resolved.
+
+A fourth argument, the application dictionary, follows the same convention and
+defaults to `<cases>/../theme-resources`. It is generated rather than committed,
+so materialize it first — once, from a WinUI 2.8.4 checkout:
+
+    git clone --filter=blob:none https://github.com/microsoft/microsoft-ui-xaml /tmp/winui
+    git -C /tmp/winui checkout --detach 4aa80ad6d272241a6a603f85507063e9fb6bcf92
+    python3 phase3/scripts/extract_winui_theme_resources.py /tmp/winui \
+        --out phase3/xaml-db/theme-resources/winui-2.8.4.json
+
+Without it, `measure_cases` says `theme resources loaded: 0` and every lookup
+that would have reached the dictionary fails naming its key — which is the state
+this was in before, and is still a correct run rather than a broken one.
 
 Two checks need no oracle at all, and run from a bare checkout:
 
@@ -256,15 +345,17 @@ does not do, so that a passing run is not read as more than it is:
   inherits. Both are the ported behaviour rather than a measured one.
   `L0-props-rounding-half` and `L0-props-rounding-inherited` are the cases
   authored to settle them, and neither has a measurement yet.
-- **No `Application.Resources`, no merged dictionaries, no theme dictionaries.**
-  A resource lookup walks the element and its ancestors and then stops. That is
-  where WinUI's own theme resources would be, and it is why
-  `{StaticResource SystemControlForegroundBaseHighBrush}` resolves in Terminal
-  and not here. A lookup that would have needed one of the three fails by name;
-  it never falls back on something plausible.
-- **No `{ThemeResource}`, no `{Binding}`, no `{x:Bind}`, no
-  `{TemplateBinding}`.** `{StaticResource}` is the only markup extension that
-  resolves. Every other one is a named refusal, including on properties where
+- **`Application.Resources` holds WinUI 2's half and not the OS's.** A lookup
+  walks the element, its ancestors, and then the extracted dictionary. What is
+  missing from the tail of that chain is the OS's own `Windows.UI.Xaml`
+  dictionary, which is closed: 28 of the keys Terminal names live only there,
+  the accent-colour palette among them. `{StaticResource
+  SystemControlForegroundBaseHighBrush}` is one of the 28 and still fails here.
+  Merged dictionaries inside a page are not implemented either. A lookup that
+  needed either fails by name; it never falls back on something plausible.
+- **No `{Binding}`, no `{x:Bind}`, no `{TemplateBinding}`.**
+  `{StaticResource}` and `{ThemeResource}` are the only markup extensions that
+  resolve. Every other one is a named refusal, including on properties where
   the difference would not show in the numbers.
 - **No styles, no setters, no control templates.** L5 in the corpus is scoped
   to resource lookup; the rest of what that level names is not started.
@@ -291,6 +382,8 @@ neither passing nor failing:
 | `L1-shape` | 60 | are a shape's bounds tight, and is its desired size the right edge or the width? |
 | `L0-props` | 14 | does `UseLayoutRounding` inherit, how does a tie at `.5` break, and what does a `ContentControl` do with content it is not stretching? |
 | `L5-resources` | 40 | every one of them: the level has no measurement at all |
+| `L5-theme` | 13 | does a bare `XamlReader.Load` reach `Application.Resources`, and is WinUI 2's dictionary in the probe's host or only the OS's? |
+| `L7-terminal` | 21 | the same question, asked by the cases that depend on the answer |
 
 The `L1-shape` answers have two witnesses each already, from Terminal's two
 `PathIcon` cases, but both of those geometries start near the origin and

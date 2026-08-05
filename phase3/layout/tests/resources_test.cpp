@@ -196,8 +196,8 @@ void Dictionaries() {
 
 void Extensions() {
     Rejects("an extension that is not implemented",
-            Document("Border", "", "<Border Width=\"{ThemeResource BoxWidth}\"/>"),
-            "the markup extension '{ThemeResource}' is not implemented");
+            Document("Border", "", "<Border Width=\"{Binding Width}\"/>"),
+            "the markup extension '{Binding}' is not implemented");
 
     Rejects("a binding is not a resource",
             Document("Border", "", "<Border Width=\"{x:Bind Width}\"/>"),
@@ -276,6 +276,72 @@ void PropertyElements() {
                   60.0);
 }
 
+// --- the application dictionary -----------------------------------------------
+
+// Everything above runs with no application dictionary loaded, which is the
+// bare-checkout state and the one the failure messages above describe. These
+// load one, so both halves are covered by the same file: what the tail of the
+// chain resolves, and that it is still the tail.
+void ApplicationScope() {
+    using openxaml::ResourceValue;
+    using openxaml::ValueKind;
+
+    openxaml::ResourceDictionary theme;
+    theme.Add("BoxWidth", ResourceValue{"x:Double", "80", ValueKind::Number});
+    theme.Add("ThemeWidth", ResourceValue{"x:Double", "44", ValueKind::Number});
+    theme.Add("ThemePad", ResourceValue{"Thickness", "1,2,3,4", ValueKind::Thickness});
+    theme.Add("ThemeFill", ResourceValue{"SolidColorBrush", "#FF1F1F1F", ValueKind::Brush});
+    theme.Add("ThemeInk", ResourceValue{"Color", "#FF1F1F1F", ValueKind::Color});
+    openxaml::ThemeResourceLibrary::Default().Add("Default", std::move(theme));
+
+    ResolvesWidth("{ThemeResource} resolves against the application dictionary",
+                  Document("Border", "", "<Border Width=\"{ThemeResource ThemeWidth}\"/>"), 44.0);
+
+    // The two extensions are one operation here, and a case that says so has to
+    // keep saying so: a corpus twin pairs the resolved form with an inlined
+    // literal, and it would pair with the wrong one if the spellings diverged.
+    ResolvesWidth("{StaticResource} reaches the same dictionary",
+                  Document("Border", "", "<Border Width=\"{StaticResource ThemeWidth}\"/>"), 44.0);
+
+    ResolvesWidth("the element form of {ThemeResource} resolves too",
+                  Document("Border", "",
+                           "<Border.Width><ThemeResource ResourceKey=\"ThemeWidth\"/>"
+                           "</Border.Width>"),
+                  44.0);
+
+    // The application dictionary is the *last* place looked, not the first.
+    ResolvesWidth("markup shadows the application dictionary",
+                  Document("Border", "", Resources("Border", kDouble) + kUse), 60.0);
+
+    Loads("a brush resource supplies a Background",
+          Document("Border", "", "<Border Background=\"{ThemeResource ThemeFill}\" Width=\"5\"/>"));
+
+    // A Color and a Brush are spelled identically and are not interchangeable;
+    // the extracted dictionary is full of both, so this is the check that keeps
+    // the database from resolving something the runtime would refuse.
+    Rejects("a Color cannot supply a Background",
+            Document("Border", "", "<Border Background=\"{ThemeResource ThemeInk}\"/>"),
+            "which cannot supply 'Background'");
+
+    Rejects("a Thickness still cannot supply a Width",
+            Document("Border", "", "<Border Width=\"{ThemeResource ThemePad}\"/>"),
+            "cannot supply 'Width'");
+
+    Rejects("a key the application dictionary does not have still fails by name",
+            Document("Border", "", "<Border Width=\"{ThemeResource NotInWinUI}\"/>"),
+            "resource 'NotInWinUI' not found");
+
+    ++checks;
+    try {
+        openxaml::ThemeResourceLibrary::Default().SetActiveTheme("Chartreuse");
+        Fail("a theme that is not loaded", "accepted it");
+    } catch (const std::exception& error) {
+        const std::string message = error.what();
+        if (message.find("no theme dictionary for 'Chartreuse'") == std::string::npos)
+            Fail("a theme that is not loaded", std::string("rejected with: ") + error.what());
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -284,6 +350,9 @@ int main() {
     Dictionaries();
     Extensions();
     PropertyElements();
+    // Last, because it loads an application dictionary into the process and
+    // every check above is written against there not being one.
+    ApplicationScope();
 
     std::printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
