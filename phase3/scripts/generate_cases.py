@@ -1776,13 +1776,30 @@ def x_primitive_scenarios() -> list[tuple[str, str, list[str], str, str | None, 
         ),
         (
             "int32-width",
-            "an x:Int32 on a property whose type is a Double, which is the one "
-            "widening XAML performs on the way in",
+            "an x:Int32 on a property whose type is a Double, which is the "
+            "widening XAML is usually said to perform on the way in",
             ["L1-sizing"],
             wrap('<Border Height="30"><Border.Width><x:Int32>60</x:Int32>'
                  "</Border.Width></Border>"),
             wrap('<Border Height="30" Width="60"/>'),
-            None,
+            "Whether the widening happens at all. An attribute's value is a "
+            "string that Double's converter reads; an object element produces "
+            "an Int32 *object*, which is assigned rather than converted, so a "
+            "Double-typed Width may simply refuse it. The last run's evidence "
+            "points at a refusal and cannot be trusted to say so: run "
+            "31017111065 recorded \"Failed to assign to property "
+            "'Windows.UI.Xaml.FrameworkElement.Width' because the type "
+            "'Windows.Foundation.Int32' cannot be assigned to the type "
+            "'Windows.Foundation.Double'\" against L7-terminal-4302b18781-s1, "
+            "a harvested Rectangle that assigns nothing of the kind, and that "
+            "run's messages were served from stale per-thread error state -- "
+            "see the contamination section of phase3/xaml-db/README.md. No "
+            "other case in the corpus could have produced that sentence, so it "
+            "is almost certainly this one's answer, and almost certainly is not "
+            "a measurement. This implementation widens, and the layout core is "
+            "left widening until a clean run says otherwise: changing it on "
+            "contaminated evidence would be guessing twice. The inline twin "
+            "stays as the tree this case has if the widening is real.",
         ),
         (
             "double-indented",

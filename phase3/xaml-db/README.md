@@ -437,6 +437,72 @@ reason a version would, and cannot come back empty without the run failing.
 CI regenerates every measurement twice and byte-compares, the same determinism
 gate `phase0` and `phase1` already apply to their snapshots.
 
+## Recorded error messages before run 31017111065 are not evidence
+
+The numbers a measurement records are the runtime's. The *message* on a
+measurement that failed was not necessarily about the case it is attached to,
+and in the last recorded run usually was not.
+
+Run 31017111065 wrote 19 failures. Eleven of them name a resource key that does
+not occur anywhere in that case's own markup: `L7-terminal-09a589957c-s0`, a
+harvested Terminal subtree that references `CardStrokeColorDefaultBrush` and
+nothing else, "failed" on `BoxWidth` — a key only the authored `L5-resources`
+cases use. `L5-xprimitives-int32-width`, whose entire markup is
+`<Border.Width><x:Int32>60</x:Int32></Border.Width>` and which asks for no
+resource at all, "failed" on `ScrollBarVerticalThumbMinHeight`. Meanwhile the
+messages that plainly belong to those cases turned up on unrelated ones.
+
+The proof that this is contamination and not a surprising runtime is the size
+variants. `-s0`, `-s1` and `-s2` of a harvested case are the same markup string
+measured at three available sizes. Three of those triples came back with three
+*different* messages each, while the `[Line: 1 Position: N]` suffix — which the
+parser fills in from the document it is actually reading — was identical across
+each triple and correct for that markup. The description was stale; only the
+position was fresh.
+
+**The mechanism.** WinRT restricted error info is per-thread global state, and
+the probe measures every case on one thread. A `XamlReader::Load` can originate
+a description and still succeed, and a load that fails leaves its description
+behind. When a later case fails with a *matching* `HRESULT` without originating
+fresh info, `winrt::hresult_error::message()` serves the older description as
+though it were this one's. It is perfectly deterministic — the case order is
+fixed — so measuring twice and diffing the runs, which is the gate above, never
+had a chance of catching it.
+
+**The fix is two layers.**
+
+1. `xaml_probe.cpp` calls `RoClearError()` immediately before every load, so a
+   failure that does not originate its own info has none to inherit and
+   `message()` falls back to the `HRESULT`'s own text. That is less than the
+   runtime could have said, and it is true.
+2. `phase3/harness/error_hygiene.h` is the check that the first layer held. A
+   `Cannot find a Resource with the Name/Key K` message can only be about a `K`
+   the markup asked for, so a `K` that does not occur in the markup is proof the
+   message is not this case's: it is set aside, the `HRESULT` names the failure,
+   and the suspect text is kept behind a label rather than deleted. The test is
+   one-sided on purpose — a key that *is* present proves nothing and is always
+   kept, and a message with no key in it cannot be judged at all. The probe only
+   builds on Windows, so the decision lives in a dependency-free header and is
+   run by `ctest` on Linux as `error_hygiene`, the same arrangement `json_text.h`
+   has for the unescaper bug above.
+
+Neither layer can repair what is already recorded. Until a clean run lands,
+treat every `error` field in `measurements/10.0.26100.33158/` as unreliable
+wherever it names a resource key, and treat the assignment failures — which
+carry no key and so cannot be checked at all — as unattributed. The numbers in
+the same run are unaffected: a case that measured has no message, and nothing
+about restricted error info reaches a `DesiredSize`.
+
+One case is waiting on that run. `L5-xprimitives-int32-width` is now an open
+question rather than an authored assertion, because the only evidence about it
+is contaminated: that run recorded `'Windows.Foundation.Int32' cannot be
+assigned to the type 'Windows.Foundation.Double'` for `FrameworkElement.Width`
+against a harvested `Rectangle` that assigns nothing of the kind, and no other
+case in the corpus could have produced that sentence. It is almost certainly
+this case's answer — an `x:Int32` object element assigned to a `Double` property
+with no converter in between — and almost certainly is not a measurement. The
+layout core keeps widening until a clean run says otherwise.
+
 ## Using the measurements
 
 The measurements are CI output, not repository content: 1,138 files regenerated

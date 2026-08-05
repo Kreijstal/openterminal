@@ -90,6 +90,16 @@ add_executable(probe_text_test tests/probe_text_test.cpp)
 target_include_directories(probe_text_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../harness)
 add_test(NAME probe_text COMMAND probe_text_test)
 
+# Whether a recorded error message is even about the case it was recorded on.
+# The last measurement run served eleven failures a description left on the
+# thread by an earlier case, and a message naming a resource key that the
+# markup never mentions is proof of it. Same reason as above: the probe is
+# unbuildable here, the decision is pure text, so the decision lives in a
+# header and is checked here.
+add_executable(error_hygiene_test tests/error_hygiene_test.cpp)
+target_include_directories(error_hygiene_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../harness)
+add_test(NAME error_hygiene COMMAND error_hygiene_test)
+
 # What a directive does, and what it refuses to do. A deferred element measures
 # nothing by definition, so the corpus cannot hold this to anything: "the
 # element is absent" and "the element is there but zero-sized" produce different
@@ -108,6 +118,7 @@ if(MSVC)
     target_compile_options(resource_tests PRIVATE /W4)
     target_compile_options(style_tests PRIVATE /W4)
     target_compile_options(probe_text_test PRIVATE /W4)
+    target_compile_options(error_hygiene_test PRIVATE /W4)
     target_compile_options(xdirective_tests PRIVATE /W4)
 else()
     target_compile_options(openxaml_layout PRIVATE -Wall -Wextra)
@@ -116,5 +127,6 @@ else()
     target_compile_options(resource_tests PRIVATE -Wall -Wextra)
     target_compile_options(style_tests PRIVATE -Wall -Wextra)
     target_compile_options(probe_text_test PRIVATE -Wall -Wextra)
+    target_compile_options(error_hygiene_test PRIVATE -Wall -Wextra)
     target_compile_options(xdirective_tests PRIVATE -Wall -Wextra)
 endif()
