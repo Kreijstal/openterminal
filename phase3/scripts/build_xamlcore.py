@@ -42,7 +42,7 @@ import json  # noqa: E402
 # fonts.cpp are in it because text measurement reads harvested metrics, and
 # those arrive as JSON.
 LAYOUT_SOURCES = ["element.cpp", "border.cpp", "grid.cpp", "stack_panel.cpp",
-                  "text.cpp", "fonts.cpp", "json.cpp"]
+                  "text.cpp", "fonts.cpp", "json.cpp", "resources.cpp"]
 
 # The classes the DLL claims. Registering a class it does not implement would
 # route a caller to us and then fail at DllGetActivationFactory, which is worse

@@ -17,6 +17,10 @@ add_library(openxaml_layout STATIC
     # JSON, so the reader moves into the library with them.
     src/fonts.cpp
     src/json.cpp
+    # Resource dictionaries, x:Key and {StaticResource}. In the library rather
+    # than beside the markup parser because the resolution rules are worth
+    # testing on their own, without a case file and without a layout pass.
+    src/resources.cpp
 )
 target_include_directories(openxaml_layout PUBLIC src)
 
@@ -26,10 +30,23 @@ add_executable(measure_cases
 )
 target_link_libraries(measure_cases PRIVATE openxaml_layout)
 
+# What a load *refuses* to do. A case that is supposed to fail has no
+# measurement, so the corpus cannot hold the resource system to naming what it
+# could not resolve -- this can.
+enable_testing()
+add_executable(resource_tests
+    tests/resources_test.cpp
+    src/markup.cpp
+)
+target_link_libraries(resource_tests PRIVATE openxaml_layout)
+add_test(NAME resources COMMAND resource_tests)
+
 if(MSVC)
     target_compile_options(openxaml_layout PRIVATE /W4)
     target_compile_options(measure_cases PRIVATE /W4)
+    target_compile_options(resource_tests PRIVATE /W4)
 else()
     target_compile_options(openxaml_layout PRIVATE -Wall -Wextra)
     target_compile_options(measure_cases PRIVATE -Wall -Wextra)
+    target_compile_options(resource_tests PRIVATE -Wall -Wextra)
 endif()
