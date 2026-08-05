@@ -22,8 +22,8 @@ the ones below it:
 | level | subject | authored |
 |-------|---------------------------------------------|-----------|
 | L0 | property system: defaults, local values, precedence | generated |
-| L1 | one element, no children: explicit size, margin, padding | generated |
-| L2 | one parent, one child: alignment × margin × sizing | generated |
+| L1 | one element, no children: explicit size, margin, padding; `Path`, `PathIcon`, `Image` | generated |
+| L2 | one parent, one child: alignment × margin × sizing; `ContentPresenter` content alignment | generated |
 | L3 | panels: `StackPanel`, `Grid` (Auto/Star/Pixel, spans), `Canvas` | generated |
 | L4 | text: `TextBlock` with a pinned font | generated |
 | L5 | resources, styles, templates, precedence | authored |
@@ -177,9 +177,16 @@ A Linux job runs the reimplementation against the same corpus and diffs.
 unlike a page screenshot it says exactly what to fix next.
 
 Against build `10.0.26100.33158`, [`phase3/layout`](../layout/) matches all of
-L1–L3. L4 is implemented but needs [the harvested font metrics](fonts/), which
-are CI output rather than repository content; with the two numbers derivable
-from the measurements alone it matches the 36 cases that need nothing else. The
-levels that are red fail with `the type 'ScrollViewer' is not implemented` and
-the like, rather than with wrong numbers, which is the distinction the metric is
-there to preserve.
+L1–L3 and 33 of the 69 L7 cases. L4 is implemented but needs
+[the harvested font metrics](fonts/), which are CI output rather than
+repository content; with the two numbers derivable from the measurements alone
+it matches the 36 cases that need nothing else. What is still red fails with
+`the type 'ScrollViewer' is not implemented` and the like, rather than with
+wrong numbers, which is the distinction the metric is there to preserve —
+[the layout README](../layout/README.md) ranks the remaining blockers.
+
+195 generated cases in `L1-shape`, `L2-content` and `L3-canvas` are newer than
+the last oracle run and have no measurement yet. A case with no expectation is
+not compared, so they do not move the numbers above in either direction until
+CI fills them in; they exist because the answers they cover currently rest on
+one witness each, or on none.
