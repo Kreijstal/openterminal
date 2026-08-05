@@ -18,7 +18,7 @@ Against build `10.0.26100.33158`:
 | L1 | one element: explicit size, margin | 72 | **72** |
 | L2 | one parent, one child: alignment × margin × sizing | 192 | **192** |
 | L3 | panels: `StackPanel`, `Grid` | 132 | **132** |
-| L4 | text: `TextBlock` | 72 | needs the font metrics — see below |
+| L4 | text: `TextBlock` | 72 | **36** without a font — see below |
 | L7 | Terminal's own pages | 69 | 3 |
 
 "Measured" rather than "cases": L0 has eighteen cases and four
@@ -32,14 +32,18 @@ instead of rejected; the other 66 fail as `the type 'ScrollViewer' is not
 implemented` and the like, rather than as wrong numbers, which is the
 distinction worth keeping: nothing here is quietly approximate.
 
-L4 is implemented and is the one level whose result depends on a file that is
-not in the repository. Text measurement needs Segoe UI's metrics, those metrics
-are harvested on the Windows runner, and without them the text cases fail with
-`no harvested metrics for the font family "Segoe UI"`. With the two numbers that
-can be solved from the recorded measurements alone — the baseline-to-baseline
-distance and the advance width of `M` — the 36 cases that depend on nothing
-else match exactly. See [the fonts directory](../xaml-db/fonts/) and
-[`text.cpp`](src/text.cpp).
+L4 is implemented and is the one level whose result depends on a font. Two of
+the numbers inside that font can be solved from the recorded measurements
+alone — the baseline-to-baseline distance and the advance width of `M` — and
+those are committed, so the 36 cases that depend on nothing else match on a
+checkout with no Segoe UI and no artifact:
+
+    measure_cases phase3/xaml-db/cases /tmp/results phase3/xaml-db/fonts/derived
+
+The other 36 measure a word and a pangram, which pin the sum of several
+advances and not any one of them. They fail naming the character they have no
+advance for, until the harvested metrics are fetched. See
+[the fonts directory](../xaml-db/fonts/) and [`text.cpp`](src/text.cpp).
 
 L0 depends on the same file for the same reason: an inherited `FontSize` is
 only visible as a line height, so the case that measures one needs a font. With
@@ -91,7 +95,10 @@ runs it.
     python3 phase3/scripts/check_layout.py \
         --expected <that directory> --actual /tmp/layout-results --levels L0,L1,L2,L3
 
-The font metrics argument is optional and defaults to `<cases>/../fonts`.
+The font metrics argument is optional and defaults to `<cases>/../fonts`. Pass
+`phase3/xaml-db/fonts/derived` instead to run text against the numbers the
+corpus solved for itself; the two directories are never mixed, and a directory
+holding two sets of metrics for one family is refused rather than resolved.
 
 `measure_cases` takes the same arguments as the oracle probe and writes the same
 files, so the two are directly diffable. A single `g++ -std=c++17 src/*.cpp`
@@ -126,12 +133,16 @@ them star-free.
 Not "to do later" in the vague sense — these are the specific things this code
 does not do, so that a passing run is not read as more than it is:
 
-- **No text.** `TextBlock` bottoms out in DirectWrite. It is quarantined at L4
-  in the corpus for the same reason: text-measurement error would contaminate
-  every panel that contains it.
+- **Text is measured against rules, not a text stack.** `TextBlock` bottoms out
+  in DirectWrite, and there is none here: what [`text.cpp`](src/text.cpp) has
+  is three rules read off the corpus, plus a font's advance widths. No
+  shaping, no kerning, no ligatures, no fallback for a character the metrics do
+  not cover. It stays quarantined at L4 for that reason — text-measurement
+  error would otherwise contaminate every panel that contains it.
 - **No `Canvas`, no `RelativePanel`, no control set.** Only the types the corpus
-  uses. `ContentControl` is here for one reason — it is where L0 sets an
-  inherited `FontSize` — and it is not a real one: it has no template, so the
+  uses.
+  `ContentControl` is here for one reason — it is where L0 sets an inherited
+  `FontSize` — and it is not a real one: it has no template, so the
   `ContentPresenter` that would carry its `Padding` and content alignment is
   absent rather than modelled. Every measured case that uses it has an empty
   `TextBlock` at the origin, which is where `Left`/`Top` and `Stretch` both land

@@ -1,0 +1,45 @@
+{
+ "advances": {
+  "77": 1839
+ },
+ "derivation": "NOT harvested from a font. Every number here was solved out of the recorded L4 measurements by phase3/scripts/derive_font_metrics.py: an empty TextBlock's height is the baseline-to-baseline distance at that font size, and a one-character TextBlock's width is that character's advance, each pinned by being the only integer that reproduces every size the corpus records. What a line height cannot say is how the distance splits between ascender, descender and line gap, so the whole sum is carried on the ascender. Characters the corpus never measures alone are absent on purpose, so the cases needing them fail by name rather than against a guess. phase3/xaml-db/fonts is where real harvested metrics go; this file is not one and must not be used as one.",
+ "family": "Segoe UI",
+ "hhea": {
+  "ascender": 2724,
+  "descender": 0,
+  "line_gap": 0
+ },
+ "provenance": "derived",
+ "schema_version": 1,
+ "units_per_em": 2048,
+ "unsolved": [
+  32,
+  84,
+  97,
+  98,
+  99,
+  100,
+  101,
+  102,
+  103,
+  104,
+  105,
+  106,
+  107,
+  108,
+  109,
+  110,
+  111,
+  112,
+  113,
+  114,
+  115,
+  116,
+  117,
+  118,
+  119,
+  120,
+  121,
+  122
+ ]
+}

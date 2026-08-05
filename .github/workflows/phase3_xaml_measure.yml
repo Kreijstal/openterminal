@@ -114,14 +114,19 @@ jobs:
       # font cannot be committed, so only the metrics travel -- and they are
       # checked against what the recorded measurements independently imply, so
       # a disagreement fails here rather than turning into wrong pixel widths.
+      #
+      # The harvest lands in fonts/, never in fonts/derived/: the two are
+      # different claims about the font and measure_cases refuses a directory
+      # holding both.
       - name: Harvest the font metrics
         shell: bash
         run: |
           python3 -B phase3/scripts/harvest_font_metrics.py \
             "C:/Windows/Fonts/segoeui.ttf" \
             --family "Segoe UI" \
-            --expect phase3/tests/data/font-metrics-from-oracle.json \
+            --expect phase3/xaml-db/fonts/derived/segoe-ui.json \
             --output "phase3/xaml-db/fonts/segoe-ui.json"
+          test -s phase3/xaml-db/fonts/segoe-ui.json
 
       - name: Build the probe
         shell: cmd
@@ -189,6 +194,18 @@ jobs:
             --output "$dest/report.json" \
             --summary "$GITHUB_STEP_SUMMARY"
 
+      # The other direction of the same check. The committed derived metrics
+      # were solved out of measurements like these, and a servicing update that
+      # moves the numbers must move that file too -- otherwise the harvest is
+      # being checked against a stale statement about the font.
+      - name: Derived metrics still follow from the measurements
+        shell: bash
+        run: |
+          python3 -B phase3/scripts/derive_font_metrics.py \
+            --measurements "phase3/xaml-db/measurements/${os_build}" \
+            --output phase3/xaml-db/fonts/derived/segoe-ui.json \
+            --check
+
       # The measurements are not committed -- they are this job's artifact. The
       # digest of them is, so that a servicing update to Windows shows up as a
       # reviewable diff rather than quietly re-baselining every expectation.
@@ -211,11 +228,16 @@ jobs:
       # Its own artifact rather than a directory inside the measurements one,
       # so the layout the fetch script and the layout job already expect does
       # not move.
+      #
+      # The top-level *.json only: fonts/derived/ and the README are committed
+      # and belong to the checkout, and an artifact that carried the derived
+      # numbers alongside the harvested ones would be checking the harvest
+      # against a copy of itself.
       - uses: actions/upload-artifact@v4
-        if: always() && hashFiles('phase3/xaml-db/fonts/**') != ''
+        if: always() && hashFiles('phase3/xaml-db/fonts/*.json') != ''
         with:
           name: xaml-fonts-${{ env.os_build }}
-          path: phase3/xaml-db/fonts/
+          path: phase3/xaml-db/fonts/*.json
 
       # Handed to the layout job, which needs to know both which artifact to
       # download and which directory inside it the oracle wrote.
@@ -311,12 +333,55 @@ jobs:
       # UseLayoutRounding inherits, and how a tie at exactly .5 breaks -- and
       # this step is where the answer will arrive, as a failure. That is the
       # answer, not a regression.
+      #
+      # L4 is not in the list even though it is implemented: it is only as good
+      # as the harvested metrics, and holding it green here would make a change
+      # in the runner's font read as a bug in this repository. The step above
+      # reports it either way. The step below holds it to the derived metrics,
+      # which are committed and therefore ours to be held to.
       - name: Implemented levels still match
         run: |
           python3 -B phase3/scripts/check_layout.py \
             --expected "measurements/${{ needs.measure.outputs.os_build }}" \
             --actual "$RUNNER_TEMP/run1" \
             --levels L0,L1,L2,L3
+
+      # The committed derived metrics, on their own, against the same corpus.
+      # They cover the text cases that need only a line height and the advance
+      # of 'M'; every other text case must fail by naming the advance it has
+      # not got. A case that instead lands close-but-wrong would mean the
+      # derived file had started standing in for a harvest, which is the one
+      # way this half could quietly stop meaning anything.
+      - name: The derived metrics match or say why not
+        run: |
+          "$RUNNER_TEMP/layout-build/measure_cases" \
+            phase3/xaml-db/cases "$RUNNER_TEMP/derived" phase3/xaml-db/fonts/derived
+          python3 -B phase3/scripts/check_layout.py \
+            --expected "measurements/${{ needs.measure.outputs.os_build }}" \
+            --actual "$RUNNER_TEMP/derived" \
+            --levels L4 \
+            --output derived-report.json > /dev/null || true
+          python3 - <<'PY'
+          import json, sys
+          report = json.load(open("derived-report.json"))
+          level = report["levels"].get("L4")
+          if level is None:
+              print("::error::no L4 case was compared; the text corpus has gone missing")
+              sys.exit(1)
+          expected = "implementation failed: the metrics derived from"
+          wrong = [m for m in report["mismatches"] if not m["detail"].startswith(expected)]
+          print(f"L4 on the derived metrics alone: {level['passed']} of "
+                f"{level['cases']} match, {level['failed']} await the harvest")
+          if wrong:
+              print("::error::a text case measured against the derived metrics "
+                    "neither matched nor named a missing advance")
+              for mismatch in wrong[:10]:
+                  print(f"  {mismatch['case_id']} {mismatch['path']}: {mismatch['detail']}")
+              sys.exit(1)
+          if not level["passed"]:
+              print("::error::the derived metrics matched no text case at all")
+              sys.exit(1)
+          PY
 
       - uses: actions/upload-artifact@v4
         if: always() && hashFiles('layout-report.json') != ''

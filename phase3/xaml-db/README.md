@@ -157,12 +157,14 @@ verifying those measurements until the digest lands.
     phase3/xaml-db/
       cases/L<n>-<group>/<id>.json         generated, authored or harvested case specs
       oracles/<os-build>.json              committed digest of what the runtime answered
+      fonts/derived/<family>.json          committed metrics solved from the measurements
       schema/                              JSON Schema for both file kinds
 
     (CI artifact, not committed)
       measurements/<os-build>/<id>.json    filled in by CI on windows-latest
       measurements/<os-build>/report.json  per-level outcome and quarantine
       measurements/<os-build>/oracle.json  build and font identity of that run
+      fonts/<family>.json                  metrics read off the runner's font
 
 The vocabulary inventory is research data, not corpus data, so it lives with the
 other pinned snapshots:
@@ -177,9 +179,10 @@ A Linux job runs the reimplementation against the same corpus and diffs.
 unlike a page screenshot it says exactly what to fix next.
 
 Against build `10.0.26100.33158`, [`phase3/layout`](../layout/) matches all of
-L0–L3. L4 is implemented but needs [the harvested font metrics](fonts/), which
-are CI output rather than repository content; with the two numbers derivable
-from the measurements alone it matches the 36 cases that need nothing else. The
+L0–L3. L4 is implemented and matches 36 of 72 on a bare checkout, against the
+two numbers [solved out of the measurements](fonts/) themselves; the other 36
+need [the harvested font metrics](fonts/), which are CI output rather than
+repository content, and say so by name until those arrive. The
 levels that are red fail with `the type 'ScrollViewer' is not implemented` and
 the like, rather than with wrong numbers, which is the distinction the metric is
 there to preserve.

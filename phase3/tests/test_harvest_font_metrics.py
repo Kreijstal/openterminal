@@ -22,7 +22,10 @@ from harvest_font_metrics import (  # noqa: E402
     Font, FontError, check_against, harvest, line_spacing,
 )
 
-DATA = Path(__file__).resolve().parent / "data"
+# The numbers the corpus can answer on its own, solved by
+# derive_font_metrics.py and committed. The harvest is checked against them.
+DERIVED = (Path(__file__).resolve().parents[1]
+           / "xaml-db" / "fonts" / "derived" / "segoe-ui.json")
 
 
 def cmap_format4(ranges: list[tuple[int, int, int]]) -> bytes:
@@ -137,8 +140,7 @@ class FontModelCheckTest(unittest.TestCase):
     """The cross-check that keeps text.cpp's measurement model falsifiable."""
 
     def setUp(self) -> None:
-        self.expected = json.loads(
-            (DATA / "font-metrics-from-oracle.json").read_text(encoding="utf-8"))
+        self.expected = json.loads(DERIVED.read_text(encoding="utf-8"))
 
     def test_the_derived_fixture_says_what_text_cpp_assumes(self) -> None:
         # If either of these moves, the rules documented in text.cpp and the

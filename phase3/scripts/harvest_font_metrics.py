@@ -184,6 +184,10 @@ def harvest(path: Path, family: str, codepoints: list[int]) -> dict:
     return {
         "schema_version": 1,
         "family": family,
+        # Read out of the font itself, as opposed to the file
+        # derive_font_metrics.py solves out of the recorded measurements. The
+        # two are not interchangeable and the consumer is told which it has.
+        "provenance": "harvested",
         "source": {
             "file": path.name,
             "sha256": hashlib.sha256(data).hexdigest(),

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <vector>
 
@@ -28,6 +29,22 @@ FontMetrics ParseFontMetrics(const std::string& json, const std::string& where) 
     FontMetrics metrics;
     metrics.units_per_em = Number(document, "units_per_em", where);
     if (metrics.units_per_em <= 0.0) throw JsonError(where + ": units_per_em must be positive");
+
+    // Required, not defaulted. A metrics file whose origin has to be guessed at
+    // is exactly the file that must not load: the derived one carries two
+    // numbers and the harvested one carries a font, and they are told apart
+    // nowhere else.
+    const JsonValue& provenance = document.At("provenance");
+    if (provenance.kind != JsonValue::Kind::String)
+        throw JsonError(where + ": \"provenance\" is not a string");
+    if (provenance.string == "harvested") {
+        metrics.provenance = FontProvenance::Harvested;
+    } else if (provenance.string == "derived") {
+        metrics.provenance = FontProvenance::Derived;
+    } else {
+        throw JsonError(where + ": \"" + provenance.string +
+                        "\" is not a provenance; expected \"harvested\" or \"derived\"");
+    }
 
     const JsonValue& hhea = document.At("hhea");
     metrics.ascender = Number(hhea, "ascender", where);
@@ -65,6 +82,7 @@ int LoadFontDirectory(FontLibrary& library, const std::string& directory) {
     std::sort(files.begin(), files.end());
 
     int loaded = 0;
+    std::map<std::string, std::string> claimed;  // family -> the file that claimed it
     for (const fs::path& file : files) {
         std::ifstream in(file, std::ios::binary);
         std::ostringstream buffer;
@@ -75,6 +93,16 @@ int LoadFontDirectory(FontLibrary& library, const std::string& directory) {
         const JsonValue& family = document.At("family");
         if (family.kind != JsonValue::Kind::String)
             throw JsonError(where + ": \"family\" is not a string");
+
+        // Two files for one family used to resolve by sort order, which is how
+        // a derived file dropped next to a harvested one silently wins or
+        // silently loses. Neither answer is defensible, so say so instead.
+        const auto previous = claimed.find(family.string);
+        if (previous != claimed.end()) {
+            throw JsonError(where + ": \"" + family.string + "\" is already claimed by " +
+                            previous->second + "; a family has one set of metrics");
+        }
+        claimed.emplace(family.string, where);
 
         library.Add(family.string, ParseFontMetrics(buffer.str(), where));
         ++loaded;
