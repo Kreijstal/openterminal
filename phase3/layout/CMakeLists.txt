@@ -62,14 +62,24 @@ add_executable(resource_tests
 target_link_libraries(resource_tests PRIVATE openxaml_layout)
 add_test(NAME resources COMMAND resource_tests)
 
+# The oracle probe only builds on Windows, so nothing about it can be checked
+# here -- except the one part that is pure text handling, which is where it had
+# a bug that silently emptied every FontIcon glyph in the corpus. That code
+# lives in a dependency-free header for exactly this reason.
+add_executable(probe_text_test tests/probe_text_test.cpp)
+target_include_directories(probe_text_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../harness)
+add_test(NAME probe_text COMMAND probe_text_test)
+
 if(MSVC)
     target_compile_options(openxaml_layout PRIVATE /W4)
     target_compile_options(measure_cases PRIVATE /W4)
     target_compile_options(property_test PRIVATE /W4)
     target_compile_options(resource_tests PRIVATE /W4)
+    target_compile_options(probe_text_test PRIVATE /W4)
 else()
     target_compile_options(openxaml_layout PRIVATE -Wall -Wextra)
     target_compile_options(measure_cases PRIVATE -Wall -Wextra)
     target_compile_options(property_test PRIVATE -Wall -Wextra)
     target_compile_options(resource_tests PRIVATE -Wall -Wextra)
+    target_compile_options(probe_text_test PRIVATE -Wall -Wextra)
 endif()

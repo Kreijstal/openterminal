@@ -28,6 +28,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -37,6 +39,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include "json_text.h"
 
 namespace fs = std::filesystem;
 using namespace winrt;
@@ -54,29 +58,10 @@ std::string slurp(const fs::path& p) {
     return ss.str();
 }
 
-std::string json_unescape(const std::string& s) {
-    std::string out;
-    for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] != '\\') { out += s[i]; continue; }
-        if (++i >= s.size()) break;
-        switch (s[i]) {
-            case 'n': out += '\n'; break;
-            case 't': out += '\t'; break;
-            case 'r': out += '\r'; break;
-            case 'u': {
-                // Only the BMP escapes our generator can emit.
-                if (i + 4 < s.size()) {
-                    int cp = std::stoi(s.substr(i + 1, 4), nullptr, 16);
-                    if (cp < 0x80) out += static_cast<char>(cp);
-                    i += 4;
-                }
-                break;
-            }
-            default: out += s[i];
-        }
-    }
-    return out;
-}
+// Unescaping lives in json_text.h so that it can be tested on Linux, which is
+// the only place phase3 has a test suite -- see the header for the bug that
+// made that worth doing.
+using openxaml_harness::JsonUnescape;
 
 std::optional<std::string> string_field(const std::string& doc, const std::string& key) {
     auto k = "\"" + key + "\"";
@@ -92,7 +77,7 @@ std::optional<std::string> string_field(const std::string& doc, const std::strin
         if (doc[i] == '"') break;
         out += doc[i];
     }
-    return json_unescape(out);
+    return JsonUnescape(out);
 }
 
 // available_size is [x, y] where either may be the string "Infinity", because
@@ -258,6 +243,27 @@ int wmain(int argc, wchar_t** argv) {
             walk(el, "/" + type_name(el), tree, first);
         } catch (hresult_error const& e) {
             error = to_string(e.message());
+            // A rejection with no message would be written out as an empty
+            // error, and an empty error reads as a success everywhere
+            // downstream. The code always says something.
+            if (error.empty()) {
+                std::ostringstream code;
+                code << "the runtime refused the markup with hresult 0x"
+                     << std::hex << static_cast<uint32_t>(e.code()) << " and no message";
+                error = code.str();
+            }
+        } catch (std::exception const& e) {
+            // The corpus is growing types the runtime has never been asked
+            // about here -- ScrollViewer with conflicting scroll modes,
+            // FontIcon glyphs an icon font may not have -- and a rejection that
+            // did not arrive as an hresult_error used to take the whole run
+            // down with it, losing every case after it as well as every case
+            // before. One case is allowed to be a finding; none is allowed to
+            // be the end of the run.
+            error = std::string("std::exception: ") + e.what();
+        } catch (...) {
+            error = "the runtime threw something that is neither an "
+                    "hresult_error nor a std::exception";
         }
 
         std::ostringstream o;
