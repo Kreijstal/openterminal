@@ -1,0 +1,20 @@
+{
+ "environment": {
+  "available_size": [
+   400.0,
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "props",
+ "id": "L0-props-rounding-inherited",
+ "level": 0,
+ "markup": "<Border xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" UseLayoutRounding=\"False\"><Border Width=\"120.25\"/></Border>",
+ "note": "does UseLayoutRounding reach a child that never set it",
+ "requires": [],
+ "schema_version": 1
+}

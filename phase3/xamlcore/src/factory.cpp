@@ -54,44 +54,45 @@ private:
 // element, not just a Grid's children, so they are stored on the element and
 // read by whichever Grid happens to be the parent.
 //
-// The `*Property` getters stay E_NOTIMPL: handing back a DependencyProperty
-// would imply a property system that does not exist here. Get/Set are the
-// whole of what the attached properties support.
+// The `*Property` getters stay E_NOTIMPL. There is a property system behind
+// this now -- Get and Set go through it -- but its DependencyProperty is a
+// plain C++ object and the ABI wants a Windows.UI.Xaml.DependencyProperty,
+// which is a runtime class this DLL does not project.
 class GridFactory : public Factory<GridObject>, public abi::NotImpl_IGridStatics {
 public:
     GridFactory() : Factory(L"Windows.UI.Xaml.Controls.Grid") {}
 
     HRESULT STDMETHODCALLTYPE GetRow(ABI::Windows::UI::Xaml::IFrameworkElement* element,
                                      INT32* value) override {
-        return Read(element, value, &openxaml::Element::grid_row);
+        return Read(element, value, openxaml::Grid::RowProperty());
     }
     HRESULT STDMETHODCALLTYPE SetRow(ABI::Windows::UI::Xaml::IFrameworkElement* element,
                                      INT32 value) override {
-        return Write(element, value, &openxaml::Element::grid_row);
+        return Write(element, value, openxaml::Grid::RowProperty());
     }
     HRESULT STDMETHODCALLTYPE GetColumn(ABI::Windows::UI::Xaml::IFrameworkElement* element,
                                         INT32* value) override {
-        return Read(element, value, &openxaml::Element::grid_column);
+        return Read(element, value, openxaml::Grid::ColumnProperty());
     }
     HRESULT STDMETHODCALLTYPE SetColumn(ABI::Windows::UI::Xaml::IFrameworkElement* element,
                                         INT32 value) override {
-        return Write(element, value, &openxaml::Element::grid_column);
+        return Write(element, value, openxaml::Grid::ColumnProperty());
     }
     HRESULT STDMETHODCALLTYPE GetRowSpan(ABI::Windows::UI::Xaml::IFrameworkElement* element,
                                          INT32* value) override {
-        return Read(element, value, &openxaml::Element::grid_row_span);
+        return Read(element, value, openxaml::Grid::RowSpanProperty());
     }
     HRESULT STDMETHODCALLTYPE SetRowSpan(ABI::Windows::UI::Xaml::IFrameworkElement* element,
                                          INT32 value) override {
-        return Write(element, value, &openxaml::Element::grid_row_span);
+        return Write(element, value, openxaml::Grid::RowSpanProperty());
     }
     HRESULT STDMETHODCALLTYPE GetColumnSpan(ABI::Windows::UI::Xaml::IFrameworkElement* element,
                                             INT32* value) override {
-        return Read(element, value, &openxaml::Element::grid_column_span);
+        return Read(element, value, openxaml::Grid::ColumnSpanProperty());
     }
     HRESULT STDMETHODCALLTYPE SetColumnSpan(ABI::Windows::UI::Xaml::IFrameworkElement* element,
                                             INT32 value) override {
-        return Write(element, value, &openxaml::Element::grid_column_span);
+        return Write(element, value, openxaml::Grid::ColumnSpanProperty());
     }
 
     // IGridStatics arrives through a base of its own, so its copies of the
@@ -109,7 +110,7 @@ protected:
     }
 
 private:
-    using Field = int openxaml::Element::*;
+    using Attached = const openxaml::DependencyProperty&;
 
     static openxaml::Element* Unwrap(ABI::Windows::UI::Xaml::IFrameworkElement* element) {
         if (!element) return nullptr;
@@ -124,19 +125,19 @@ private:
     }
 
     static HRESULT Read(ABI::Windows::UI::Xaml::IFrameworkElement* element, INT32* value,
-                        Field field) {
+                        Attached property) {
         if (!value) return E_POINTER;
         openxaml::Element* layout = Unwrap(element);
         if (!layout) return E_INVALIDARG;
-        *value = layout->*field;
+        *value = layout->GetInt(property);
         return S_OK;
     }
 
     static HRESULT Write(ABI::Windows::UI::Xaml::IFrameworkElement* element, INT32 value,
-                         Field field) {
+                         Attached property) {
         openxaml::Element* layout = Unwrap(element);
         if (!layout) return E_INVALIDARG;
-        layout->*field = value;
+        layout->SetValue(property, value);
         return S_OK;
     }
 };

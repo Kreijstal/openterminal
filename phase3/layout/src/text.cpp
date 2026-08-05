@@ -46,9 +46,17 @@ double AsFloat(double value) {
     return static_cast<double>(static_cast<float>(value));
 }
 
-// DesiredSize is ceiled, not rounded: the corpus has a TextBlock measuring
-// 89.2167 that reports 90, which rounding cannot produce. Checked against all
-// 144 recorded L4 numbers -- both axes of all 72 cases -- with no exception.
+// The desired *width* is ceiled, and only the width.
+//
+// The corpus has a TextBlock whose text measures 89.2167 and which reports a
+// desired width of 90, which rounding cannot produce. The height does the
+// opposite: an empty TextBlock at size 22 measures 29.2617 and reports 29,
+// which ceiling cannot produce. Nothing in L4 distinguishes the two -- every
+// text height there has a fractional part above a half, where ceiling and
+// rounding agree -- so the asymmetry only shows up once L0 measures a font
+// size L4 does not use. The 29 is not a second rounding rule either: heights
+// are left alone here and the framework's ordinary layout rounding, which
+// every element's desired size goes through, produces it.
 double CeilLayout(double value, double dpi_scale) {
     const double scaled = value * dpi_scale;
     const double nearest = std::nearbyint(scaled);
@@ -211,23 +219,46 @@ FontLibrary& FontLibrary::Default() {
 
 // --- TextBlock ----------------------------------------------------------------
 
+namespace {
+
+const DependencyProperty* const kText =
+    RegisterProperty("TextBlock", "Text", {std::string(), false, true});
+const DependencyProperty* const kTextWrapping = RegisterProperty(
+    "TextBlock", "TextWrapping", {static_cast<int>(TextWrapping::NoWrap), false, true});
+
+// TextProperties is where FontSize, FontFamily and Foreground are registered:
+// a TextBlock carries them without being a Control. See element.h.
+const std::vector<std::string> kOwners = {"TextBlock", kTextPropertyOwner, "FrameworkElement",
+                                          "UIElement"};
+
+}  // namespace
+
+const DependencyProperty& TextBlock::TextProperty() { return *kText; }
+const DependencyProperty& TextBlock::TextWrappingProperty() { return *kTextWrapping; }
+
+const std::vector<std::string>& TextBlock::Owners() { return kOwners; }
+
 Size TextBlock::LayoutText(double limit) const {
-    const FontMetrics* font = FontLibrary::Default().Find(font_family);
+    const std::string& family = font_family();
+    const double size = font_size();
+
+    const FontMetrics* font = FontLibrary::Default().Find(family);
     if (!font) {
-        throw TextError("no harvested metrics for the font family \"" + font_family +
+        throw TextError("no harvested metrics for the font family \"" + family +
                         "\"; see phase3/xaml-db/fonts");
     }
     if (font->units_per_em <= 0.0) throw TextError("the font metrics have no units per em");
 
-    const double spacing = font->LineSpacing() * font_size / font->units_per_em;
+    const double spacing = font->LineSpacing() * size / font->units_per_em;
 
     // An empty TextBlock still occupies a line, and that line keeps the
     // unsnapped height. This is the one place the two differ, and the corpus
     // records both: 15.9609 empty against 15.96 with text, at size 12.
-    if (text.empty()) return {0.0, AsFloat(spacing)};
+    const std::string& content = text();
+    if (content.empty()) return {0.0, AsFloat(spacing)};
 
-    const std::vector<Glyph> glyphs = Shape(text, *font, font_size);
-    const double effective_limit = text_wrapping == TextWrapping::Wrap ? limit : kInfinity;
+    const std::vector<Glyph> glyphs = Shape(content, *font, size);
+    const double effective_limit = text_wrapping() == TextWrapping::Wrap ? limit : kInfinity;
     const std::vector<double> lines = BreakLines(glyphs, effective_limit);
 
     const double line_height = SnapText(spacing);
@@ -242,7 +273,7 @@ Size TextBlock::LayoutText(double limit) const {
 
 Size TextBlock::MeasureOverride(Size available) {
     const Size text_size = LayoutText(available.width);
-    return {CeilLayout(text_size.width, dpi_scale_x), CeilLayout(text_size.height, dpi_scale_y)};
+    return {CeilLayout(text_size.width, dpi_scale_x), text_size.height};
 }
 
 Size TextBlock::ArrangeOverride(Size final_size) {

@@ -10,6 +10,7 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "element.h"
 
@@ -54,11 +55,30 @@ enum class TextWrapping { NoWrap, Wrap };
 class TextBlock : public Element {
 public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.TextBlock"; }
+    static const std::vector<std::string>& Owners();
+    const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
 
-    std::string text;
-    std::string font_family = "Segoe UI";
-    double font_size = 14.0;
-    TextWrapping text_wrapping = TextWrapping::NoWrap;
+    const std::string& text() const { return GetString(TextProperty()); }
+    void set_text(std::string value) { SetValue(TextProperty(), std::move(value)); }
+    TextWrapping text_wrapping() const {
+        return static_cast<TextWrapping>(GetInt(TextWrappingProperty()));
+    }
+    void set_text_wrapping(TextWrapping value) {
+        SetValue(TextWrappingProperty(), static_cast<int>(value));
+    }
+
+    // Inherited, and shared with Control -- see element.h. A TextBlock with no
+    // FontSize of its own reads the one set on the ContentControl above it,
+    // which is the whole of what L0-props-inherited-fontsize measures.
+    double font_size() const { return GetDouble(FontSizeProperty()); }
+    void set_font_size(double value) { SetValue(FontSizeProperty(), value); }
+    const std::string& font_family() const { return GetString(FontFamilyProperty()); }
+    void set_font_family(std::string value) {
+        SetValue(FontFamilyProperty(), std::move(value));
+    }
+
+    static const DependencyProperty& TextProperty();
+    static const DependencyProperty& TextWrappingProperty();
 
 protected:
     Size MeasureOverride(Size available) override;

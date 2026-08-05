@@ -1,0 +1,190 @@
+// The dependency-property engine.
+//
+// A XAML property is not a field. Its effective value is chosen from a
+// precedence chain rather than stored once: a local value beats one inherited
+// from an ancestor, which beats the default the property was registered with.
+// Clearing a local value restores whatever was underneath it, which a field
+// cannot express -- for most types there is no value that means "unset", and
+// zero is a perfectly good Opacity.
+//
+// Ported in shape from dotnet/wpf's DependencyObject and its property store
+// (MIT, 2ca037562c207924e53cfcc99286e523d3694de3), reduced to the two sources
+// the corpus can currently see. WPF's chain has a dozen entries -- coercion,
+// animation, triggers, styles, template parents -- and every one of them that
+// is missing here is a level of the corpus that has not been reached yet.
+// Local and inherited are looked up in that order in one place, so a later
+// source slots in between them rather than being threaded through callers.
+
+#ifndef OPENXAML_PROPERTY_H
+#define OPENXAML_PROPERTY_H
+
+#include <map>
+#include <stdexcept>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include "layout.h"
+
+namespace openxaml {
+
+// Thrown for a property used against its own registration -- read as the wrong
+// type, or registered twice. Never for anything a case can write: markup that
+// names a property no type has is a MarkupError, which is what the runtime
+// reports for it.
+class PropertyError : public std::runtime_error {
+public:
+    explicit PropertyError(const std::string& what) : std::runtime_error(what) {}
+};
+
+// What a property can hold. XAML's store is `object`; this is the closed set
+// the corpus can write, which keeps values copyable and comparable without
+// dragging in a type system. Enumerations ride as int, the way a boxed enum
+// does in the runtime.
+using PropertyValue = std::variant<double, int, bool, Thickness, std::string>;
+
+// Whether two values are the same as far as anything reading the store is
+// concerned. NaN needs the special case rather than `==`: it is how XAML
+// spells Auto, and NaN != NaN would report an unset Width as changing every
+// time it was assigned.
+bool SameValue(const PropertyValue& a, const PropertyValue& b);
+
+struct PropertyMetadata {
+    PropertyValue default_value;
+
+    // Inherited properties fall through to an ancestor when they have no local
+    // value -- FontSize set on a Control reaches the content inside it. This
+    // is fixed at registration, as FrameworkPropertyMetadata.Inherits is: it
+    // is a fact about the property, not about an object.
+    bool inherits = false;
+
+    // Changing it makes the element's measured size stale. WPF spells this
+    // FrameworkPropertyMetadataOptions.AffectsMeasure, and it is the only
+    // thing the store has to tell layout.
+    bool affects_measure = false;
+};
+
+// The identity of a property. Registered once and referred to by address, the
+// way DependencyProperty.Register hands back a singleton -- two properties
+// with the same name on different owners are different properties, and the
+// name alone never identifies one.
+class DependencyProperty {
+public:
+    const std::string& owner() const { return owner_; }
+    const std::string& name() const { return name_; }
+    const PropertyValue& default_value() const { return metadata_.default_value; }
+    bool inherits() const { return metadata_.inherits; }
+    bool affects_measure() const { return metadata_.affects_measure; }
+
+    // Dense index, assigned at registration, which is what an object's store
+    // is keyed by. Comparing names on every read would work and would be the
+    // slow way to do it.
+    size_t index() const { return index_; }
+
+    DependencyProperty(const DependencyProperty&) = delete;
+    DependencyProperty& operator=(const DependencyProperty&) = delete;
+
+    DependencyProperty(std::string owner, std::string name, PropertyMetadata metadata,
+                       size_t index)
+        : owner_(std::move(owner)),
+          name_(std::move(name)),
+          metadata_(std::move(metadata)),
+          index_(index) {}
+
+private:
+    std::string owner_;
+    std::string name_;
+    PropertyMetadata metadata_;
+    size_t index_ = 0;
+};
+
+// Registers a property against an owner and returns the singleton that
+// identifies it -- never null. Registering the same owner and name twice is a
+// mistake in the implementation rather than a second property, and throws.
+//
+// A pointer rather than a reference because that is what the registrations
+// hold: a namespace-scope reference bound to a function result is what a
+// dangling reference looks like, whether or not it is one.
+const DependencyProperty* RegisterProperty(std::string owner, std::string name,
+                                           PropertyMetadata metadata);
+
+// The property a markup attribute names, or nullptr.
+//
+// `owners` is the object's owner chain, most derived first. A plain name is
+// resolved against it, which is what makes `FontSize` a property of a Control
+// and not of a StackPanel. A dotted name is an attached property and names its
+// own owner, so it resolves globally and can be written on anything -- exactly
+// the rule the XAML parser applies.
+const DependencyProperty* FindProperty(const std::vector<std::string>& owners,
+                                       const std::string& name);
+
+// Every property registered with inherits = true. The inheritance walk needs
+// the list rather than a per-object one, because re-parenting has to consider
+// properties the object itself has never been told about.
+const std::vector<const DependencyProperty*>& InheritedProperties();
+
+// Anything that carries dependency properties. Element derives from it; so
+// would a Style or a resource dictionary entry, which is the reason it is not
+// folded into Element.
+class DependencyObject {
+public:
+    virtual ~DependencyObject() = default;
+
+    // The property owners this object answers to, most derived first --
+    // {"Border", "FrameworkElement", "UIElement"}. It is the type chain as far
+    // as the property system is concerned, and nothing else here needs one.
+    virtual const std::vector<std::string>& PropertyOwners() const = 0;
+
+    // The effective value: local if there is one, then inherited from the
+    // ancestor chain if the property inherits, then the registered default.
+    const PropertyValue& GetValue(const DependencyProperty& property) const;
+
+    void SetValue(const DependencyProperty& property, PropertyValue value);
+
+    // Removes the local value, exposing whatever was underneath it. Not the
+    // same as setting the default: an inherited property goes back to reading
+    // its ancestor.
+    void ClearValue(const DependencyProperty& property);
+
+    bool HasLocalValue(const DependencyProperty& property) const;
+
+    // Typed reads. They throw if the property does not hold that type, which
+    // is a registration mistake rather than anything a case can cause.
+    double GetDouble(const DependencyProperty& property) const;
+    int GetInt(const DependencyProperty& property) const;
+    bool GetBool(const DependencyProperty& property) const;
+    const Thickness& GetThickness(const DependencyProperty& property) const;
+    const std::string& GetString(const DependencyProperty& property) const;
+
+    // The object inherited properties read through. Set when a child is
+    // attached to a parent; every property that inherits is re-evaluated
+    // across the subtree, so an element that changes hands does not keep
+    // reading values from where it used to be.
+    void SetInheritanceParent(DependencyObject* parent);
+    DependencyObject* inheritance_parent() const { return inheritance_parent_; }
+
+protected:
+    // Called after an effective value moved, whatever moved it -- a local set,
+    // a clear, or an ancestor changing under it.
+    virtual void OnPropertyChanged(const DependencyProperty& property);
+
+    // The objects an inherited value flows on to. Kept separate from the
+    // layout children so the walk does not depend on anything below the
+    // property system.
+    virtual std::vector<DependencyObject*> InheritanceChildren() const { return {}; }
+
+private:
+    // Notifies this object and its subtree that an inherited property may have
+    // moved, stopping wherever a local value shadows it.
+    void InvalidateInherited(const DependencyProperty& property, const PropertyValue& before);
+    void InvalidateAllInherited(const std::vector<PropertyValue>& before);
+
+    // Sparse on purpose: an element that sets two attributes stores two
+    // values, not one slot per registered property.
+    std::map<size_t, PropertyValue> local_;
+    DependencyObject* inheritance_parent_ = nullptr;
+};
+
+}  // namespace openxaml
+
+#endif  // OPENXAML_PROPERTY_H

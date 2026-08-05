@@ -1,0 +1,20 @@
+{
+ "environment": {
+  "available_size": [
+   400.0,
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "props",
+ "id": "L0-props-inherited-fontfamily",
+ "level": 0,
+ "markup": "<ContentControl xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" FontFamily=\"Segoe UI\"><TextBlock/></ContentControl>",
+ "note": "FontFamily inherits, but only one family's metrics are harvested, so no number separates this from the default -- it shows the markup loads",
+ "requires": [],
+ "schema_version": 1
+}

@@ -264,6 +264,12 @@ jobs:
           cmake -S phase3/layout -B "$RUNNER_TEMP/layout-build" -DCMAKE_BUILD_TYPE=Release
           cmake --build "$RUNNER_TEMP/layout-build" --parallel
 
+      # The property system, on the parts a measurement cannot reach: a tree of
+      # numbers cannot say whether a value was inherited or copied, or whether
+      # clearing one restored the ancestor or the default.
+      - name: The property system holds
+        run: ctest --test-dir "$RUNNER_TEMP/layout-build" --output-on-failure
+
       # Twice, into separate directories. The oracle is held to determinism and
       # so is the implementation -- a layout that moves between runs cannot be
       # compared against anything.
@@ -297,12 +303,20 @@ jobs:
 
       # The levels the implementation claims. A regression here is a real
       # failure, which is what makes the claim worth anything.
+      #
+      # L0 is gated on the cases that have a measurement; a case with none is
+      # no expectation at all, so the thirteen authored ahead of the next
+      # oracle run do not count either way. When that run lands, three of them
+      # ask questions the implementation currently guesses at -- whether
+      # UseLayoutRounding inherits, and how a tie at exactly .5 breaks -- and
+      # this step is where the answer will arrive, as a failure. That is the
+      # answer, not a regression.
       - name: Implemented levels still match
         run: |
           python3 -B phase3/scripts/check_layout.py \
             --expected "measurements/${{ needs.measure.outputs.os_build }}" \
             --actual "$RUNNER_TEMP/run1" \
-            --levels L1,L2,L3
+            --levels L0,L1,L2,L3
 
       - uses: actions/upload-artifact@v4
         if: always() && hashFiles('layout-report.json') != ''

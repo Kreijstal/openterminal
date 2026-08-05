@@ -48,6 +48,14 @@ struct Thickness {
     double vertical() const { return top + bottom; }
 };
 
+// Exact, not AreClose: this answers "is the stored value the same value", which
+// the property store asks before deciding that anything changed. Layout's own
+// comparisons are the tolerant ones further down.
+inline bool operator==(const Thickness& a, const Thickness& b) {
+    return a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
+}
+inline bool operator!=(const Thickness& a, const Thickness& b) { return !(a == b); }
+
 enum class HorizontalAlignment { Left, Center, Right, Stretch };
 enum class VerticalAlignment { Top, Center, Bottom, Stretch };
 enum class Orientation { Horizontal, Vertical };
@@ -84,9 +92,10 @@ inline bool IsZero(double v) { return std::abs(v) < 10.0 * kDoubleEpsilon; }
 
 inline double RoundLayoutValue(double value, double dpi_scale) {
     // nearbyint under the default rounding mode is round-half-to-even, which
-    // is what the ported source's Math.Round does. No case in the corpus lands
-    // on an exact half, so this tie-break is not yet confirmed against the
-    // runtime -- it is the ported behaviour, not a measured one.
+    // is what the ported source's Math.Round does. The tie-break is not
+    // confirmed against the runtime -- it is the ported behaviour, not a
+    // measured one. L0-props-rounding-half is the case authored to settle it,
+    // and has no measurement yet.
     if (!AreClose(dpi_scale, 1.0)) {
         const double scaled = std::nearbyint(value * dpi_scale) / dpi_scale;
         // Scaling can overflow a very large value into infinity; keeping the

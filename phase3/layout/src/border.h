@@ -14,16 +14,23 @@ namespace openxaml {
 class Border : public Element {
 public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.Border"; }
+    static const std::vector<std::string>& Owners();
+    const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
 
-    void SetChild(std::unique_ptr<Element> child) { child_ = std::move(child); }
+    void SetChild(std::unique_ptr<Element> child);
 
     std::vector<Element*> Children() const override {
         if (!child_) return {};
         return {child_.get()};
     }
 
-    Thickness border_thickness;
-    Thickness padding;
+    const Thickness& border_thickness() const { return GetThickness(BorderThicknessProperty()); }
+    void set_border_thickness(Thickness value) { SetValue(BorderThicknessProperty(), value); }
+    const Thickness& padding() const { return GetThickness(PaddingProperty()); }
+    void set_padding(Thickness value) { SetValue(PaddingProperty(), value); }
+
+    static const DependencyProperty& BorderThicknessProperty();
+    static const DependencyProperty& PaddingProperty();
 
 protected:
     Size MeasureOverride(Size available) override;
