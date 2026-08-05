@@ -830,6 +830,493 @@ def level5() -> Iterator[dict[str, Any]]:
                        requires=requires)
 
 
+# --- L5: styles ---------------------------------------------------------------
+# The precedence layer between a local value and the default, and the second
+# thing at L5 that is authored rather than crossed. Same shape as the resource
+# series above and for the same reasons: a style resolves to the same value at
+# every available size, so what varies is the rule rather than an axis, and
+# every scenario we are confident about is emitted twice -- once behind a
+# style, once with the same values written on the element -- so that the pair
+# can be held to measuring identically before the oracle has seen either.
+#
+# That twinning is worth more here than it was for resources. A resource that
+# resolves wrongly lands on a wrong number; a style that is applied at the wrong
+# *precedence* lands on a number that is right in the case that was written and
+# wrong in the one that was not. The pairs below deliberately include both
+# directions -- a local value that must beat the style, and a style that must
+# beat both the default and an inherited value -- because only the pair catches
+# an implementation that stored a setter as a local value and looked correct.
+#
+# The value precedence the pairs assume, highest first:
+#
+#     local  >  style setter  >  inherited  >  registered default
+#
+# which is the core's own list -- "1. Local value 2. Style 3. Built-in style
+# 4. Default value" in CDependencyObject::EvaluateBaseValue -- with inheritance
+# sitting where the core puts it, as a read-time walk that stops at the first
+# ancestor whose value is not still the default. A style setter makes a value
+# non-default, so it both beats an inherited value and is itself inherited by
+# descendants. There is no built-in-style layer here: nothing in this corpus has
+# a control template, so nothing has a generic.xaml style to carry.
+
+
+def l5_style(target: str, setters: str, key: str | None = None,
+             based_on: str | None = None, wrapper: bool = False) -> str:
+    head = f'<Style TargetType="{target}"'
+    if key:
+        head += f' x:Key="{key}"'
+    if based_on:
+        head += f' BasedOn="{{StaticResource {based_on}}}"'
+    body = f"<Style.Setters>{setters}</Style.Setters>" if wrapper else setters
+    return f"{head}>{body}</Style>"
+
+
+def setter(prop: str, value: str) -> str:
+    return f'<Setter Property="{prop}" Value="{value}"/>'
+
+
+# (slug, note, requires, styled markup, inline twin or None, question)
+def l5_style_scenarios() -> list[tuple[str, str, list[str], str, str | None, str | None]]:
+    text_attrs = 'FontFamily="Segoe UI"'
+    columns = ('<Grid.ColumnDefinitions><ColumnDefinition Width="40"/>'
+               '<ColumnDefinition Width="*"/></Grid.ColumnDefinitions>')
+
+    return [
+        (
+            "explicit-key",
+            "a Style behind an x:Key, referenced by Style=\"{StaticResource ...}\"",
+            ["L1-sizing"],
+            l5_document("Grid", l5_resources("Grid", l5_style(
+                "Border", setter("Width", "60") + setter("Height", "30"), key="Boxy"))
+                + '<Border Style="{StaticResource Boxy}"/>'),
+            l5_document("Grid", '<Border Width="60" Height="30"/>'),
+            None,
+        ),
+        (
+            "implicit-target-type",
+            "a Style with a TargetType and no x:Key reaches every element of "
+            "that type in the subtree below the dictionary",
+            ["L3-stack"],
+            l5_document("StackPanel", l5_resources("StackPanel", l5_style(
+                "Border", setter("Width", "60") + setter("Height", "30")))
+                + "<Border/><Border/>", attributes='Orientation="Horizontal"'),
+            l5_document("StackPanel",
+                        '<Border Width="60" Height="30"/><Border Width="60" Height="30"/>',
+                        attributes='Orientation="Horizontal"'),
+            None,
+        ),
+        (
+            "setters-layout-properties",
+            "one style setting five of the properties layout reads: Width, "
+            "Height, Margin, Padding and HorizontalAlignment",
+            ["L2-align"],
+            l5_document("Grid", l5_resources("Grid", l5_style("Border",
+                        setter("Width", "80") + setter("Height", "40")
+                        + setter("Margin", "4,8,12,16") + setter("Padding", "6")
+                        + setter("HorizontalAlignment", "Right"), key="Chrome"))
+                + '<Border Style="{StaticResource Chrome}">'
+                  '<Border Width="10" Height="10"/></Border>'),
+            l5_document("Grid",
+                        '<Border Width="80" Height="40" Margin="4,8,12,16" Padding="6"'
+                        ' HorizontalAlignment="Right"><Border Width="10" Height="10"/></Border>'),
+            None,
+        ),
+        (
+            "local-beats-style",
+            "a value written on the element wins over the style's setter for "
+            "the same property, and only for that property",
+            ["L1-sizing"],
+            l5_document("Grid", l5_resources("Grid", l5_style(
+                "Border", setter("Width", "60") + setter("Height", "30"), key="Boxy"))
+                + '<Border Style="{StaticResource Boxy}" Width="20"/>'),
+            l5_document("Grid", '<Border Width="20" Height="30"/>'),
+            None,
+        ),
+        (
+            "style-beats-default",
+            "a setter beats the registered default, and a property no setter "
+            "names keeps it -- Width stays Auto and the Border measures empty",
+            ["L1-sizing"],
+            l5_document("Grid", l5_resources("Grid", l5_style(
+                "Border", setter("Height", "30") + setter("HorizontalAlignment", "Left"),
+                key="Short")) + '<Border Style="{StaticResource Short}"/>'),
+            l5_document("Grid", '<Border Height="30" HorizontalAlignment="Left"/>'),
+            None,
+        ),
+        (
+            "based-on-inherited-setter",
+            "a BasedOn style carries its base's setters as well as its own",
+            ["L1-sizing"],
+            l5_document("Grid", l5_resources("Grid",
+                        l5_style("Border", setter("Width", "60"), key="Base")
+                        + l5_style("Border", setter("Height", "24"), key="Derived",
+                                   based_on="Base"))
+                + '<Border Style="{StaticResource Derived}"/>'),
+            l5_document("Grid", '<Border Width="60" Height="24"/>'),
+            None,
+        ),
+        (
+            "based-on-overridden-setter",
+            "a BasedOn style's own setter replaces the base's for the same "
+            "property, and leaves the base's other setters alone",
+            ["L1-sizing"],
+            l5_document("Grid", l5_resources("Grid",
+                        l5_style("Border", setter("Width", "60") + setter("Height", "24"),
+                                 key="Base")
+                        + l5_style("Border", setter("Width", "100"), key="Derived",
+                                   based_on="Base"))
+                + '<Border Style="{StaticResource Derived}"/>'),
+            l5_document("Grid", '<Border Width="100" Height="24"/>'),
+            None,
+        ),
+        (
+            "based-on-chain",
+            "three styles deep, with an override in the middle and another at "
+            "the end",
+            ["L1-sizing"],
+            l5_document("Grid", l5_resources("Grid",
+                        l5_style("Border", setter("Width", "60"), key="A")
+                        + l5_style("Border", setter("Height", "24"), key="B", based_on="A")
+                        + l5_style("Border", setter("Width", "100") + setter("Margin", "4"),
+                                   key="C", based_on="B"))
+                + '<Border Style="{StaticResource C}"/>'),
+            l5_document("Grid", '<Border Width="100" Height="24" Margin="4"/>'),
+            None,
+        ),
+        (
+            "implicit-shadowing",
+            "an inner dictionary's implicit style wins for its subtree and "
+            "only for its subtree",
+            ["L3-stack"],
+            l5_document("Grid", l5_resources("Grid", l5_style(
+                "Border", setter("Width", "60") + setter("Height", "20")))
+                + '<StackPanel HorizontalAlignment="Left">'
+                + l5_resources("StackPanel", l5_style(
+                    "Border", setter("Width", "100") + setter("Height", "20")))
+                + "<Border/></StackPanel>"
+                + '<Border HorizontalAlignment="Right" VerticalAlignment="Bottom"/>'),
+            l5_document("Grid",
+                        '<StackPanel HorizontalAlignment="Left">'
+                        '<Border Width="100" Height="20"/></StackPanel>'
+                        '<Border Width="60" Height="20" HorizontalAlignment="Right"'
+                        ' VerticalAlignment="Bottom"/>'),
+            None,
+        ),
+        (
+            "implicit-scope-limit",
+            "an implicit style declared on a panel does not reach a sibling of "
+            "that panel",
+            ["L3-stack"],
+            l5_document("Grid", '<StackPanel HorizontalAlignment="Left">'
+                        + l5_resources("StackPanel", l5_style(
+                            "Border", setter("Width", "100") + setter("Height", "20")))
+                        + "<Border/></StackPanel>"
+                        + '<Border Width="30" Height="20" HorizontalAlignment="Right"/>'),
+            l5_document("Grid",
+                        '<StackPanel HorizontalAlignment="Left">'
+                        '<Border Width="100" Height="20"/></StackPanel>'
+                        '<Border Width="30" Height="20" HorizontalAlignment="Right"/>'),
+            None,
+        ),
+        (
+            "explicit-beats-implicit",
+            "an element with a Style= is not also given the implicit style for "
+            "its type; the two do not merge, and the sibling without one still "
+            "gets the implicit style",
+            ["L2-align"],
+            l5_document("Grid", l5_resources("Grid",
+                        l5_style("Border", setter("Width", "60") + setter("Height", "30")
+                                 + setter("Margin", "8"))
+                        + l5_style("Border", setter("Width", "20"), key="Slim"))
+                + '<Border Style="{StaticResource Slim}"/>'
+                + '<Border VerticalAlignment="Bottom"/>'),
+            l5_document("Grid", '<Border Width="20"/>'
+                        '<Border Width="60" Height="30" Margin="8" VerticalAlignment="Bottom"/>'),
+            None,
+        ),
+        (
+            "setter-value-element",
+            "Setter.Value written as a property element rather than as an "
+            "attribute, beside one written as an attribute",
+            ["L1-sizing"],
+            l5_document("Grid", l5_resources("Grid", l5_style("Border",
+                        '<Setter Property="Width"><Setter.Value>60</Setter.Value></Setter>'
+                        + setter("Height", "30"), key="Boxy"))
+                + '<Border Style="{StaticResource Boxy}"/>'),
+            l5_document("Grid", '<Border Width="60" Height="30"/>'),
+            None,
+        ),
+        (
+            "setter-value-staticresource",
+            "a setter whose value is a {StaticResource}, declared beside the "
+            "style in the same dictionary",
+            ["L1-sizing"],
+            l5_document("Grid", l5_resources("Grid",
+                        '<x:Double x:Key="BoxWidth">60</x:Double>'
+                        + l5_style("Border",
+                                   setter("Width", "{StaticResource BoxWidth}")
+                                   + setter("Height", "30"), key="Boxy"))
+                + '<Border Style="{StaticResource Boxy}"/>'),
+            l5_document("Grid", '<Border Width="60" Height="30"/>'),
+            None,
+        ),
+        (
+            "setter-value-resource-element",
+            "the same reference written as a <StaticResource> element inside "
+            "<Setter.Value>",
+            ["L1-sizing"],
+            l5_document("Grid", l5_resources("Grid",
+                        '<x:Double x:Key="BoxWidth">60</x:Double>'
+                        + l5_style("Border",
+                                   '<Setter Property="Width"><Setter.Value>'
+                                   '<StaticResource ResourceKey="BoxWidth"/>'
+                                   "</Setter.Value></Setter>"
+                                   + setter("Height", "30"), key="Boxy"))
+                + '<Border Style="{StaticResource Boxy}"/>'),
+            l5_document("Grid", '<Border Width="60" Height="30"/>'),
+            None,
+        ),
+        (
+            "setters-wrapper",
+            "the same style written with the optional <Style.Setters> wrapper",
+            ["L1-sizing"],
+            l5_document("Grid", l5_resources("Grid", l5_style(
+                "Border", setter("Width", "60") + setter("Height", "30"), key="Boxy",
+                wrapper=True)) + '<Border Style="{StaticResource Boxy}"/>'),
+            l5_document("Grid", '<Border Width="60" Height="30"/>'),
+            None,
+        ),
+        (
+            "chrome-setters",
+            "Padding and BorderThickness from a style, where both deflate the "
+            "content rect and the child's offset shows it",
+            ["L2-align"],
+            l5_document("Grid", l5_resources("Grid", l5_style("Border",
+                        setter("Padding", "6") + setter("BorderThickness", "2,4")
+                        + setter("HorizontalAlignment", "Left")
+                        + setter("VerticalAlignment", "Top"), key="Chrome"))
+                + '<Border Style="{StaticResource Chrome}">'
+                  '<Border Width="40" Height="20"/></Border>'),
+            l5_document("Grid",
+                        '<Border Padding="6" BorderThickness="2,4" HorizontalAlignment="Left"'
+                        ' VerticalAlignment="Top"><Border Width="40" Height="20"/></Border>'),
+            None,
+        ),
+        (
+            "attached-property-setter",
+            "a setter for an attached property, whose owner is not the "
+            "TargetType",
+            ["L3-grid"],
+            l5_document("Grid", l5_resources("Grid", l5_style(
+                "Border", setter("Grid.Column", "1") + setter("Height", "20"), key="Second"))
+                + columns + '<Border Style="{StaticResource Second}"/>'),
+            l5_document("Grid", columns + '<Border Grid.Column="1" Height="20"/>'),
+            None,
+        ),
+        (
+            "panel-setters",
+            "an implicit style on a panel, setting the two properties that "
+            "decide how it stacks",
+            ["L3-stack"],
+            l5_document("Grid", l5_resources("Grid", l5_style(
+                "StackPanel", setter("Orientation", "Horizontal") + setter("Spacing", "6")))
+                + '<StackPanel><Border Width="20" Height="10"/>'
+                  '<Border Width="20" Height="10"/></StackPanel>'),
+            l5_document("Grid", '<StackPanel Orientation="Horizontal" Spacing="6">'
+                        '<Border Width="20" Height="10"/>'
+                        '<Border Width="20" Height="10"/></StackPanel>'),
+            None,
+        ),
+        (
+            "fontsize-implicit",
+            "a style sets FontSize on a TextBlock, so the value has to reach "
+            "text measurement and not just a layout slot",
+            ["L4-text"],
+            l5_document("Border", l5_resources("Border", l5_style(
+                "TextBlock", setter("FontSize", "24")))
+                + f'<TextBlock {text_attrs} Text="M"/>'),
+            l5_document("Border", f'<TextBlock {text_attrs} FontSize="24" Text="M"/>'),
+            None,
+        ),
+        (
+            "fontsize-inherits-from-style",
+            "a style sets FontSize on a ContentControl and a TextBlock inside "
+            "it, which has no FontSize of its own, measures at that size -- a "
+            "style-provided value is inherited exactly as a written one is",
+            ["L4-text"],
+            l5_document("Grid", l5_resources("Grid", l5_style(
+                "ContentControl", setter("FontSize", "24"), key="Big"))
+                + '<ContentControl Style="{StaticResource Big}">'
+                + f'<TextBlock {text_attrs} Text="M"/></ContentControl>'),
+            l5_document("Grid", '<ContentControl FontSize="24">'
+                        f'<TextBlock {text_attrs} Text="M"/></ContentControl>'),
+            None,
+        ),
+        (
+            "style-beats-inherited",
+            "a TextBlock's implicit style beats a FontSize inherited from the "
+            "control above it -- the slot the style occupies is above "
+            "inheritance and below a local value",
+            ["L4-text"],
+            l5_document("Grid", l5_resources("Grid", l5_style(
+                "TextBlock", setter("FontSize", "10")))
+                + '<ContentControl FontSize="22">'
+                + f'<TextBlock {text_attrs} Text="M"/></ContentControl>'),
+            l5_document("Grid", '<ContentControl FontSize="22">'
+                        f'<TextBlock {text_attrs} FontSize="10" Text="M"/></ContentControl>'),
+            None,
+        ),
+        (
+            "implicit-two-types",
+            "one dictionary declaring implicit styles for two different types",
+            ["L4-text"],
+            l5_document("StackPanel", l5_resources("StackPanel",
+                        l5_style("Border", setter("Width", "60") + setter("Height", "20"))
+                        + l5_style("TextBlock", setter("FontSize", "24")))
+                + "<Border/>" + f'<TextBlock {text_attrs} Text="M"/>'),
+            l5_document("StackPanel", '<Border Width="60" Height="20"/>'
+                        f'<TextBlock {text_attrs} FontSize="24" Text="M"/>'),
+            None,
+        ),
+
+        # --- questions ---------------------------------------------------------
+        (
+            "implicit-own-dictionary",
+            "an element whose own dictionary declares an implicit style for "
+            "its own type",
+            ["L1-sizing"],
+            l5_document("Grid", '<Border HorizontalAlignment="Left">'
+                        + l5_resources("Border", l5_style(
+                            "Border", setter("Width", "60") + setter("Height", "30")))
+                        + "<Border/></Border>"),
+            None,
+            "The core's implicit lookup walks the tree starting at the element "
+            "itself -- ResolveImplicitStyleKeyImpl begins with `current = "
+            "element` and only then goes to the parent -- so the outer Border "
+            "should be styled by its own dictionary as well as the inner one, "
+            "and both should measure 60x30. This implementation agrees, which "
+            "makes the implicit route wider than {StaticResource}'s in the same "
+            "parser: an element's own dictionary is not in scope for its own "
+            "attributes, because those are read when the start tag is. If the "
+            "runtime scopes the two the same way, only the inner Border is "
+            "styled.",
+        ),
+        (
+            "implicit-forward-dictionary",
+            "an implicit style in a dictionary written below the elements it "
+            "targets",
+            ["L1-sizing"],
+            l5_document("Grid", "<Border/>" + l5_resources("Grid", l5_style(
+                "Border", setter("Width", "60") + setter("Height", "30")))),
+            None,
+            "The core applies styles after the object is built -- "
+            "CFrameworkElement::ApplyStyle runs at CreationComplete and again "
+            "on entering a live tree -- so an implicit style should be found "
+            "however late in the document its dictionary is written, and the "
+            "Border should measure 60x30. This implementation resolves at the "
+            "element's closing tag instead, so it finds nothing and the Border "
+            "measures empty. That is the same forward-reference question "
+            "L5-resources-forward-reference-child asks about {StaticResource}, "
+            "and the two need not have the same answer: one is a parse-time "
+            "ambient lookup and the other is a tree walk.",
+        ),
+        (
+            "setter-value-resource-scope",
+            "a setter whose value is a {StaticResource} for a key that two "
+            "dictionaries declare differently -- the style's, and the styled "
+            "element's",
+            ["L3-stack"],
+            l5_document("Grid", l5_resources("Grid",
+                        '<x:Double x:Key="BoxWidth">60</x:Double>'
+                        + l5_style("Border",
+                                   setter("Width", "{StaticResource BoxWidth}")
+                                   + setter("Height", "30"), key="Boxy"))
+                        + '<StackPanel HorizontalAlignment="Left">'
+                        + l5_resources("StackPanel",
+                                       '<x:Double x:Key="BoxWidth">100</x:Double>')
+                        + '<Border Style="{StaticResource Boxy}"/></StackPanel>'),
+            None,
+            "This implementation resolves a setter's value where the style is "
+            "written, against the dictionaries in scope there, so the Border "
+            "measures 60 wide. The core defers a setter's {StaticResource} "
+            "until the value is first needed -- OptimizedStyle::EnsureValue"
+            "Realized -- which leaves open whether the deferred lookup still "
+            "carries the style's parse context or picks up the styled "
+            "element's, in which case it is 100. Terminal's markup never "
+            "declares one key twice at two depths, so nothing in the harvest "
+            "settles it.",
+        ),
+        (
+            "duplicate-setter",
+            "a style that sets the same property twice",
+            ["L1-sizing"],
+            l5_document("Grid", l5_resources("Grid", l5_style(
+                "Border", setter("Width", "60") + setter("Width", "100")
+                + setter("Height", "30"), key="Boxy"))
+                + '<Border Style="{StaticResource Boxy}"/>'),
+            None,
+            "CStyle::GetPropertyValue searches a style's setters in reverse "
+            "and says why -- \"if a property is duplicated, the last setter "
+            "wins\" -- so this should measure 100 wide. This implementation "
+            "does the same. What that source does not say is whether WinUI 2's "
+            "parser or SetterBaseCollection::ValidateItem rejects the "
+            "duplicate before it ever reaches that lookup, which would make "
+            "the case a load failure instead.",
+        ),
+        (
+            "implicit-derived-type",
+            "an implicit Style whose TargetType is a base class of the element",
+            ["L4-text"],
+            l5_document("Grid", l5_resources("Grid", l5_style(
+                "Control", setter("FontSize", "24")))
+                + "<ContentControl>"
+                + f'<TextBlock {text_attrs} Text="M"/></ContentControl>'),
+            None,
+            "Both references key an implicit style by the element's exact "
+            "type -- FindImplicitStyleResource(this, this.GetType()) in WPF, "
+            "ResolveImplicitStyleKeyImpl(element, element->GetClassName()) in "
+            "the core -- with no walk up the base types, so a TargetType of "
+            "Control should not reach a ContentControl implicitly and the "
+            "TextBlock should measure at the default 14. This implementation "
+            "cannot say that: it has no abstract Control type at all, so it "
+            "refuses the markup by name at load. Either answer settles it.",
+        ),
+        (
+            "explicit-derived-target",
+            "the same Style, but assigned explicitly rather than found "
+            "implicitly",
+            ["L4-text"],
+            l5_document("Grid", l5_resources("Grid", l5_style(
+                "Control", setter("FontSize", "24"), key="Big"))
+                + '<ContentControl Style="{StaticResource Big}">'
+                + f'<TextBlock {text_attrs} Text="M"/></ContentControl>'),
+            None,
+            "The explicit route validates the target type with an is-a check "
+            "rather than an exact match -- CFrameworkElement::ValidateTarget"
+            "Type asks OfTypeByIndex, WPF's Style.CheckTargetType asks "
+            "IsAssignableFrom -- so this should apply where the implicit twin "
+            "of it does not, and the TextBlock should measure at 24. It is "
+            "paired with L5-styles-implicit-derived-type on purpose: the "
+            "interesting finding is the two disagreeing, and a runtime that "
+            "answered both the same way would mean one of the two rules is not "
+            "what the source says. This implementation refuses both, for the "
+            "same reason: no abstract Control type.",
+        ),
+    ]
+
+
+def level5_styles() -> Iterator[dict[str, Any]]:
+    for slug, note, requires, markup, inline, question in l5_style_scenarios():
+        case_id = f"L5-styles-{slug}"
+        twin_id = f"{case_id}-inline" if inline else None
+        yield case(case_id, 5, "styles", markup, [400.0, 300.0], note,
+                   requires=requires, twin=twin_id, question=question)
+        if inline:
+            yield case(twin_id, 5, "styles", inline, [400.0, 300.0],
+                       f"inline twin of {case_id}: {note}",
+                       requires=requires)
+
+
 # A list per level rather than one generator, because a level is a question
 # and not a file: level 1 asks what a lone element does, and a Path is as much
 # a lone element as a Border is.
@@ -839,7 +1326,7 @@ LEVELS = {
     2: [level2, level2_content],
     3: [level3, level3_canvas],
     4: [level4],
-    5: [level5],
+    5: [level5, level5_styles],
 }
 
 
