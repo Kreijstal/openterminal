@@ -53,7 +53,7 @@ LAYOUT_SOURCES = ["property.cpp", "element.cpp", "border.cpp", "control.cpp",
                   "stack_panel.cpp", "grid.cpp", "chrome.cpp", "canvas.cpp",
                   "content_presenter.cpp", "geometry.cpp", "image.cpp", "shape.cpp",
                   "icon.cpp", "brush.cpp", "text.cpp", "fonts.cpp", "json.cpp",
-                  "resources.cpp"]
+                  "resources.cpp", "style.cpp", "xdirectives.cpp", "resw_strings.cpp"]
 
 # The classes the DLL claims. Registering a class it does not implement would
 # route a caller to us and then fail at DllGetActivationFactory, which is worse

@@ -36,6 +36,12 @@ add_library(openxaml_layout STATIC
     # reason: a style is resolved and merged long before anything is measured,
     # and the rules are worth testing without a case file or a layout pass.
     src/style.cpp
+    # x: directives and the table an x:Uid resolves against. Beside the
+    # resources for the same reason: what a directive means and what a uid
+    # resolves to are rules worth testing without a case file and without a
+    # layout pass.
+    src/xdirectives.cpp
+    src/resw_strings.cpp
 )
 target_include_directories(openxaml_layout PUBLIC src)
 
@@ -84,6 +90,17 @@ add_executable(probe_text_test tests/probe_text_test.cpp)
 target_include_directories(probe_text_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../harness)
 add_test(NAME probe_text COMMAND probe_text_test)
 
+# What a directive does, and what it refuses to do. A deferred element measures
+# nothing by definition, so the corpus cannot hold this to anything: "the
+# element is absent" and "the element is there but zero-sized" produce different
+# trees, and only a test can say which one this is.
+add_executable(xdirective_tests
+    tests/xdirectives_test.cpp
+    src/markup.cpp
+)
+target_link_libraries(xdirective_tests PRIVATE openxaml_layout)
+add_test(NAME xdirectives COMMAND xdirective_tests)
+
 if(MSVC)
     target_compile_options(openxaml_layout PRIVATE /W4)
     target_compile_options(measure_cases PRIVATE /W4)
@@ -91,6 +108,7 @@ if(MSVC)
     target_compile_options(resource_tests PRIVATE /W4)
     target_compile_options(style_tests PRIVATE /W4)
     target_compile_options(probe_text_test PRIVATE /W4)
+    target_compile_options(xdirective_tests PRIVATE /W4)
 else()
     target_compile_options(openxaml_layout PRIVATE -Wall -Wextra)
     target_compile_options(measure_cases PRIVATE -Wall -Wextra)
@@ -98,4 +116,5 @@ else()
     target_compile_options(resource_tests PRIVATE -Wall -Wextra)
     target_compile_options(style_tests PRIVATE -Wall -Wextra)
     target_compile_options(probe_text_test PRIVATE -Wall -Wextra)
+    target_compile_options(xdirective_tests PRIVATE -Wall -Wextra)
 endif()

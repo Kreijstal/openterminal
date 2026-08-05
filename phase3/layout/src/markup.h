@@ -13,6 +13,7 @@
 #include <string>
 
 #include "element.h"
+#include "resw_strings.h"
 
 namespace openxaml {
 
@@ -22,6 +23,12 @@ public:
 };
 
 std::unique_ptr<Element> LoadMarkup(const std::string& markup);
+
+// The same load, with a table for x:Uid to resolve against. Every corpus case
+// goes through the overload above, because the oracle probe has no resource map
+// either; this one is what a measurement run against Terminal's own strings
+// would use.
+std::unique_ptr<Element> LoadMarkup(const std::string& markup, const StringTable& strings);
 
 }  // namespace openxaml
 

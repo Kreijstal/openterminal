@@ -19,12 +19,13 @@ Against build `10.0.26100.33158`:
 | L2 | one parent, one child: alignment × margin × sizing | 192 | **192** |
 | L3 | panels: `StackPanel`, `Grid` | 132 | **132** |
 | L4 | text: `TextBlock` | 72 | **36** without a font — see below |
-| L5 | resources: `x:Key`, `{StaticResource}` | 0 | no oracle yet — see below |
+| L5 | resources: `x:Key`, `{StaticResource}`; the `x:` directives | 0 | no oracle yet — see below |
 | L5 | styles: `Style`, `Setter`, `BasedOn` | 0 | no oracle yet — see below |
 | L7 | Terminal's own pages | 69 | **36** |
 
 "Measured" rather than "cases": L0 has eighteen cases and four
-measurements, and L5 has ninety cases and none at all. Everything authored
+measurements, and L5 has a hundred and thirteen cases and none at all.
+Everything authored
 after the last oracle run is pending, not passing — see [the property
 system](#the-property-system) and [what is still open](#what-is-still-open).
 
@@ -35,9 +36,9 @@ under all of them. The 33 L7 cases that are still red fail as
 numbers, which is the distinction worth keeping: nothing here is quietly
 approximate.
 
-A further 526 generated cases — `L1-shape`, `L2-content`, `L3-canvas`,
-`L3-scroll`, `L4-icon`, `L4-source` and all of `L5-resources` and `L5-styles` —
-have no recorded measurement yet and so are neither passing nor failing.
+A further 549 generated cases — `L1-shape`, `L2-content`, `L3-canvas`,
+`L3-scroll`, `L4-icon`, `L4-source` and all of `L5` — have no recorded
+measurement yet and so are neither passing nor failing.
 `Canvas`, `ContentPresenter`, `Path`, `PathIcon` and `Image` are implemented and
 every case that measures one is in that set; the two `PathIcon` subtrees
 Terminal's own markup supplies are the only witnesses any of them has today.
@@ -174,9 +175,9 @@ no recorded numbers for them and inventing some would defeat the point of
 having an oracle. In the meantime each case that hides a value behind a
 resource is paired with a twin that writes the same value inline, and
 [`check_twins.py`](../scripts/check_twins.py) holds the pair to measuring
-identically — 39 of the 40 pairs across both L5 groups agree here, the last
-needing a glyph width that cannot be derived from the recorded measurements.
-That is
+identically — 49 of the 51 pairs across all four L5 groups and `L4-source` agree
+here, the other two needing glyph widths that cannot be derived from the
+recorded measurements. That is
 self-consistency, not coverage, and it is reported separately for that reason;
 what it does prove is that a resolved `{StaticResource}` reaches the property
 with the value the dictionary holds. Four further cases are questions rather
@@ -240,6 +241,54 @@ the local slot measures identically to this one in every case the corpus can
 express, and differs the moment anything clears a local value or replaces a
 style.
 
+## The x: directives
+
+`x:` names are not properties. They instruct the loader, so the property
+registry cannot judge them — it would report `x:Load` as a missing member of
+`Border`, which is the wrong reason for the right refusal and no reason at all
+for the ones that work. [`src/xdirectives.cpp`](src/xdirectives.cpp) takes the
+whole set off an element's attributes before the registry sees the rest, which
+is what lets the registry keep saying "not a property of this type" and mean it.
+
+**The primitives as elements.** `<Border.Width><x:Double>60</x:Double></Border.Width>`
+is what `Width="60"` is. Terminal writes 37 of these: 26 keyed entries in
+resource dictionaries, which already worked, and 11 as the content of a property
+element — `<ToggleButton.Tag>` with an `<x:Int32>`, `<DiscreteObjectKeyFrame.Value>`
+with an `<x:Boolean>` — on properties whose declared type is `object` and where
+an attribute would supply a string. Both forms now go through the same
+`MakeResource`, so the same type check runs on both: an `x:String` does not
+satisfy a `Width` whether it came out of a dictionary or was written in place.
+The `L5-xprimitives` cases twin each one against the attribute spelling.
+
+**Deferral.** `x:Load="False"` and `x:DeferLoadStrategy="Lazy"` describe an
+element that is not created. Here it is absent: not attached to its parent,
+measured by nothing, occupying no slot — and nothing can bring it back, because
+both directives are realised by a code-behind asking for the element by name and
+a `XamlReader.Load` has none. **That is a provisional reading.** x:Load is a
+compiled-markup feature, the runtime may honour it, ignore it or refuse the
+markup, and those are three different trees; `L5-xdirectives-*` asks, and
+[`tests/xdirectives_test.cpp`](tests/xdirectives_test.cpp) pins what we do in
+the meantime so that "provisional" means written down rather than drifting.
+
+**`x:Uid`.** A uid is a key into a localised string table, and a standalone load
+has no resource map — so by default a uid resolves to nothing and sets nothing,
+which is what both this and the oracle probe do. A table can be supplied:
+[`distil_resw_strings.py`](../scripts/distil_resw_strings.py) reads a pinned
+Terminal checkout's `.resw` files into `uid -> property -> value`, and
+`measure_cases` takes it as a fourth argument beside the fonts. No corpus case
+uses one, because a case measured against a table one side has and the other
+does not would disagree by construction.
+
+Precedence — whether a uid's value beats a local attribute — is a guess, and the
+one this makes is that it does, on the reading that a directive whose purpose is
+translation must beat the author it is translating. Nothing documents it and no
+standalone case can ask it, because there is no way to put a resource map in
+front of the oracle from markup alone.
+
+Everything else stays a named refusal. `x:Bind`, `x:DataType`, `x:Class`,
+`x:FieldModifier` and `x:Key` outside a dictionary fail by their own name, and
+`x:Name` is dropped as it always was.
+
 ## Running it
 
     cmake -S phase3/layout -B /tmp/layout-build && cmake --build /tmp/layout-build
@@ -254,6 +303,15 @@ The font metrics argument is optional and defaults to `<cases>/../fonts`. Pass
 `phase3/xaml-db/fonts/derived` instead to run text against the numbers the
 corpus solved for itself; the two directories are never mixed, and a directory
 holding two sets of metrics for one family is refused rather than resolved.
+
+A fifth argument supplies the table `x:Uid` resolves against. It has no default,
+unlike the fonts: a run that silently found one would measure markup the oracle
+cannot, and every uid case would disagree for a reason nothing reported.
+
+    python3 phase3/scripts/distil_resw_strings.py /tmp/windows-terminal \
+        --out /tmp/terminal-strings.json
+    /tmp/layout-build/measure_cases phase3/xaml-db/cases /tmp/layout-results \
+        phase3/xaml-db/fonts/derived /tmp/terminal-strings.json
 
 Two checks need no oracle at all, and run from a bare checkout:
 
@@ -425,12 +483,14 @@ neither passing nor failing:
 | `L1-shape` | 60 | are a shape's bounds tight, and is its desired size the right edge or the width? |
 | `L5-styles` | 50 | the level has no measurement at all either, and six of them ask a question outright — see below |
 | `L5-resources` | 40 | every one of them: the level has no measurement at all |
+| `L5-xprimitives` | 17 | does a primitive written as an object element reach a typed property, and does an `x:String` convert to an enum? |
 | `L0-props` | 14 | does `UseLayoutRounding` inherit, how does a tie at `.5` break, and what does a `ContentControl` do with content it is not stretching? |
 | `L4-source` | 6 | is `Text="x"` the same thing as `<TextBlock>x</TextBlock>`? |
+| `L5-xdirectives` | 6 | does a runtime load honour `x:Load` at all, and does it tolerate an `x:Uid` with no resource map? |
 
 `L3-scroll` and `L4-icon` are a different kind of open from the rest.
-`L3-canvas`, `L1-shape`, `L2-content`, `L0-props`, `L4-source`, `L5-resources`
-and `L5-styles` check answers this code already gives; those two measure types
+`L3-canvas`, `L1-shape`, `L2-content`, `L0-props`, `L4-source` and all four L5
+groups check answers this code already gives; those two measure types
 it refuses to give one for at all, so they cannot fail on a number — only on
 the refusal — and they exist so that the next version of this file can move
 them out of this table entirely.
