@@ -1,33 +1,37 @@
 {
  "digest": {
-  "cases": 541,
+  "cases": 1138,
   "levels": {
    "L0": {
-    "cases": 4,
-    "sha256": "3f2096490a855d37747d0548c287cdd8c8f5ea5ba26efb1028d51bb956824352"
+    "cases": 18,
+    "sha256": "8d81f5889ebce15d0f56f16a71ee1e8757e6445b2d87149e2f0409eb6d9a7e5e"
    },
    "L1": {
-    "cases": 72,
-    "sha256": "83e39c2e5d69b73d067e7afe2c2ea038e63036213a961a291e61fe62eb1c97dc"
+    "cases": 132,
+    "sha256": "7848e93a7176edf17d6c0697f387626e62a689c6f61d92df8f00f4d7b928881f"
    },
    "L2": {
-    "cases": 192,
-    "sha256": "ec52a88b0faf308c4a7ad6dfc68a45f2944eea0284756fc2ac81167cfe41d3c7"
+    "cases": 264,
+    "sha256": "4b043f818066c1bc5d076d805bb88d8a6af56d5cfceb45a7f84bd0d2168765ce"
    },
    "L3": {
-    "cases": 132,
-    "sha256": "d649cd140c0f96d9e134c14ccb1220a5b15f46cb829e003ca54a6b780cd72a32"
+    "cases": 361,
+    "sha256": "50384d1c761237ac1d87059e812b4a09d0384729cc91da374bff4daa2e2e7bb9"
    },
    "L4": {
-    "cases": 72,
-    "sha256": "bd4f90d6a9448c183d3f5a2d35d7cddd9a2968a9c36427bb08ebc243f861a5bc"
+    "cases": 147,
+    "sha256": "aff412205c5060b1323e98213d01f5e473740e08642bebc1a333e18044c8b84f"
+   },
+   "L5": {
+    "cases": 126,
+    "sha256": "b38cf470d69d91ce60bca5b0a6b3c520322f7b7e83b715d91dc376e1ba5d834c"
    },
    "L7": {
-    "cases": 69,
-    "sha256": "50dd658a37dba2bff1499b084f142563933ea741cd9c55126ee3df6aee92b87d"
+    "cases": 90,
+    "sha256": "e673d8dbe7e1e478778fecb4a01b00b8583bd7121866d82a5037b8fef5d17e0b"
    }
   },
-  "sha256": "f673c3ce255edd6a2779cdb3163d60b0bb260b115b42569cda4b2b23022ac6da"
+  "sha256": "ee488388a62f710e9eec83301c2e7af0d858cb2790a414cc03489a33e582e9d2"
  },
  "font_segoeui": "8134DBCD09E7B123C9A7F229D49CFFBCB01352CC72EA5E1076B65D0DCA9F73CD",
  "os_build": "10.0.26100.33158",
