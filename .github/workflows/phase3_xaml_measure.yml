@@ -349,7 +349,10 @@ jobs:
           python3 - <<'PY'
           import json, sys
           report = json.load(open("derived-report.json"))
-          level = report["levels"]["L4"]
+          level = report["levels"].get("L4")
+          if level is None:
+              print("::error::no L4 case was compared; the text corpus has gone missing")
+              sys.exit(1)
           expected = "implementation failed: the metrics derived from"
           wrong = [m for m in report["mismatches"] if not m["detail"].startswith(expected)]
           print(f"L4 on the derived metrics alone: {level['passed']} of "
