@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "chrome.h"
 #include "element.h"
 
 namespace openxaml {
@@ -54,7 +55,7 @@ struct Definition {
     }
 };
 
-class Grid : public Panel {
+class Grid : public ChromedPanel {
 public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.Grid"; }
 
