@@ -1,0 +1,22 @@
+{
+ "environment": {
+  "available_size": [
+   400.0,
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "resources",
+ "id": "L5-resources-brace-escape-inline",
+ "level": 5,
+ "markup": "<Border xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"><TextBlock FontFamily=\"Segoe UI\" FontSize=\"14\">{StaticResource NotAKey}</TextBlock></Border>",
+ "note": "inline twin of L5-resources-brace-escape: {} escapes a leading brace, so the value is text and not a lookup. The twin writes the same text as element content, so a mismatch is either the escape or Text= differing from content",
+ "requires": [
+  "L4-text"
+ ],
+ "schema_version": 1
+}

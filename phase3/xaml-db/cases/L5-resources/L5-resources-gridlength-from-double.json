@@ -1,0 +1,24 @@
+{
+ "environment": {
+  "available_size": [
+   400.0,
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "resources",
+ "id": "L5-resources-gridlength-from-double",
+ "level": 5,
+ "markup": "<Grid xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"><Grid.Resources><x:Double x:Key=\"Fixed\">40</x:Double></Grid.Resources><Grid.ColumnDefinitions><ColumnDefinition Width=\"{StaticResource Fixed}\"/><ColumnDefinition Width=\"*\"/></Grid.ColumnDefinitions><Border Grid.Column=\"0\" Height=\"20\"/><Border Grid.Column=\"1\" Height=\"20\"/></Grid>",
+ "note": "an x:Double resource on ColumnDefinition.Width, whose type is GridLength",
+ "oracle_decides": true,
+ "question": "Width=\"40\" written literally is converted to a GridLength by the attribute parser. A resource is assigned, not parsed, so the same conversion may not happen. This implementation rejects it, which is the guess that a resource is type-checked rather than re-parsed.",
+ "requires": [
+  "L3-grid"
+ ],
+ "schema_version": 1
+}

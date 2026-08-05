@@ -1,0 +1,22 @@
+{
+ "environment": {
+  "available_size": [
+   400.0,
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "resources",
+ "id": "L5-resources-shadowing-inline",
+ "level": 5,
+ "markup": "<Grid xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"><StackPanel HorizontalAlignment=\"Left\"><Border Width=\"100\" Height=\"20\"/></StackPanel><Border Width=\"60\" Height=\"20\" HorizontalAlignment=\"Right\" VerticalAlignment=\"Bottom\"/></Grid>",
+ "note": "inline twin of L5-resources-shadowing: an inner dictionary wins for its subtree and only for its subtree",
+ "requires": [
+  "L3-stack"
+ ],
+ "schema_version": 1
+}
