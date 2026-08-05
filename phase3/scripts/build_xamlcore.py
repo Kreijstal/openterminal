@@ -41,8 +41,19 @@ import json  # noqa: E402
 # The layout core, which both the DLL and the client link. json.cpp and
 # fonts.cpp are in it because text measurement reads harvested metrics, and
 # those arrive as JSON.
-LAYOUT_SOURCES = ["element.cpp", "border.cpp", "grid.cpp", "stack_panel.cpp",
-                  "text.cpp", "fonts.cpp", "json.cpp"]
+#
+# The whole library rather than the subset the DLL's own classes need, and
+# deliberately: the client links markup.cpp, which reaches every type the
+# parser can build, and a list that tracked only the DLL would break the
+# client every time a type was added. It is the same list as
+# phase3/layout/CMakeLists.txt and has to stay in step with it -- a source
+# missing from here is a link failure naming the symbol, which is the failure
+# mode worth having.
+LAYOUT_SOURCES = ["property.cpp", "element.cpp", "border.cpp", "control.cpp",
+                  "stack_panel.cpp", "grid.cpp", "chrome.cpp", "canvas.cpp",
+                  "content_presenter.cpp", "geometry.cpp", "image.cpp", "shape.cpp",
+                  "icon.cpp", "brush.cpp", "text.cpp", "fonts.cpp", "json.cpp",
+                  "resources.cpp"]
 
 # The classes the DLL claims. Registering a class it does not implement would
 # route a caller to us and then fail at DllGetActivationFactory, which is worse

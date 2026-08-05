@@ -16,6 +16,7 @@
 #include "grid.h"
 #include "icon.h"
 #include "image.h"
+#include "resources.h"
 #include "shape.h"
 #include "stack_panel.h"
 
@@ -526,12 +527,73 @@ void ParseVisualStateGroups(Scanner& scanner) {
     throw MarkupError("<" + property_element + "> was not closed");
 }
 
-MarkupDefinition MakeDefinition(const Tag& tag, bool is_column) {
+// --- resources ----------------------------------------------------------------
+
+// Attribute values with every {StaticResource} already replaced by the literal
+// the resource holds.
+//
+// Resolution happens here, once, ahead of the property parsers rather than
+// inside them: whatever a property does with its text, it does the same thing
+// to a resolved resource as to an inlined literal, and cannot do otherwise.
+std::map<std::string, std::string> ResolveAttributes(
+    const std::map<std::string, std::string>& attributes, const ResourceScope& scope) {
+    std::map<std::string, std::string> resolved;
+    for (const auto& [name, value] : attributes)
+        resolved.emplace(name, ResolveAttributeValue(scope, name, value));
+    return resolved;
+}
+
+// One entry of a resource dictionary: <x:Double x:Key="W">60</x:Double>, or the
+// aliasing form <StaticResource x:Key="W" ResourceKey="Base"/> that Terminal's
+// theme dictionaries are built out of.
+//
+// The entry's closing tag is consumed here rather than by the main loop, so
+// that its content is read as the resource's literal instead of being offered
+// to whatever element encloses the dictionary.
+void AddResourceEntry(ResourceDictionary& dictionary, const Tag& tag, Scanner& scanner,
+                      const ResourceScope& scope) {
+    std::map<std::string, std::string> attributes = tag.attributes;
+    const auto key_attribute = attributes.find("x:Key");
+    if (key_attribute == attributes.end())
+        throw MarkupError("<" + tag.name + "> in a resource dictionary needs an x:Key");
+    const std::string key = key_attribute->second;
+    attributes.erase("x:Key");
+
+    std::string content;
+    if (!tag.self_closing) {
+        Tag close;
+        if (!scanner.Next(close) || !close.closing || close.name != tag.name)
+            throw MarkupError("<" + tag.name + "> in a resource dictionary holds only text");
+        content = close.text_before;
+    }
+
+    if (tag.name == "StaticResource") {
+        // An alias: this key stands for whatever another key holds. Resolved
+        // now, against the dictionaries already in scope -- including the one
+        // being filled, so an alias may name an earlier entry beside it.
+        const std::string aliased = StaticResourceElementKey(attributes, /*allow_key=*/false);
+        if (!content.empty()) throw MarkupError("<StaticResource> takes no content");
+        dictionary.Add(key, LookUpResource(scope, aliased, "the resource '" + key + "'"));
+        return;
+    }
+
+    if (!attributes.empty()) {
+        throw MarkupError("<" + tag.name + "> in a resource dictionary takes only x:Key, not '" +
+                          attributes.begin()->first + "'");
+    }
+    dictionary.Add(key, MakeResource(tag.name, content));
+}
+
+MarkupDefinition MakeDefinition(const Tag& tag, bool is_column, const ResourceScope& scope) {
     MarkupDefinition definition;
     const std::string size_property = is_column ? "Width" : "Height";
     const std::string min_property = is_column ? "MinWidth" : "MinHeight";
     const std::string max_property = is_column ? "MaxWidth" : "MaxHeight";
-    for (const auto& [name, value] : tag.attributes) {
+    // Qualified by the owning type, because a definition's Width is a
+    // GridLength while a FrameworkElement's is a number, and a resource is
+    // checked against the property's type rather than reparsed.
+    for (const auto& [name, raw] : tag.attributes) {
+        const std::string value = ResolveAttributeValue(scope, tag.name + "." + name, raw);
         if (name == size_property) {
             definition.size = ParseGridLength(value, size_property);
         } else if (name == min_property) {
@@ -666,6 +728,35 @@ MarkupNode ParseMarkup(const std::string& markup) {
     // The property element currently being filled, e.g. Grid.ColumnDefinitions.
     // Empty when ordinary child elements are expected.
     std::string property_element;
+    // What that property element expects to be filled with. The three kinds
+    // read their contents differently enough that the name alone is not enough
+    // to dispatch on.
+    enum class Section { None, Definitions, Resources, Value };
+    Section section = Section::None;
+    // An explicit <ResourceDictionary> wrapper inside a Resources section. The
+    // wrapper is optional in XAML and carries nothing this parser reads, so it
+    // is tracked only far enough to match its closing tag.
+    bool dictionary_open = false;
+    // Whether a <X.Property> element has already been given its one value.
+    bool value_filled = false;
+
+    // The dictionaries a lookup walks: the element being filled, then each
+    // ancestor, innermost first.
+    //
+    // An element's own dictionary is *not* in scope for its own attributes.
+    // Attributes are read when the tag opens, and <X.Resources> is a child, so
+    // it has not been seen yet -- whereas a <X.Property> element written after
+    // <X.Resources> does see it. Whether the real runtime defers far enough to
+    // erase that distinction is one of the questions the L5 probe cases exist
+    // to put to it; until it answers, this is the WPF behaviour, where
+    // StaticResource is resolved at parse time against what has been parsed.
+    auto scope = [&open]() {
+        ResourceScope chain;
+        for (auto it = open.rbegin(); it != open.rend(); ++it) {
+            if (!it->resources.empty()) chain.push_back(&it->resources);
+        }
+        return chain;
+    };
 
     // Character data belongs to the element it sits inside, and only a
     // TextBlock has anywhere to put it. Everywhere else the old rule stands:
@@ -684,10 +775,17 @@ MarkupNode ParseMarkup(const std::string& markup) {
     while (scanner.Next(tag)) {
         take_text(tag);
         if (tag.closing) {
+            if (dictionary_open && tag.name == "ResourceDictionary") {
+                dictionary_open = false;
+                continue;
+            }
             if (!property_element.empty()) {
                 if (tag.name != property_element)
                     throw MarkupError("</" + tag.name + "> closes <" + property_element + ">");
+                if (section == Section::Value && !value_filled)
+                    throw MarkupError("<" + property_element + "> was given no value");
                 property_element.clear();
+                section = Section::None;
                 continue;
             }
             if (open.empty()) throw MarkupError("</" + tag.name + "> with nothing open");
@@ -712,30 +810,45 @@ MarkupNode ParseMarkup(const std::string& markup) {
             if (open.empty()) throw MarkupError("<" + tag.name + "> with no element to set it on");
             if (!tag.attributes.empty())
                 throw MarkupError("<" + tag.name + "> cannot carry attributes");
+            const size_t dot = tag.name.find('.');
+            const std::string owner = tag.name.substr(0, dot);
+            const std::string member = tag.name.substr(dot + 1);
 
-            const std::string owner = tag.name.substr(0, tag.name.find('.'));
-            const std::string property = tag.name.substr(tag.name.find('.') + 1);
-
-            // Attached: it names the class that defines the property, not the
-            // element it is being set on.
+            // Attached, so it names the class that defines the property rather
+            // than the element it is being set on, and the owner check below
+            // does not apply to it.
             if (tag.name == "VisualStateManager.VisualStateGroups") {
                 if (tag.self_closing) continue;
                 ParseVisualStateGroups(scanner);
                 continue;
             }
 
-            if (owner != open.back().type)
-                throw MarkupError("<" + tag.name + "> is only valid on a " + owner);
-
-            // A brush written as a property element rather than as an
-            // attribute. Whether the type has the property is the registry's
-            // question here too, so a <Canvas.Padding> is refused with the
-            // same message a Padding="..." on a Canvas gets.
-            if (property == "Background") {
+            // Only the concrete type is accepted as the owner. XAML also allows
+            // a base type -- <FrameworkElement.Width> on a Border -- and an
+            // attached property in element form; neither appears in the corpus,
+            // so both are rejected by name rather than half-supported.
+            if (owner != open.back().type) {
+                throw MarkupError("<" + tag.name + "> is not a property of the open <" +
+                                  open.back().type + ">");
+            }
+            if (member == "ColumnDefinitions" || member == "RowDefinitions") {
+                if (open.back().type != "Grid")
+                    throw MarkupError("<" + tag.name + "> is only valid on a Grid");
+                section = Section::Definitions;
+            } else if (member == "Resources") {
+                section = Section::Resources;
+            } else if (member == "Background") {
+                // A brush written as a property element rather than as an
+                // attribute. Whether the type has the property is the
+                // registry's question here too, so a <Canvas.Padding> is
+                // refused with the same message a Padding="..." on a Canvas
+                // gets. Not a Section::Value: a brush is an element with a
+                // type of its own rather than a scalar, so the whole of it is
+                // read here instead of being resolved to a literal.
                 const DependencyProperty* found =
-                    FindProperty(OwnersFor(open.back().type), property);
+                    FindProperty(OwnersFor(open.back().type), member);
                 if (!found) {
-                    throw MarkupError("the property '" + property + "' was not found in type '" +
+                    throw MarkupError("the property '" + member + "' was not found in type '" +
                                       FullTypeName(open.back().type) + "'");
                 }
                 if (tag.self_closing) throw MarkupError("<" + tag.name + "> is empty");
@@ -743,22 +856,68 @@ MarkupNode ParseMarkup(const std::string& markup) {
                 open.back().background = brush;
                 open.back().properties.push_back(MarkupProperty{found, brush});
                 continue;
+            } else {
+                // A scalar property, set as an element so that a resource
+                // reference can be written as one.
+                if (tag.self_closing)
+                    throw MarkupError("<" + tag.name + "> was given no value");
+                section = Section::Value;
+                value_filled = false;
             }
-
-            if (tag.name != "Grid.ColumnDefinitions" && tag.name != "Grid.RowDefinitions")
-                throw MarkupError("the property element '" + tag.name + "' is not implemented");
-            if (tag.self_closing) continue;
+            if (tag.self_closing) {
+                section = Section::None;
+                continue;
+            }
             property_element = tag.name;
             continue;
         }
 
-        if (!property_element.empty()) {
+        if (section == Section::Resources) {
+            if (tag.name == "ResourceDictionary") {
+                // The wrapper XAML lets a dictionary be written with or
+                // without. It changes nothing about the entries inside it.
+                if (dictionary_open)
+                    throw MarkupError("<ResourceDictionary> inside <ResourceDictionary>");
+                if (!tag.attributes.empty()) {
+                    throw MarkupError("<ResourceDictionary> takes no attributes here; '" +
+                                      tag.attributes.begin()->first + "' is not implemented");
+                }
+                if (!tag.self_closing) dictionary_open = true;
+                continue;
+            }
+            AddResourceEntry(open.back().resources, tag, scanner, scope());
+            continue;
+        }
+
+        if (section == Section::Value) {
+            if (tag.name != "StaticResource") {
+                throw MarkupError("<" + property_element + "> takes a <StaticResource>, not <" +
+                                  tag.name + ">");
+            }
+            if (value_filled)
+                throw MarkupError("<" + property_element + "> was given a second value");
+            if (!tag.self_closing) {
+                Tag close;
+                if (!scanner.Next(close) || !close.closing || close.name != "StaticResource")
+                    throw MarkupError("<StaticResource> must be empty");
+            }
+            const std::string property = property_element.substr(property_element.find('.') + 1);
+            const std::string key = StaticResourceElementKey(tag.attributes, /*allow_key=*/false);
+            // Resolved to its literal and then applied through the ordinary
+            // attribute path, so <Border.Width><StaticResource .../></Border.Width>
+            // and Width="60" reach the property by the same code.
+            ApplyAttributes(open.back(), {{property, ResolveResource(scope(), key, property)}});
+            value_filled = true;
+            continue;
+        }
+
+        if (section == Section::Definitions) {
             const bool is_column = property_element == "Grid.ColumnDefinitions";
             const std::string expected = is_column ? "ColumnDefinition" : "RowDefinition";
             if (tag.name != expected)
                 throw MarkupError("<" + property_element + "> takes <" + expected + "> elements");
             (is_column ? open.back().column_definitions : open.back().row_definitions)
-                .push_back(MakeDefinition(tag, is_column));
+                .push_back(MakeDefinition(tag, is_column, scope()));
             if (!tag.self_closing) {
                 Tag close;
                 if (!scanner.Next(close) || !close.closing || close.name != expected)
@@ -774,7 +933,7 @@ MarkupNode ParseMarkup(const std::string& markup) {
         FullTypeName(tag.name);
         MarkupNode node;
         node.type = tag.name;
-        ApplyAttributes(node, tag.attributes);
+        ApplyAttributes(node, ResolveAttributes(tag.attributes, scope()));
         if (tag.self_closing) {
             if (open.empty()) {
                 root = std::move(node);

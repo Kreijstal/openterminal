@@ -17,6 +17,7 @@
 #include "grid.h"
 #include "layout.h"
 #include "property.h"
+#include "resources.h"
 #include "stack_panel.h"
 #include "text.h"
 
@@ -112,6 +113,13 @@ struct MarkupNode {
     // Grid.
     std::vector<MarkupDefinition> column_definitions;
     std::vector<MarkupDefinition> row_definitions;
+
+    // FrameworkElement.Resources. Kept on the node rather than consumed during
+    // the parse because it is the element's own dictionary: a {StaticResource}
+    // in the subtree below resolves against it, and the node is where the walk
+    // up the tree finds it. Nothing downstream of the parse reads it -- a
+    // resource has already done its work by the time an Element exists.
+    ResourceDictionary resources;
 
     std::vector<MarkupNode> children;
 };

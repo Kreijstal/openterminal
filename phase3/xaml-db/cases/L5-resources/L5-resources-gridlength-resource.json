@@ -1,0 +1,24 @@
+{
+ "environment": {
+  "available_size": [
+   400.0,
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "resources",
+ "id": "L5-resources-gridlength-resource",
+ "level": 5,
+ "markup": "<Grid xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"><Grid.Resources><GridLength x:Key=\"Wide\">2*</GridLength></Grid.Resources><Grid.ColumnDefinitions><ColumnDefinition Width=\"{StaticResource Wide}\"/><ColumnDefinition Width=\"*\"/></Grid.ColumnDefinitions><Border Grid.Column=\"0\" Height=\"20\"/><Border Grid.Column=\"1\" Height=\"20\"/></Grid>",
+ "note": "a GridLength declared as an object element, on a star column",
+ "oracle_decides": true,
+ "question": "A star length has no x-namespace primitive, so the only way to put one in a dictionary is <GridLength>. Terminal never does it, and whether WinUI 2 will construct a GridLength from element content is untested. This implementation accepts it; if the runtime does not, the permissiveness is the bug.",
+ "requires": [
+  "L3-grid"
+ ],
+ "schema_version": 1
+}

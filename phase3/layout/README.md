@@ -19,11 +19,13 @@ Against build `10.0.26100.33158`:
 | L2 | one parent, one child: alignment × margin × sizing | 192 | **192** |
 | L3 | panels: `StackPanel`, `Grid` | 132 | **132** |
 | L4 | text: `TextBlock` | 72 | **36** without a font — see below |
+| L5 | resources: `x:Key`, `{StaticResource}` | 0 | no oracle yet — see below |
 | L7 | Terminal's own pages | 69 | **36** |
 
 "Measured" rather than "cases": L0 has eighteen cases and four
-measurements. The other fourteen were authored after the last oracle run and
-are pending, not passing — see [the property system](#the-property-system).
+measurements, and L5 has forty cases and none at all. Everything authored
+after the last oracle run is pending, not passing — see [the property
+system](#the-property-system) and [what is still open](#what-is-still-open).
 
 L1–L3 is every case that does not need text measurement or a control set —
 `Border`, `Grid`, `StackPanel`, `Canvas`, and the `FrameworkElement` semantics
@@ -118,6 +120,27 @@ and that clearing one restores the ancestor rather than the default.
 [`tests/property_test.cpp`](tests/property_test.cpp) is where those live; `ctest`
 runs it.
 
+## The resource system
+
+L5 is implemented and is the one level with nothing to check it against yet:
+the resource cases were authored after the last measurement run, so there are
+no recorded numbers for them and inventing some would defeat the point of
+having an oracle. In the meantime each case that hides a value behind a
+resource is paired with a twin that writes the same value inline, and
+[`check_twins.py`](../scripts/check_twins.py) holds the pair to measuring
+identically — 17 of the 18 pairs agree here, the last needing a glyph width
+that cannot be derived from the recorded measurements. That is
+self-consistency, not coverage, and it is reported separately for that reason;
+what it does prove is that a resolved `{StaticResource}` reaches the property
+with the value the dictionary holds. Four further cases are questions rather
+than assertions, and have no twin at all — see
+[the corpus README](../xaml-db/README.md#l5-before-the-oracle-has-seen-it).
+
+What a load *refuses* to do has no measurement either, and that is the other
+half: [`tests/resources_test.cpp`](tests/resources_test.cpp) holds a failed
+lookup to naming the key it could not find, and `ctest` runs it beside the
+property tests.
+
 ## Running it
 
     cmake -S phase3/layout -B /tmp/layout-build && cmake --build /tmp/layout-build
@@ -132,6 +155,12 @@ The font metrics argument is optional and defaults to `<cases>/../fonts`. Pass
 `phase3/xaml-db/fonts/derived` instead to run text against the numbers the
 corpus solved for itself; the two directories are never mixed, and a directory
 holding two sets of metrics for one family is refused rather than resolved.
+
+Two checks need no oracle at all, and run from a bare checkout:
+
+    ctest --test-dir /tmp/layout-build      # what a load refuses, and by what name
+    python3 phase3/scripts/check_twins.py \
+        --cases phase3/xaml-db/cases --results /tmp/layout-results
 
 `measure_cases` takes the same arguments as the oracle probe and writes the same
 files, so the two are directly diffable. A single `g++ -std=c++17 src/*.cpp`
@@ -224,6 +253,27 @@ does not do, so that a passing run is not read as more than it is:
   inherits. Both are the ported behaviour rather than a measured one.
   `L0-props-rounding-half` and `L0-props-rounding-inherited` are the cases
   authored to settle them, and neither has a measurement yet.
+- **No `Application.Resources`, no merged dictionaries, no theme dictionaries.**
+  A resource lookup walks the element and its ancestors and then stops. That is
+  where WinUI's own theme resources would be, and it is why
+  `{StaticResource SystemControlForegroundBaseHighBrush}` resolves in Terminal
+  and not here. A lookup that would have needed one of the three fails by name;
+  it never falls back on something plausible.
+- **No `{ThemeResource}`, no `{Binding}`, no `{x:Bind}`, no
+  `{TemplateBinding}`.** `{StaticResource}` is the only markup extension that
+  resolves. Every other one is a named refusal, including on properties where
+  the difference would not show in the numbers.
+- **No styles, no setters, no control templates.** L5 in the corpus is scoped
+  to resource lookup; the rest of what that level names is not started.
+- **Resources are literal text, not objects.** A resource holds the string its
+  declaring element carried, and resolution hands that string to the same
+  property parser an inline attribute would reach. It is why a resolved case
+  and its inlined twin cannot drift apart — and it is also why a resource type
+  with no textual form is not expressible.
+- **The `x:` prefix is matched literally.** Every case binds `x` to the XAML
+  language namespace, and this parser assumes that binding rather than
+  resolving prefixes. A document that spelled it differently would not be
+  understood.
 
 ## What is still open
 
@@ -237,6 +287,7 @@ neither passing nor failing:
 | `L2-content` | 72 | what does `ContentPresenter`'s content alignment default to? |
 | `L1-shape` | 60 | are a shape's bounds tight, and is its desired size the right edge or the width? |
 | `L0-props` | 14 | does `UseLayoutRounding` inherit, how does a tie at `.5` break, and what does a `ContentControl` do with content it is not stretching? |
+| `L5-resources` | 40 | every one of them: the level has no measurement at all |
 
 The `L1-shape` answers have two witnesses each already, from Terminal's two
 `PathIcon` cases, but both of those geometries start near the origin and

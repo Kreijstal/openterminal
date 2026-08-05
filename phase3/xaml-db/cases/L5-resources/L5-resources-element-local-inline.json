@@ -1,0 +1,22 @@
+{
+ "environment": {
+  "available_size": [
+   400.0,
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "resources",
+ "id": "L5-resources-element-local-inline",
+ "level": 5,
+ "markup": "<Border xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" Width=\"60\"><Border Width=\"20\" Height=\"30\"/></Border>",
+ "note": "inline twin of L5-resources-element-local: an element reads its own dictionary, declared just above the use",
+ "requires": [
+  "L1-sizing"
+ ],
+ "schema_version": 1
+}

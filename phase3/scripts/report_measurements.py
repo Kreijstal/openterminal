@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 """Report what the real runtime made of the corpus, per level.
 
-Two kinds of case are measured, and a failure means different things for each.
+Three kinds of case are measured, and a failure means something different for
+each.
 
-Levels 0 to 4 are written by us against the documented contract. If the runtime
+Levels 0 to 5 are written by us against the documented contract. If the runtime
 refuses one, the case is wrong and the corpus is broken, so that is an error.
+
+Except where the case says otherwise. A case may carry `oracle_decides`, which
+means we did not know what the runtime would do and wrote the case to find out
+-- the resource cases at L5 include several, because WinUI 2's parser is not
+documented to the depth those questions need and WPF's behaviour is not
+evidence about it. A rejection there is the answer, so it is named rather than
+fatal. The field is not a way to make a failing case quiet: it has to be
+written into the case, next to the question, before the run.
 
 Level 7 is harvested from Terminal's markup, and whether a harvested subtree can
 be loaded standalone is a *prediction* the harvester makes from type metadata.
@@ -23,11 +32,21 @@ from pathlib import Path
 from typing import Any
 
 # Levels the corpus authors, and is therefore accountable for.
-AUTHORED_LEVELS = range(0, 5)
+AUTHORED_LEVELS = range(0, 6)
 
 
 def level_of(case: dict[str, Any]) -> int:
     return int(case.get("level", -1))
+
+
+def outcome_kind(case: dict[str, Any]) -> str:
+    """What a rejection of this case would mean.
+
+    `authored` is fatal, the other two are findings.
+    """
+    if case.get("oracle_decides"):
+        return "question"
+    return "authored" if level_of(case) in AUTHORED_LEVELS else "harvest"
 
 
 def load_cases(cases: Path) -> dict[str, dict[str, Any]]:
@@ -72,17 +91,22 @@ def report(cases: Path, measurements: Path) -> dict[str, Any]:
             quarantine.append({
                 "id": case_id,
                 "level": str(level),
+                "kind": outcome_kind(case),
                 "error": result["error"],
                 "markup": case.get("markup", ""),
+                "question": case.get("question", ""),
             })
         else:
             entry["measured"] += 1
 
-    failures = sorted(
+    # Per case rather than per level, because one level now holds both kinds:
+    # a broken L5 case is fatal and an answered L5 question is not.
+    broken_levels = {int(item["level"]) for item in quarantine if item["kind"] == "authored"}
+    missing_levels = {
         level for level in levels
-        if level in AUTHORED_LEVELS
-        and (levels[level]["errored"] or levels[level]["missing"])
-    )
+        if level in AUTHORED_LEVELS and levels[level]["missing"]
+    }
+    failures = sorted(broken_levels | missing_levels)
 
     return {
         "schema_version": 1,
@@ -109,7 +133,16 @@ def summarise(payload: dict[str, Any]) -> str:
             f"| {entry['errored']} | {entry['missing']} |"
         )
 
-    quarantined = [q for q in payload["quarantine"] if int(q["level"]) not in AUTHORED_LEVELS]
+    answered = [q for q in payload["quarantine"] if q.get("kind") == "question"]
+    if answered:
+        lines += ["", f"### Open questions the runtime answered ({len(answered)})", "",
+                  "Cases written because we did not know the behaviour. A "
+                  "rejection here is the finding, not a broken corpus.", ""]
+        for item in answered:
+            error = re.sub(r"\s+", " ", item["error"]).strip()[:200]
+            lines.append(f"- `{item['id']}` — refused: {error}")
+
+    quarantined = [q for q in payload["quarantine"] if q.get("kind") == "harvest"]
     if quarantined:
         lines += ["", f"### Quarantined harvest candidates ({len(quarantined)})", "",
                   "Predicted loadable, refused by the runtime. Each one names a "
@@ -126,7 +159,7 @@ def summarise(payload: dict[str, Any]) -> str:
         # These are the fatal ones, so they are the ones worth naming. Listing
         # only the quarantined harvest left the failure that actually stops the
         # run identified by a count alone.
-        broken = [q for q in payload["quarantine"] if int(q["level"]) in AUTHORED_LEVELS]
+        broken = [q for q in payload["quarantine"] if q.get("kind") == "authored"]
         for item in broken:
             error = re.sub(r"\s+", " ", item["error"]).strip()[:300]
             lines.append(f"- `{item['id']}` — {error or '(no message)'}")
