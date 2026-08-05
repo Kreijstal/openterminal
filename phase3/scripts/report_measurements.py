@@ -52,17 +52,35 @@ def outcome_kind(case: dict[str, Any]) -> str:
 def load_cases(cases: Path) -> dict[str, dict[str, Any]]:
     found = {}
     for path in sorted(cases.rglob("*.json")):
-        case = json.loads(path.read_text(encoding="utf-8"))
-        found[case["id"]] = case
+        try:
+            case = json.loads(path.read_text(encoding="utf-8"))
+            case_id = case["id"]
+        except (json.JSONDecodeError, KeyError, TypeError) as failure:
+            # The corpus is generator output, so this is a bug in a generator
+            # rather than a finding about the runtime. Still fatal -- but named,
+            # because a bare KeyError says nothing about which file.
+            raise SystemExit(f"{path}: not a case file ({failure})") from failure
+        found[case_id] = case
     return found
 
 
 def load_measurements(measurements: Path) -> dict[str, dict[str, Any]]:
     found = {}
     for path in sorted(measurements.glob("*.json")):
-        if path.name == "oracle.json":
+        if path.name in ("oracle.json", "report.json"):
             continue
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as failure:
+            # A measurement the probe started and did not finish -- it writes
+            # one file per case, so a process that dies mid-run leaves exactly
+            # one of these. Reading it as a rejection keeps every other answer
+            # in the report; raising here would throw away the whole run over
+            # one truncated file, which is the opposite of what a report is for.
+            payload = {
+                "case_id": path.stem,
+                "error": f"the measurement file could not be read: {failure}",
+            }
         found[payload.get("case_id", path.stem)] = payload
     return found
 
@@ -76,6 +94,7 @@ def report(cases: Path, measurements: Path) -> dict[str, Any]:
     )
     quarantine: list[dict[str, str]] = []
     missing_ids: list[str] = []
+    answered: list[dict[str, Any]] = []
 
     for case_id, case in sorted(by_id.items()):
         level = level_of(case)
@@ -98,6 +117,23 @@ def report(cases: Path, measurements: Path) -> dict[str, Any]:
             })
         else:
             entry["measured"] += 1
+            if case.get("oracle_decides"):
+                # A declared question the runtime answered with a number rather
+                # than a refusal. Without this it would be indistinguishable
+                # from any other measured case, and the answer we asked for
+                # would be sitting in an artifact nobody opened. The root node
+                # is enough to read the answer off; the artifact has the rest.
+                nodes = result.get("tree", [])
+                root_node = nodes[0] if nodes else {}
+                answered.append({
+                    "id": case_id,
+                    "level": str(level),
+                    "question": case.get("question", ""),
+                    "nodes": len(nodes),
+                    "desired": root_node.get("desired", []),
+                    "actual": root_node.get("actual", []),
+                    "offset": root_node.get("offset", []),
+                })
 
     # Per case rather than per level, because one level now holds both kinds:
     # a broken L5 case is fatal and an answered L5 question is not.
@@ -112,6 +148,7 @@ def report(cases: Path, measurements: Path) -> dict[str, Any]:
         "schema_version": 1,
         "levels": {str(level): dict(levels[level]) for level in sorted(levels)},
         "quarantine": quarantine,
+        "answered": answered,
         "missing_ids": missing_ids,
         "authored_levels_failing": [str(level) for level in failures],
         "totals": {
@@ -133,14 +170,32 @@ def summarise(payload: dict[str, Any]) -> str:
             f"| {entry['errored']} | {entry['missing']} |"
         )
 
-    answered = [q for q in payload["quarantine"] if q.get("kind") == "question"]
-    if answered:
-        lines += ["", f"### Open questions the runtime answered ({len(answered)})", "",
+    refused = [q for q in payload["quarantine"] if q.get("kind") == "question"]
+    if refused:
+        lines += ["", f"### Open questions the runtime refused ({len(refused)})", "",
                   "Cases written because we did not know the behaviour. A "
                   "rejection here is the finding, not a broken corpus.", ""]
-        for item in answered:
+        for item in refused:
             error = re.sub(r"\s+", " ", item["error"]).strip()[:200]
             lines.append(f"- `{item['id']}` — refused: {error}")
+
+    # The other half of the same story, and the half that used to go unsaid: a
+    # declared question the runtime answered by measuring. Reporting only the
+    # refusals meant an answer arrived as an ordinary row in the level table and
+    # had to be dug out of the artifact to be read at all.
+    answered = payload.get("answered", [])
+    if answered:
+        lines += ["", f"### Open questions the runtime measured ({len(answered)})", "",
+                  "Cases written because we did not know the behaviour, which "
+                  "the runtime answered with a number. The root node is shown; "
+                  "the full tree is in the measurement artifact.", ""]
+        for item in answered:
+            question = re.sub(r"\s+", " ", item.get("question", "")).strip()[:160]
+            lines.append(
+                f"- `{item['id']}` — desired {item['desired']}, "
+                f"actual {item['actual']}, offset {item['offset']} "
+                f"({item['nodes']} node(s)) — {question}"
+            )
 
     quarantined = [q for q in payload["quarantine"] if q.get("kind") == "harvest"]
     if quarantined:
