@@ -19,6 +19,7 @@
 #include "property.h"
 #include "resources.h"
 #include "stack_panel.h"
+#include "style.h"
 #include "text.h"
 
 namespace openxaml {
@@ -120,6 +121,21 @@ struct MarkupNode {
     // up the tree finds it. Nothing downstream of the parse reads it -- a
     // resource has already done its work by the time an Element exists.
     ResourceDictionary resources;
+
+    // The implicit styles this element's dictionary declares -- the <Style>
+    // entries with a TargetType and no x:Key. Beside `resources` rather than
+    // in it because their key is a type and not a string; see style.h.
+    ImplicitStyleTable implicit_styles;
+
+    // The style that applies to this element: what Style="{StaticResource K}"
+    // named, or the implicit style found for its type, or null.
+    //
+    // Resolved during the parse and carried rather than applied, for the same
+    // reason `properties` is: which values a style supplies is decided here,
+    // and *when* they reach the store is the realiser's business. The typed
+    // fields above deliberately do not reflect it -- they are what the markup
+    // wrote locally, and a style is not that.
+    std::shared_ptr<const Style> style;
 
     std::vector<MarkupNode> children;
 };

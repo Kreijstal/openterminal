@@ -32,6 +32,10 @@ add_library(openxaml_layout STATIC
     # than beside the markup parser because the resolution rules are worth
     # testing on their own, without a case file and without a layout pass.
     src/resources.cpp
+    # Style, Setter and BasedOn. Beside the resource system for the same
+    # reason: a style is resolved and merged long before anything is measured,
+    # and the rules are worth testing without a case file or a layout pass.
+    src/style.cpp
 )
 target_include_directories(openxaml_layout PUBLIC src)
 
@@ -62,6 +66,16 @@ add_executable(resource_tests
 target_link_libraries(resource_tests PRIVATE openxaml_layout)
 add_test(NAME resources COMMAND resource_tests)
 
+# Which slot a value came from, which is the entire content of what a style is
+# and the one thing a tree of numbers cannot report. Plus what a style load
+# refuses, for the same reason the resource tests exist.
+add_executable(style_tests
+    tests/style_test.cpp
+    src/markup.cpp
+)
+target_link_libraries(style_tests PRIVATE openxaml_layout)
+add_test(NAME styles COMMAND style_tests)
+
 # The oracle probe only builds on Windows, so nothing about it can be checked
 # here -- except the one part that is pure text handling, which is where it had
 # a bug that silently emptied every FontIcon glyph in the corpus. That code
@@ -75,11 +89,13 @@ if(MSVC)
     target_compile_options(measure_cases PRIVATE /W4)
     target_compile_options(property_test PRIVATE /W4)
     target_compile_options(resource_tests PRIVATE /W4)
+    target_compile_options(style_tests PRIVATE /W4)
     target_compile_options(probe_text_test PRIVATE /W4)
 else()
     target_compile_options(openxaml_layout PRIVATE -Wall -Wextra)
     target_compile_options(measure_cases PRIVATE -Wall -Wextra)
     target_compile_options(property_test PRIVATE -Wall -Wextra)
     target_compile_options(resource_tests PRIVATE -Wall -Wextra)
+    target_compile_options(style_tests PRIVATE -Wall -Wextra)
     target_compile_options(probe_text_test PRIVATE -Wall -Wextra)
 endif()

@@ -22,6 +22,7 @@ std::string KindName(ValueKind kind) {
         case ValueKind::GridLength: return "a GridLength";
         case ValueKind::String: return "a string";
         case ValueKind::Boolean: return "a Boolean";
+        case ValueKind::Style: return "a Style";
         case ValueKind::Unknown: break;
     }
     return "a value of no declared shape";
@@ -82,7 +83,7 @@ ResourceValue MakeResource(const std::string& type, const std::string& text) {
         throw MarkupError("the resource type '" + type + "' is not implemented");
     // A primitive's content is its literal, and XAML trims the whitespace an
     // indented dictionary puts around it.
-    return ResourceValue{type, Trim(text), found->second};
+    return ResourceValue{type, Trim(text), found->second, nullptr};
 }
 
 ValueKind ExpectedValueKind(const std::string& property) {
@@ -96,6 +97,15 @@ ValueKind ExpectedValueKind(const std::string& property) {
         {"MinHeight", ValueKind::Number},
         {"MaxHeight", ValueKind::Number},
         {"FontSize", ValueKind::Number},
+        // The one property whose value is an object rather than a literal.
+        // Naming it here is what turns Width="{StaticResource BoxStyle}" and
+        // Style="{StaticResource BoxWidth}" into two different named failures
+        // instead of one silent empty string.
+        {"Style", ValueKind::Style},
+        // Style.BasedOn. Named here for the same reason, so that a BasedOn
+        // pointing at an x:Double is refused in the words every other
+        // wrong-shaped lookup is refused in.
+        {"BasedOn", ValueKind::Style},
         {"Margin", ValueKind::Thickness},
         {"Padding", ValueKind::Thickness},
         {"BorderThickness", ValueKind::Thickness},
@@ -128,8 +138,14 @@ const ResourceValue& LookUpResource(const ResourceScope& scope, const std::strin
                       " dictionary(ies) from the element to the root of the markup");
 }
 
-std::string ResolveResource(const ResourceScope& scope, const std::string& key,
-                            const std::string& property) {
+namespace {
+
+// The entry `key` names, once it is known that `property` can take it. The one
+// place the shape check lives, so that the three ways of writing a reference
+// -- an attribute, a <StaticResource> element, a BasedOn -- all refuse a
+// wrong-shaped resource in the same words.
+const ResourceValue& CheckedResource(const ResourceScope& scope, const std::string& key,
+                                     const std::string& property) {
     const std::string where = "'" + property + "'";
     const ResourceValue& value = LookUpResource(scope, key, where);
     const ValueKind wanted = ExpectedValueKind(property);
@@ -137,7 +153,14 @@ std::string ResolveResource(const ResourceScope& scope, const std::string& key,
         throw MarkupError("the resource '" + key + "' is " + value.type + ", which cannot supply '" +
                           property + "': that property takes " + KindName(wanted));
     }
-    return value.text;
+    return value;
+}
+
+}  // namespace
+
+std::string ResolveResource(const ResourceScope& scope, const std::string& key,
+                            const std::string& property) {
+    return CheckedResource(scope, key, property).text;
 }
 
 bool TryParseMarkupExtension(const std::string& text, MarkupExtension& extension) {
@@ -159,16 +182,12 @@ bool TryParseMarkupExtension(const std::string& text, MarkupExtension& extension
     return true;
 }
 
-std::string ResolveAttributeValue(const ResourceScope& scope, const std::string& property,
-                                  const std::string& raw) {
+const ResourceValue& ResolveResourceReference(const ResourceScope& scope,
+                                              const std::string& property,
+                                              const std::string& raw) {
     MarkupExtension extension;
-    if (!TryParseMarkupExtension(raw, extension)) {
-        // `{}` escapes a value that starts with a brace. Strip it here rather
-        // than in the property parsers, which should never see the escape.
-        const std::string trimmed = Trim(raw);
-        if (trimmed.size() >= 2 && trimmed.compare(0, 2, "{}") == 0) return trimmed.substr(2);
-        return raw;
-    }
+    if (!TryParseMarkupExtension(raw, extension))
+        throw MarkupError("'" + property + "' takes a {StaticResource}, got \"" + raw + "\"");
 
     if (extension.name != "StaticResource") {
         throw MarkupError("the markup extension '{" + extension.name + "}' is not implemented, on '" +
@@ -193,7 +212,20 @@ std::string ResolveAttributeValue(const ResourceScope& scope, const std::string&
     }
     if (key.empty())
         throw MarkupError("'{StaticResource}' on '" + property + "' names no resource key");
-    return ResolveResource(scope, key, property);
+    return CheckedResource(scope, key, property);
+}
+
+std::string ResolveAttributeValue(const ResourceScope& scope, const std::string& property,
+                                  const std::string& raw) {
+    MarkupExtension extension;
+    if (!TryParseMarkupExtension(raw, extension)) {
+        // `{}` escapes a value that starts with a brace. Strip it here rather
+        // than in the property parsers, which should never see the escape.
+        const std::string trimmed = Trim(raw);
+        if (trimmed.size() >= 2 && trimmed.compare(0, 2, "{}") == 0) return trimmed.substr(2);
+        return raw;
+    }
+    return ResolveResourceReference(scope, property, raw).text;
 }
 
 std::string StaticResourceElementKey(const std::map<std::string, std::string>& attributes,

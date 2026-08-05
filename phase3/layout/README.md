@@ -20,10 +20,11 @@ Against build `10.0.26100.33158`:
 | L3 | panels: `StackPanel`, `Grid` | 132 | **132** |
 | L4 | text: `TextBlock` | 72 | **36** without a font — see below |
 | L5 | resources: `x:Key`, `{StaticResource}` | 0 | no oracle yet — see below |
+| L5 | styles: `Style`, `Setter`, `BasedOn` | 0 | no oracle yet — see below |
 | L7 | Terminal's own pages | 69 | **36** |
 
 "Measured" rather than "cases": L0 has eighteen cases and four
-measurements, and L5 has forty cases and none at all. Everything authored
+measurements, and L5 has ninety cases and none at all. Everything authored
 after the last oracle run is pending, not passing — see [the property
 system](#the-property-system) and [what is still open](#what-is-still-open).
 
@@ -34,15 +35,16 @@ under all of them. The 33 L7 cases that are still red fail as
 numbers, which is the distinction worth keeping: nothing here is quietly
 approximate.
 
-A further 476 generated cases — `L1-shape`, `L2-content`, `L3-canvas`,
-`L3-scroll`, `L4-icon`, `L4-source` and all of `L5-resources` — have no recorded
-measurement yet and so are neither passing nor failing. `Canvas`,
-`ContentPresenter`, `Path`, `PathIcon` and `Image` are implemented and every
-case that measures one is in that set; the two `PathIcon` subtrees Terminal's
-own markup supplies are the only witnesses any of them has today. `ScrollViewer`
-and `FontIcon` are the other kind: 235 of those cases measure a type this code
-refuses outright, and they were authored to make implementing it possible. They
-are listed under [what is still open](#what-is-still-open).
+A further 526 generated cases — `L1-shape`, `L2-content`, `L3-canvas`,
+`L3-scroll`, `L4-icon`, `L4-source` and all of `L5-resources` and `L5-styles` —
+have no recorded measurement yet and so are neither passing nor failing.
+`Canvas`, `ContentPresenter`, `Path`, `PathIcon` and `Image` are implemented and
+every case that measures one is in that set; the two `PathIcon` subtrees
+Terminal's own markup supplies are the only witnesses any of them has today.
+`ScrollViewer` and `FontIcon` are the other kind: 235 of those cases measure a
+type this code refuses outright, and they were authored to make implementing it
+possible. They are listed under [what is still
+open](#what-is-still-open).
 
 ### What the 33 red L7 cases are waiting for
 
@@ -105,12 +107,30 @@ no metrics loaded it fails as `no harvested metrics` and L0 reads 3 of 4.
 
 Values are not fields. [`property.h`](src/property.h) is a dependency-property
 store: each property is registered once with a default, whether it inherits and
-whether it affects measure, and an effective value is chosen from a local value,
-then an ancestor's, then the default. It is ported in shape from
-[dotnet/wpf](https://github.com/dotnet/wpf)'s `DependencyObject`, cut down to
-the two sources the corpus can currently see — the slots WPF has between them
-are styles, triggers, animation and coercion, which are the levels above this
-one.
+whether it affects measure, and an effective value is chosen from
+
+| slot | what writes it |
+|---|---|
+| local | the markup on the element itself |
+| style | the element's `Style`, `BasedOn` already merged |
+| inherited | the nearest ancestor with a local or style value |
+| default | the registration |
+
+in that order. It is ported in shape from
+[dotnet/wpf](https://github.com/dotnet/wpf)'s `DependencyObject`; the slots the
+references have and this does not are triggers, animation, coercion and a
+control's built-in `generic.xaml` style, which are the levels above this one.
+
+That order is the core's own — *"1. Local value 2. Style 3. Built-in style
+4. Default value"*, in `CDependencyObject::EvaluateBaseValue` — and WPF's
+`BaseValueSourceInternal`, where `Local` is 11, `Style` is 5 and `Inherited` is
+2. The consequence worth stating, because it is the one that surprises: **a
+style setter beats a value inherited from an ancestor.** In the core there is
+no inherited *slot* at all; inheritance is a read-time walk that stops at the
+first ancestor whose value is not still the default, and a style setter makes a
+value not-default. So the same fact produces both halves of the behaviour —
+a style setter shadows what the element would have inherited, and is itself
+inherited by everything below.
 
 The distinction it exists for is *unset* against *set to the default*.
 `<TextBlock/>` inside a `FontSize="22"` control measures at 22, and
@@ -154,8 +174,9 @@ no recorded numbers for them and inventing some would defeat the point of
 having an oracle. In the meantime each case that hides a value behind a
 resource is paired with a twin that writes the same value inline, and
 [`check_twins.py`](../scripts/check_twins.py) holds the pair to measuring
-identically — 17 of the 18 pairs agree here, the last needing a glyph width
-that cannot be derived from the recorded measurements. That is
+identically — 39 of the 40 pairs across both L5 groups agree here, the last
+needing a glyph width that cannot be derived from the recorded measurements.
+That is
 self-consistency, not coverage, and it is reported separately for that reason;
 what it does prove is that a resolved `{StaticResource}` reaches the property
 with the value the dictionary holds. Four further cases are questions rather
@@ -166,6 +187,58 @@ What a load *refuses* to do has no measurement either, and that is the other
 half: [`tests/resources_test.cpp`](tests/resources_test.cpp) holds a failed
 lookup to naming the key it could not find, and `ctest` runs it beside the
 property tests.
+
+## The style system
+
+`Style`, `Setter`, `BasedOn`, and both routes a style takes to an element:
+explicit, behind an `x:Key` and referenced by `Style="{StaticResource K}"`, and
+implicit, keyed by `TargetType` and applied to every element of that type in
+scope that has no `Style` of its own. [`style.h`](src/style.h) is the whole of
+it; the slot it writes into is the one in the table above.
+
+Three things about it are worth stating because they are decisions rather than
+consequences:
+
+**Setters are resolved and parsed where they are written.** A setter goes
+through the *ordinary* attribute parser against a scratch node of the target
+type, so `<Setter Property="Width" Value="60"/>` and `Width="60"` on the
+element reach the property through one piece of code. They cannot disagree
+about what `60` means, about which types have a `Width`, or about the message
+when the value is not a number — which is the same argument the resource system
+makes for carrying literals instead of parsed values, one level up. It also
+means a setter for a property the `TargetType` does not have is a load failure
+at the dictionary rather than a setter that can never fire.
+
+**`BasedOn` is flattened once, at build time.** A style's setter list is the
+base's with the derived style's substituted in per property, which is what
+`CStyle::CreateMergedBasedOnSetterCollection` builds at seal time. Nothing
+downstream walks a chain. A cycle is not expressible here at all: a style
+enters its dictionary only once it is finished, so a self-reference fails as an
+unresolved key rather than as a loop — the runtime needs its loop check because
+its `Style` is a mutable object that can be pointed anywhere before sealing.
+
+**Implicit and explicit are one mechanism with two lookups.** They produce one
+`Style` object and one application, and an explicit `Style=` replaces the
+implicit style rather than merging with it — the two occupy a single slot.
+The lookups differ, deliberately: the implicit key is an *exact* type match
+(`ResolveImplicitStyleKeyImpl` hands the element's own class name to a
+dictionary probe, and WPF's `FindImplicitStyleResource` passes `this.GetType()`),
+while an explicit `Style=` is validated with an is-a check
+(`CFrameworkElement::ValidateTargetType` asks `OfTypeByIndex`). Neither of those
+is observable in this corpus, because every markup type here is concrete and no
+two of them derive from one another — `L5-styles-implicit-derived-type` and
+`L5-styles-explicit-derived-target` are the pair that asks the runtime, and this
+implementation refuses both by name because it has no abstract `Control` type.
+
+The same split holds for the other half: what the corpus can see is checked by
+50 `L5-styles` cases, 22 of them twinned; what it cannot is checked by
+[`tests/style_test.cpp`](tests/style_test.cpp), which `ctest` runs. That file
+exists for a sharper reason than the resource one. A measurement is a tree of
+numbers, so it cannot say *which slot* a value came from — and that is the
+entire content of what a style is. An implementation that wrote setters into
+the local slot measures identically to this one in every case the corpus can
+express, and differs the moment anything clears a local value or replaces a
+style.
 
 ## Running it
 
@@ -185,8 +258,9 @@ holding two sets of metrics for one family is refused rather than resolved.
 Two checks need no oracle at all, and run from a bare checkout:
 
     ctest --test-dir /tmp/layout-build      # what a load refuses, and by what
-                                            # name, and what the oracle probe
-                                            # reads out of a case file
+                                            # name, which slot a value is in,
+                                            # and what the oracle probe reads
+                                            # out of a case file
     python3 phase3/scripts/check_twins.py \
         --cases phase3/xaml-db/cases --results /tmp/layout-results
 
@@ -212,6 +286,16 @@ where it is available it is the better source. It also confirms the two
 divergences below directly: `CFrameworkElement::MeasureCore` layout-rounds
 unconditionally, and `CGrid` redistributes its rounding remainder only across
 star definitions.
+
+The style system comes from both at once, and they agree about everything that
+matters here: the precedence order (`CDependencyObject::EvaluateBaseValue`,
+`EffectiveValueEntry.BaseValueSourceInternal`), the `BasedOn` merge
+(`CStyle::CreateMergedBasedOnSetterCollection`, `StyleHelper.ProcessSelfStyles`),
+exact-type matching for an implicit style and is-a matching for an explicit
+one, and that a style-provided value is inherited by descendants exactly as a
+written one is. Where they differ is in the *shape* of the store rather than in
+its answers — the core has no inherited slot and reaches the same result with a
+read-time walk — and this follows the core, because the walk was already here.
 
 Three places where the ported source and the recorded oracle disagree, all
 found by running the corpus rather than by reading:
@@ -276,9 +360,11 @@ does not do, so that a passing run is not read as more than it is:
   one.
 - **No `LayoutTransform`.** WPF measures a transformed element by fitting a
   maximal rectangle in local space; none of that is here.
-- **The property store has two sources**, local and inherited. Styles, triggers,
-  animation and coercion are levels above this one; the lookup is written so
-  they slot in between rather than being threaded through callers.
+- **The property store has three sources**, local, style and inherited.
+  Triggers, animation, coercion and a control's built-in `generic.xaml` style
+  are levels above this one; the lookup is written so they slot in beside the
+  three rather than being threaded through callers. There is no built-in-style
+  layer because nothing here has a control template to carry one.
 - **`Grid` star resolution follows WPF's pre-4.7 algorithm**, not the
   `MaxDiscrepancy` rework. The corpus does not distinguish them: it has no
   definition-level `MinWidth`/`MaxWidth`, which is the only thing they disagree
@@ -297,8 +383,23 @@ does not do, so that a passing run is not read as more than it is:
   `{TemplateBinding}`.** `{StaticResource}` is the only markup extension that
   resolves. Every other one is a named refusal, including on properties where
   the difference would not show in the numbers.
-- **No styles, no setters, no control templates.** L5 in the corpus is scoped
-  to resource lookup; the rest of what that level names is not started.
+- **No control templates, and no triggers.** `Style`, `Setter` and `BasedOn`
+  are implemented; `Style.Triggers`, `Setter.Target`, `ControlTemplate`,
+  `VisualState` setters and a control's built-in `generic.xaml` style are not.
+  A `<Setter>` naming a `Target` is refused by name rather than treated as a
+  `Property`.
+- **A style is not re-applied after the tree is built.** The runtime resolves
+  an implicit style at `CreationComplete` and again on entering a live tree,
+  and re-resolves when a `Resources` dictionary is replaced. Here it is
+  resolved once, when the element's markup closes, and never again — nothing
+  in this corpus moves an element or replaces a dictionary after the load.
+  `ClearStyleValues` exists and is tested, because replacing a style is what
+  makes the separate slot necessary, but no markup path calls it.
+- **`Setter.Value` is resolved eagerly.** The runtime defers a setter's
+  `{StaticResource}` until the value is first needed. Here it is resolved when
+  the style is parsed, against the dictionaries in scope where the style is
+  written. `L5-styles-setter-value-resource-scope` is the case where the two
+  could differ, and it is a question rather than a claim.
 - **Resources are literal text, not objects.** A resource holds the string its
   declaring element carried, and resolution hands that string to the same
   property parser an inline attribute would reach. It is why a resolved case
@@ -322,16 +423,33 @@ neither passing nor failing:
 | `L4-icon` | 69 | does a `FontIcon` measure its glyph or report a `FontSize` square? |
 | `L3-canvas` | 63 | does a `Canvas` report its slot or nothing? |
 | `L1-shape` | 60 | are a shape's bounds tight, and is its desired size the right edge or the width? |
+| `L5-styles` | 50 | the level has no measurement at all either, and six of them ask a question outright — see below |
 | `L5-resources` | 40 | every one of them: the level has no measurement at all |
 | `L0-props` | 14 | does `UseLayoutRounding` inherit, how does a tie at `.5` break, and what does a `ContentControl` do with content it is not stretching? |
 | `L4-source` | 6 | is `Text="x"` the same thing as `<TextBlock>x</TextBlock>`? |
 
-The first three rows are a different kind of open from the rest. `L3-canvas`,
-`L1-shape`, `L2-content`, `L0-props` and `L4-source` check answers this code
-already gives; `L3-scroll` and `L4-icon` measure types it refuses to give one
-for at all, so they cannot fail on a number — only on the refusal — and they
-exist so that the next version of this file can move them out of this table
-entirely.
+`L3-scroll` and `L4-icon` are a different kind of open from the rest.
+`L3-canvas`, `L1-shape`, `L2-content`, `L0-props`, `L4-source`, `L5-resources`
+and `L5-styles` check answers this code already gives; those two measure types
+it refuses to give one for at all, so they cannot fail on a number — only on
+the refusal — and they exist so that the next version of this file can move
+them out of this table entirely.
+
+The six `L5-styles` cases that carry `oracle_decides` are the ones neither
+reference settles for a `XamlReader.Load` with no `Application`:
+
+| case | this implementation's answer | why it might be wrong |
+|---|---|---|
+| `implicit-own-dictionary` | applies — the outer `Border` is styled by its own dictionary | the core's walk starts at the element, but `{StaticResource}` in this same parser cannot see a dictionary declared below the attribute reading it |
+| `implicit-forward-dictionary` | does not apply | the runtime applies styles after the parse, so it may well find a dictionary written below |
+| `setter-value-resource-scope` | resolved where the style is written, so `60` | the runtime defers the lookup; a deferred one might pick up the styled element's scope instead, giving `100` |
+| `duplicate-setter` | last setter wins, so `100` | the core's lookup says so, but its parser may reject the duplicate first |
+| `implicit-derived-type` | refused: no abstract `Control` type | the runtime loads it and should not apply it, by exact-type match |
+| `explicit-derived-target` | refused, same reason | the runtime loads it and *should* apply it, by is-a match |
+
+The last two are a deliberate pair: the interesting finding is the runtime
+answering them differently, and a run that answered both the same way would mean
+one of the two documented rules is not what the source says.
 
 The `L1-shape` answers have two witnesses each already, from Terminal's two
 `PathIcon` cases, but both of those geometries start near the origin and

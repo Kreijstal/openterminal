@@ -22,10 +22,17 @@
 #define OPENXAML_RESOURCES_H
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace openxaml {
+
+// A dictionary entry may be a Style, which is the one resource in the corpus
+// with no textual form at all. Declared rather than included: styles are built
+// on the property registry and resource lookup is not, and nothing here reads
+// anything out of one.
+struct Style;
 
 // The shapes a value can have, at the granularity the property parsers care
 // about. Not a type system -- just enough to tell a length from a Thickness.
@@ -42,14 +49,24 @@ enum class ValueKind {
     GridLength,
     String,
     Boolean,
+    // Not a literal. A Style is an object, and the only property it can supply
+    // is FrameworkElement.Style -- which is exactly what this shape is for:
+    // {StaticResource BoxStyle} on a Width has to fail saying so, rather than
+    // resolving to the empty text a style has.
+    Style,
 };
 
 struct ResourceValue {
     // The element that declared it, as written: "x:Double", "Thickness".
     std::string type;
     // The literal, spelled exactly as an inlined attribute would spell it.
+    // Empty for a Style, which has none.
     std::string text;
     ValueKind kind = ValueKind::Unknown;
+    // Set exactly when kind is Style. Shared rather than owned, because a
+    // BasedOn and an alias entry both make a second dictionary refer to the
+    // same style object, and neither of them copies it.
+    std::shared_ptr<const Style> style;
 };
 
 // One dictionary. Keys are unique within it, which XAML enforces at load time
@@ -100,6 +117,19 @@ const ResourceValue& LookUpResource(const ResourceScope& scope, const std::strin
 // resource's shape can supply `property`.
 std::string ResolveResource(const ResourceScope& scope, const std::string& key,
                             const std::string& property);
+
+// The dictionary entry a `{StaticResource ...}` names, in either spelling,
+// checked against what `property` can take.
+//
+// Separate from ResolveAttributeValue because a Style has no literal text: a
+// property whose value is an object needs the entry itself, and every other
+// caller wants the string out of it. Both go through here so that a missing
+// key, a wrong-shaped key and a malformed extension are refused once and in
+// the same words. Throws MarkupError if `raw` is not a markup extension at
+// all -- the caller decides what a plain literal means before asking.
+const ResourceValue& ResolveResourceReference(const ResourceScope& scope,
+                                              const std::string& property,
+                                              const std::string& raw);
 
 struct MarkupExtension {
     // "StaticResource", "ThemeResource", "x:Bind"...

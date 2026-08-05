@@ -37,21 +37,26 @@ authoring, and L7 is a harvest of the real pages.
 ## L5, before the oracle has seen it
 
 Resource lookup is the first thing in the corpus that was authored *after* the
-last oracle run, so its 40 cases are written and pending rather than measured.
-That is a different state from the levels above it and is worth naming, because
-"pending" is easy to read as "passing".
+last oracle run, and styles are the second, so L5's 90 cases — 40 in
+`L5-resources`, 50 in `L5-styles` — are written and pending rather than
+measured. That is a different state from the levels above it and is worth
+naming, because "pending" is easy to read as "passing".
 
 They are also the first cases with no axis to sweep. `{StaticResource W}`
 resolves to the same literal at every available size, so the cross product that
 gives L1–L4 their coverage would buy nothing but oracle time here. What varies
 instead is the rule: where the key is declared, how far the lookup walks, which
 dictionary wins when two declare the same key, which of the three spellings the
-reference uses, and which primitive type the value has.
+reference uses, and which primitive type the value has. `L5-styles` varies the
+same kind of thing one layer up — where the style is declared, how it is
+referenced, what its setters name, what it is based on, and which of the four
+value slots wins when two of them have something to say.
 
 Two things stand in for the oracle in the meantime, and neither pretends to be
 one:
 
-**Twins.** Every case that hides a value behind a resource names a `twin` — a
+**Twins.** Every case that hides a value behind a resource or a style names a
+`twin` — a
 second case describing the same layout with the value written inline. The two
 have to measure identically, and
 [`check_twins.py`](../scripts/check_twins.py) checks that against our own
@@ -60,12 +65,25 @@ or whether the markup is valid XAML; both halves can be wrong together. What it
 does catch is a lookup resolving to the wrong value, which is the entire
 failure mode of a resource system.
 
-**Declared questions.** Four cases carry `oracle_decides` and a `question`,
+For styles it catches something narrower and more useful. A resource that
+resolves wrongly lands on a wrong number, which any single case would show. A
+style applied at the wrong *precedence* lands on a number that is right in the
+case that was written and wrong in the one that was not — so the pairs go in
+both directions on purpose: a local value that has to beat the style, a style
+setter that has to beat the default, and a style setter that has to beat a
+value inherited from an ancestor. Only having all three catches an
+implementation that stored a setter as a local value, which is otherwise
+indistinguishable.
+
+**Declared questions.** Ten cases carry `oracle_decides` and a `question`,
 because WinUI 2's parser is not documented to the depth they need and WPF's
-behaviour is not evidence about it. Does a forward reference resolve? Is an
-element's own dictionary in scope for its own attributes? Can a `GridLength` be
-declared as an object element? Does an `x:Double` satisfy a property whose type
-is `GridLength`? Those have no inline twin — writing one would be inventing the
+behaviour is not evidence about it. Four are about resources: does a forward
+reference resolve? Is an element's own dictionary in scope for its own
+attributes? Can a `GridLength` be declared as an object element? Does an
+`x:Double` satisfy a property whose type is `GridLength`? Six are about styles,
+and are listed with this implementation's provisional answer in [the layout
+README](../layout/README.md#what-is-still-open). Those have no inline twin —
+writing one would be inventing the
 answer — and a rejection of them by the runtime is the finding rather than a
 broken corpus. `report_measurements.py` treats them accordingly, and only
 because the case said so before the run.
@@ -289,11 +307,12 @@ gate `phase0` and `phase1` already apply to their snapshots.
 
 ## Using the measurements
 
-The measurements are CI output, not repository content: 1,031 files regenerated
+The measurements are CI output, not repository content: 1,081 files regenerated
 deterministically in a few minutes. Fetch them from the artifact of a green
 run. The digest committed under `oracles/` still records 541, which is the
-corpus the last run saw — the 40 L5 cases, and the 241 `L3-scroll`, `L4-icon`
-and `L4-source` cases beside them, were all authored after it.
+corpus the last run saw — the 90 L5 cases, the 14 newer `L0-props` ones, the
+195 in `L1-shape`, `L2-content` and `L3-canvas`, and the 241 in `L3-scroll`,
+`L4-icon` and `L4-source` beside them, were all authored after it.
 
     python3 phase3/scripts/fetch_measurements.py          # prints the directory
     python3 phase3/scripts/check_layout.py \
@@ -325,7 +344,7 @@ images move on their own schedule — but it says plainly that nothing is
 verifying those measurements until the digest lands.
 
 **Growing the corpus trips the same gate, on purpose.** The committed digest for
-`10.0.26100.33158` covers 541 cases and no L5; the corpus now has 1,031 and
+`10.0.26100.33158` covers 541 cases and no L5; the corpus now has 1,081 and
 does. The first measurement run after that will stop with
 
     L0: 4 cases -> 18 cases
@@ -333,7 +352,7 @@ does. The first measurement run after that will stop with
     L2: 192 cases -> 264 cases
     L3: 132 cases -> 361 cases
     L4: 72 cases -> 147 cases
-    L5: new level, 40 cases
+    L5: new level, 90 cases
     L7: same 69 cases, different answers
 
 Every line but the last is the corpus asking questions the digest has never
@@ -398,9 +417,11 @@ L0–L3 and 36 of the 69 L7 cases. L4 is implemented and matches 36 of 72 on a
 bare checkout, against the two numbers [solved out of the
 measurements](fonts/) themselves; the other 36 need [the harvested font
 metrics](fonts/), which are CI output rather than repository content, and say
-so by name until those arrive. L5 is implemented and has no measurements at
-all yet, so it contributes nothing to this number and is reported separately by
-`check_twins.py` — which is the point of keeping the two reports apart. What is
+so by name until those arrive. L5's resource and style halves are both
+implemented and have no measurements at
+all yet, so they contribute nothing to this number and are reported separately by
+`check_twins.py`, where 39 of 40 pairs agree — which is the point of keeping the
+two reports apart. What is
 still red fails with `the type 'ScrollViewer' is not implemented` and the like,
 rather than with wrong numbers, which is the distinction the metric is there to
 preserve — [the layout README](../layout/README.md) ranks the remaining
@@ -415,9 +436,9 @@ it. Three of them are answers this implementation does not have — whether
 `UseLayoutRounding` inherits, how a tie at exactly `.5` breaks, and what a
 `ContentControl` does with content it is not stretching.
 
-A further 476 generated cases in `L1-shape`, `L2-content`, `L3-canvas`,
-`L3-scroll`, `L4-icon`, `L4-source` and `L5-resources` are newer than the last
-oracle run for the same reason. They do not move the numbers above in either
-direction until CI fills them in; they exist because the answers they cover
-currently rest on one witness each, on three that contradict each other, or on
-none at all.
+A further 526 generated cases in `L1-shape`, `L2-content`, `L3-canvas`,
+`L3-scroll`, `L4-icon`, `L4-source`, `L5-resources` and `L5-styles` are newer
+than the last oracle run for the same reason. They do not move the numbers above
+in either direction until CI fills them in; they exist because the answers they
+cover currently rest on one witness each, on three that contradict each other,
+or on none at all.

@@ -19,6 +19,7 @@
 #include "resources.h"
 #include "shape.h"
 #include "stack_panel.h"
+#include "style.h"
 
 namespace openxaml {
 namespace {
@@ -451,6 +452,111 @@ void ApplyAttributes(MarkupNode& node, const std::map<std::string, std::string>&
     }
 }
 
+// --- styles -------------------------------------------------------------------
+
+// The scanner, as the style parser wants to see it. The style grammar lives in
+// style.cpp and the XML scanning lives here; this is the whole of what passes
+// between the two, so neither has to know how the other works.
+class ScannerTags : public StyleTagSource {
+public:
+    explicit ScannerTags(Scanner& scanner) : scanner_(scanner) {}
+
+    bool Next(StyleTag& out) override {
+        Tag tag;
+        if (!scanner_.Next(tag)) return false;
+        out.name = tag.name;
+        out.attributes = tag.attributes;
+        out.self_closing = tag.self_closing;
+        out.closing = tag.closing;
+        out.text_before = tag.text_before;
+        return true;
+    }
+
+private:
+    Scanner& scanner_;
+};
+
+// What building a style needs from the markup layer: the type registry, the
+// attribute parser, and the resource scope the style was declared in.
+//
+// ParseSetter runs the *ordinary* attribute path against a scratch node of the
+// target type, and that is the point of it. `<Setter Property="Width"
+// Value="60"/>` and `Width="60"` written on the element reach the property
+// through one piece of code, so they cannot disagree about what "60" means, or
+// about which types have a Width, or about the message when the value is not a
+// number. It is the same argument the resource system makes for carrying
+// literals rather than parsed values, applied one level up.
+class MarkupStyleHost : public StyleHost {
+public:
+    explicit MarkupStyleHost(ResourceScope scope) : scope_(std::move(scope)) {}
+
+    void ValidateTargetType(const std::string& type) override {
+        // Both, because they answer different questions: FullTypeName says the
+        // corpus knows the type, OwnersFor says the property registry does.
+        FullTypeName(type);
+        OwnersFor(type);
+    }
+
+    const std::vector<std::string>& OwnerChain(const std::string& type) override {
+        return OwnersFor(type);
+    }
+
+    StyleSetter ParseSetter(const std::string& target_type, const std::string& property,
+                            const std::string& value) override {
+        MarkupNode scratch;
+        scratch.type = target_type;
+        ApplyAttributes(scratch, {{property, ResolveAttributeValue(scope_, property, value)}});
+        if (scratch.properties.size() != 1) {
+            // ApplyAttributes drops the handful of names that set nothing --
+            // x:Name, an AutomationProperties stem -- and ApplyProperty carries
+            // Text and Data on the node instead of in the store. A Setter for
+            // any of those would apply nothing at all, which is the one outcome
+            // this parser never allows silently.
+            throw MarkupError("a Setter for '" + property + "' on '" + target_type +
+                              "' is not implemented: nothing it sets reaches the property store");
+        }
+        return StyleSetter{scratch.properties.front().property,
+                           std::move(scratch.properties.front().value)};
+    }
+
+    std::shared_ptr<const Style> LookUpBasedOn(const std::string& raw) override {
+        // Through the ordinary resolver, so the named form, the missing key
+        // and the wrong-shaped key are all refused in the words every other
+        // lookup is refused in. A Style is a declared shape, so a BasedOn on
+        // an x:Double fails as "cannot supply 'BasedOn'" and not as a null.
+        //
+        // The scope is the dictionary's, not the styled element's: BasedOn is
+        // read where the style is written.
+        const std::shared_ptr<const Style>& style =
+            ResolveResourceReference(scope_, "BasedOn", raw).style;
+        if (!style) throw MarkupError("BasedOn names something that is not a Style");
+        return style;
+    }
+
+    std::string ResolveResourceElement(const std::map<std::string, std::string>& attributes,
+                                       const std::string& property) override {
+        const std::string key = StaticResourceElementKey(attributes, /*allow_key=*/false);
+        return ResolveResource(scope_, key, property);
+    }
+
+private:
+    ResourceScope scope_;
+};
+
+// The Style a `Style="{StaticResource K}"` attribute names.
+//
+// The scope is the styled element's, which is the ordinary attribute rule --
+// an explicit reference is resolved where it is written, like every other
+// {StaticResource}. That is not the rule for the implicit route; see
+// FindImplicitStyle's caller.
+std::shared_ptr<const Style> ResolveStyleReference(const ResourceScope& scope,
+                                                   const std::string& raw) {
+    const std::shared_ptr<const Style>& style =
+        ResolveResourceReference(scope, "Style", raw).style;
+    if (!style) throw MarkupError("Style names something that is not a Style");
+    return style;
+}
+
 // --- property elements --------------------------------------------------------
 
 // Reads the one brush inside a <Something.Background> and the closing tag, and
@@ -550,14 +656,39 @@ std::map<std::string, std::string> ResolveAttributes(
 // The entry's closing tag is consumed here rather than by the main loop, so
 // that its content is read as the resource's literal instead of being offered
 // to whatever element encloses the dictionary.
-void AddResourceEntry(ResourceDictionary& dictionary, const Tag& tag, Scanner& scanner,
+void AddResourceEntry(MarkupNode& owner, const Tag& tag, Scanner& scanner,
                       const ResourceScope& scope) {
+    ResourceDictionary& dictionary = owner.resources;
     std::map<std::string, std::string> attributes = tag.attributes;
     const auto key_attribute = attributes.find("x:Key");
-    if (key_attribute == attributes.end())
-        throw MarkupError("<" + tag.name + "> in a resource dictionary needs an x:Key");
-    const std::string key = key_attribute->second;
+    const bool keyed = key_attribute != attributes.end();
+    const std::string key = keyed ? key_attribute->second : std::string();
     attributes.erase("x:Key");
+
+    // A Style is the one dictionary entry that may have no key at all: without
+    // one it is implicit and is filed under the type it targets instead. Read
+    // before the x:Key check below for exactly that reason.
+    if (tag.name == "Style") {
+        MarkupStyleHost host(scope);
+        ScannerTags tags(scanner);
+        std::shared_ptr<const Style> style =
+            ParseStyle(attributes, tag.self_closing, tags, host, key);
+        if (keyed) {
+            ResourceValue entry;
+            entry.type = "Style";
+            entry.kind = ValueKind::Style;
+            entry.style = style;
+            dictionary.Add(key, std::move(entry));
+        } else {
+            // The type is read out before the pointer is handed over: the two
+            // arguments are unsequenced, and a moved-from shared_ptr is null.
+            const std::string target = style->target_type;
+            owner.implicit_styles.Add(target, std::move(style));
+        }
+        return;
+    }
+
+    if (!keyed) throw MarkupError("<" + tag.name + "> in a resource dictionary needs an x:Key");
 
     std::string content;
     if (!tag.self_closing) {
@@ -681,13 +812,22 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
         throw MarkupError("the type '" + node.type + "' is not implemented");
     }
 
+    // The style first, then the local values. Not because the order decides
+    // anything -- the two go into different slots and precedence is read, not
+    // written -- but because it is the order the runtime applies them in, and
+    // an implementation whose answer depended on the order would be one where
+    // a later local value silently overwrote a style setter instead of
+    // shadowing it.
+    //
+    // Both are set after the children are attached, so that an inherited value
+    // flowing down from either reaches a subtree that is already there.
+    if (node.style)
+        ApplyStyle(*element, *node.style, node.type, OwnersFor(node.type));
+
     // Only what the markup wrote, which is not the same as every property the
     // element has. An inherited property left alone must stay unset so that it
     // reads its parent's value; assigning the default here instead would give
     // every TextBlock a local FontSize of 14 and nothing would ever inherit.
-    //
-    // Set after the children are attached, so that a value flowing down
-    // reaches a subtree that is already there.
     for (const MarkupProperty& assignment : node.properties)
         element->SetValue(*assignment.property, assignment.value);
     return element;
@@ -758,6 +898,41 @@ MarkupNode ParseMarkup(const std::string& markup) {
         return chain;
     };
 
+    // The same walk again, for implicit styles. Same order, same shape, and a
+    // separate table because an implicit key is a type rather than a string --
+    // see style.h.
+    //
+    // `self` is the element being finished, whose *own* dictionary is in scope
+    // for it: `ResolveImplicitStyleKeyImpl` starts its walk at the element and
+    // only then goes to the parent, so a Border whose dictionary holds an
+    // implicit Border style is styled by it. That is the one place the
+    // implicit route is wider than {StaticResource}'s, which cannot see a
+    // dictionary declared below the attribute that reads it.
+    auto implicit_scope = [&open](const MarkupNode& self) {
+        ImplicitStyleScope chain;
+        if (!self.implicit_styles.empty()) chain.push_back(&self.implicit_styles);
+        for (auto it = open.rbegin(); it != open.rend(); ++it) {
+            if (!it->implicit_styles.empty()) chain.push_back(&it->implicit_styles);
+        }
+        return chain;
+    };
+
+    // Called once an element has been read whole. An implicit style is looked
+    // up here rather than when the start tag was scanned, because the
+    // element's own dictionary is a child of it and does not exist yet at that
+    // point -- and because an explicit Style= wins outright, so there is
+    // nothing to look up when one was written.
+    //
+    // The runtime does this later still: `CFrameworkElement::ApplyStyle` runs
+    // at CreationComplete and again on entering a live tree, which is after
+    // the whole document is parsed. The difference shows only for a dictionary
+    // written *below* the elements it targets, which is
+    // `L5-styles-implicit-forward-dictionary` and is a question rather than a
+    // decision.
+    auto finish_node = [&](MarkupNode& node) {
+        if (!node.style) node.style = FindImplicitStyle(implicit_scope(node), node.type);
+    };
+
     // Character data belongs to the element it sits inside, and only a
     // TextBlock has anywhere to put it. Everywhere else the old rule stands:
     // reject it rather than drop it silently.
@@ -793,6 +968,7 @@ MarkupNode ParseMarkup(const std::string& markup) {
             open.pop_back();
             if (tag.name != finished.type)
                 throw MarkupError("</" + tag.name + "> does not close the open element");
+            finish_node(finished);
             if (open.empty()) {
                 root = std::move(finished);
                 have_root = true;
@@ -885,7 +1061,7 @@ MarkupNode ParseMarkup(const std::string& markup) {
                 if (!tag.self_closing) dictionary_open = true;
                 continue;
             }
-            AddResourceEntry(open.back().resources, tag, scanner, scope());
+            AddResourceEntry(open.back(), tag, scanner, scope());
             continue;
         }
 
@@ -933,8 +1109,19 @@ MarkupNode ParseMarkup(const std::string& markup) {
         FullTypeName(tag.name);
         MarkupNode node;
         node.type = tag.name;
-        ApplyAttributes(node, ResolveAttributes(tag.attributes, scope()));
+
+        // Style is pulled out before the rest: it is the one attribute whose
+        // value is an object rather than a literal, so the text-substitution
+        // path every other attribute takes has nothing to hand it.
+        std::map<std::string, std::string> attributes = tag.attributes;
+        const auto style_attribute = attributes.find("Style");
+        if (style_attribute != attributes.end()) {
+            node.style = ResolveStyleReference(scope(), style_attribute->second);
+            attributes.erase(style_attribute);
+        }
+        ApplyAttributes(node, ResolveAttributes(attributes, scope()));
         if (tag.self_closing) {
+            finish_node(node);
             if (open.empty()) {
                 root = std::move(node);
                 have_root = true;

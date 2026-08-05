@@ -70,29 +70,47 @@ const DependencyProperty* FindProperty(const std::vector<std::string>& owners,
 
 const std::vector<const DependencyProperty*>& InheritedProperties() { return Table().inherited; }
 
+const DependencyProperty* PropertyByIndex(size_t index) {
+    const Registry& registry = Table();
+    if (index >= registry.properties.size()) return nullptr;
+    return registry.properties[index].get();
+}
+
 // --- DependencyObject ---------------------------------------------------------
 
+const PropertyValue* DependencyObject::OwnValue(const DependencyProperty& property) const {
+    const auto local = local_.find(property.index());
+    if (local != local_.end()) return &local->second;
+    // Below a local value and above an inherited one. See the precedence note
+    // at the top of property.h -- this ordering is the whole of what a style
+    // slot means.
+    const auto styled = style_.find(property.index());
+    if (styled != style_.end()) return &styled->second;
+    return nullptr;
+}
+
 const PropertyValue& DependencyObject::GetValue(const DependencyProperty& property) const {
-    const auto found = local_.find(property.index());
-    if (found != local_.end()) return found->second;
+    if (const PropertyValue* own = OwnValue(property)) return *own;
 
     if (property.inherits()) {
         // Up the chain rather than out of a cache. The trees the corpus
         // measures are a handful of elements deep, and a cache that can go
         // stale is a source of wrong answers that a walk cannot have.
+        //
+        // What an ancestor contributes is its effective value, not just what
+        // markup wrote on it: a FontSize a style set on a Grid reaches the
+        // TextBlock inside it exactly as a written one does.
         for (const DependencyObject* ancestor = inheritance_parent_; ancestor != nullptr;
              ancestor = ancestor->inheritance_parent_) {
-            const auto inherited = ancestor->local_.find(property.index());
-            if (inherited != ancestor->local_.end()) return inherited->second;
+            if (const PropertyValue* inherited = ancestor->OwnValue(property)) return *inherited;
         }
     }
 
     return property.default_value();
 }
 
-void DependencyObject::SetValue(const DependencyProperty& property, PropertyValue value) {
-    const PropertyValue before = GetValue(property);
-    local_[property.index()] = std::move(value);
+void DependencyObject::ValueMoved(const DependencyProperty& property,
+                                  const PropertyValue& before) {
     if (SameValue(before, GetValue(property))) return;
 
     OnPropertyChanged(property);
@@ -100,6 +118,12 @@ void DependencyObject::SetValue(const DependencyProperty& property, PropertyValu
         for (DependencyObject* child : InheritanceChildren())
             child->InvalidateInherited(property, before);
     }
+}
+
+void DependencyObject::SetValue(const DependencyProperty& property, PropertyValue value) {
+    const PropertyValue before = GetValue(property);
+    local_[property.index()] = std::move(value);
+    ValueMoved(property, before);
 }
 
 void DependencyObject::ClearValue(const DependencyProperty& property) {
@@ -108,17 +132,39 @@ void DependencyObject::ClearValue(const DependencyProperty& property) {
 
     const PropertyValue before = found->second;
     local_.erase(found);
-    if (SameValue(before, GetValue(property))) return;
-
-    OnPropertyChanged(property);
-    if (property.inherits()) {
-        for (DependencyObject* child : InheritanceChildren())
-            child->InvalidateInherited(property, before);
-    }
+    ValueMoved(property, before);
 }
 
 bool DependencyObject::HasLocalValue(const DependencyProperty& property) const {
     return local_.count(property.index()) != 0;
+}
+
+void DependencyObject::SetStyleValue(const DependencyProperty& property, PropertyValue value) {
+    const PropertyValue before = GetValue(property);
+    style_[property.index()] = std::move(value);
+    ValueMoved(property, before);
+}
+
+void DependencyObject::ClearStyleValues() {
+    if (style_.empty()) return;
+
+    // The before-values are read while the slots are still filled, and the
+    // notifications are sent once they are all gone. Doing it one at a time
+    // would report intermediate states that never existed as an effective
+    // value -- a style is applied and removed whole.
+    std::vector<std::pair<const DependencyProperty*, PropertyValue>> before;
+    before.reserve(style_.size());
+    for (const auto& [index, value] : style_) {
+        const DependencyProperty* property = PropertyByIndex(index);
+        if (!property) throw PropertyError("a style value is filed under no known property");
+        before.emplace_back(property, GetValue(*property));
+    }
+    style_.clear();
+    for (const auto& [property, was] : before) ValueMoved(*property, was);
+}
+
+bool DependencyObject::HasStyleValue(const DependencyProperty& property) const {
+    return style_.count(property.index()) != 0;
 }
 
 double DependencyObject::GetDouble(const DependencyProperty& property) const {
@@ -170,10 +216,13 @@ void DependencyObject::OnPropertyChanged(const DependencyProperty& property) { (
 
 void DependencyObject::InvalidateInherited(const DependencyProperty& property,
                                            const PropertyValue& before) {
-    // A local value shadows whatever the ancestor did, so the subtree below it
-    // did not move either. This is the stop condition that keeps re-parenting
-    // proportional to what actually changed.
-    if (HasLocalValue(property)) return;
+    // A value of this object's own -- local or from its style -- shadows
+    // whatever the ancestor did, so the subtree below it did not move either.
+    // This is the stop condition that keeps re-parenting proportional to what
+    // actually changed, and it has to agree with GetValue about what counts as
+    // "its own" or an element under a style would be told about changes it
+    // cannot see.
+    if (OwnValue(property) != nullptr) return;
     if (SameValue(before, GetValue(property))) return;
 
     OnPropertyChanged(property);
@@ -185,7 +234,7 @@ void DependencyObject::InvalidateAllInherited(const std::vector<PropertyValue>& 
     const std::vector<const DependencyProperty*>& inherited = InheritedProperties();
     for (size_t i = 0; i < inherited.size(); ++i) {
         const DependencyProperty& property = *inherited[i];
-        if (HasLocalValue(property)) continue;
+        if (OwnValue(property) != nullptr) continue;
         if (SameValue(before[i], GetValue(property))) continue;
         OnPropertyChanged(property);
         for (DependencyObject* child : InheritanceChildren())
