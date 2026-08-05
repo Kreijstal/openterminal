@@ -24,11 +24,11 @@ class ReportTest(unittest.TestCase):
         self.cases.mkdir()
         self.measurements.mkdir()
 
-    def add_case(self, case_id: str, level: int) -> None:
+    def add_case(self, case_id: str, level: int, **extra: object) -> None:
         group = self.cases / f"L{level}-group"
         group.mkdir(exist_ok=True)
         (group / f"{case_id}.json").write_text(
-            json.dumps({"id": case_id, "level": level, "markup": "<Grid/>"}),
+            json.dumps({"id": case_id, "level": level, "markup": "<Grid/>", **extra}),
             encoding="utf-8",
         )
 
@@ -89,6 +89,41 @@ class ReportTest(unittest.TestCase):
         payload = report(self.cases, self.measurements)
         self.assertEqual(payload["levels"]["3"]["missing"], 1)
         self.assertEqual(payload["authored_levels_failing"], ["3"])
+
+    def test_declared_question_is_answered_not_broken(self) -> None:
+        # An L5 case that says up front it does not know the behaviour. The
+        # runtime refusing it is the answer we asked for.
+        self.add_case("q", 5, oracle_decides=True,
+                      question="does a forward reference resolve?")
+        self.add_measurement("q", error="Cannot find a resource named 'BoxWidth'")
+        payload = report(self.cases, self.measurements)
+        self.assertEqual(payload["authored_levels_failing"], [])
+        self.assertEqual([q["kind"] for q in payload["quarantine"]], ["question"])
+        summary = summarise(payload)
+        self.assertIn("Open questions the runtime answered", summary)
+        self.assertNotIn("Quarantined harvest candidates", summary)
+
+    def test_l5_without_a_question_is_still_fatal(self) -> None:
+        # The exemption is per case and has to be declared. Without it, level 5
+        # is as accountable as every other level we author.
+        self.add_case("r", 5)
+        self.add_measurement("r", error="boom")
+        payload = report(self.cases, self.measurements)
+        self.assertEqual(payload["authored_levels_failing"], ["5"])
+        self.assertEqual([q["kind"] for q in payload["quarantine"]], ["authored"])
+
+    def test_a_question_does_not_excuse_its_level(self) -> None:
+        # One answered question beside one broken case at the same level: the
+        # level still fails, and for the broken one only.
+        self.add_case("q", 5, oracle_decides=True, question="?")
+        self.add_case("r", 5)
+        self.add_measurement("q", error="refused")
+        self.add_measurement("r", error="boom")
+        payload = report(self.cases, self.measurements)
+        self.assertEqual(payload["authored_levels_failing"], ["5"])
+        summary = summarise(payload)
+        self.assertIn("`r` — boom", summary)
+        self.assertIn("`q` — refused", summary)
 
     def test_oracle_file_is_not_a_measurement(self) -> None:
         self.add_case("a", 1)

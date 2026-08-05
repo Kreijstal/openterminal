@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Check that a case measures the same as its inlined twin.
+
+Some levels are authored before the oracle has ever run against them. L5 is the
+first: resource dictionaries, `x:Key` and `{StaticResource}` went in with no
+recorded measurement to hold them to, and inventing one would have been making
+the answer up.
+
+A twin is the check that can be made in the meantime. Every L5 case that hides
+a value behind a resource is emitted alongside a second case with the same
+value written inline, and the case names it in a `twin` field. The two describe
+the same layout by construction, so any difference between them is the resource
+system resolving to something other than what it was handed -- the whole failure
+mode of a lookup, caught without an oracle.
+
+What this is not:
+
+- It is **not** a check that the layout is right. Both halves of a pair can be
+  wrong together and this will call them equal. Only `check_layout.py` against
+  the recorded measurements says anything about correctness.
+- It is **not** a check that the markup is valid XAML. Both halves can be
+  rejected by the real runtime. Only a measurement run says that.
+
+So a passing twin check is reported as self-consistency and never as coverage.
+Pairs where both halves failed to load are counted separately for the same
+reason: two identical failures agree about nothing.
+
+    python3 phase3/scripts/check_twins.py --cases phase3/xaml-db/cases \\
+        --results /tmp/layout-results
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from check_layout import DEFAULT_TOLERANCE, close  # noqa: E402
+
+
+def load_cases(cases: Path) -> dict[str, dict[str, Any]]:
+    found: dict[str, dict[str, Any]] = {}
+    for path in sorted(cases.rglob("*.json")):
+        case = json.loads(path.read_text(encoding="utf-8"))
+        found[case["id"]] = case
+    return found
+
+
+def load_results(results: Path) -> dict[str, dict[str, Any]]:
+    found: dict[str, dict[str, Any]] = {}
+    for path in sorted(results.glob("*.json")):
+        if path.name in ("oracle.json", "report.json"):
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        found[payload.get("case_id", path.stem)] = payload
+    return found
+
+
+def compare(subject: dict[str, Any], twin: dict[str, Any], tolerance: float) -> list[str]:
+    """Every way the two results disagree. Empty means they are the same tree."""
+    problems: list[str] = []
+    subject_nodes = {n["path"]: n for n in subject.get("tree", [])}
+    twin_nodes = {n["path"]: n for n in twin.get("tree", [])}
+
+    for path in sorted(set(twin_nodes) - set(subject_nodes)):
+        problems.append(f"{path}: in the twin but not in the resolved case")
+    for path in sorted(set(subject_nodes) - set(twin_nodes)):
+        problems.append(f"{path}: in the resolved case but not in the twin")
+
+    for path in sorted(set(subject_nodes) & set(twin_nodes)):
+        mine, theirs = subject_nodes[path], twin_nodes[path]
+        if mine["type"] != theirs["type"]:
+            problems.append(f"{path}: type {mine['type']} but the twin has {theirs['type']}")
+        for field in ("desired", "actual", "offset"):
+            a, b = mine[field], theirs[field]
+            if len(a) != len(b) or not all(close(x, y, tolerance) for x, y in zip(a, b)):
+                problems.append(f"{path}: {field} {a} but the twin has {b}")
+    return problems
+
+
+def check(cases: Path, results: Path, tolerance: float) -> dict[str, Any]:
+    by_id = load_cases(cases)
+    measured = load_results(results)
+
+    matched: list[str] = []
+    unverified: list[dict[str, str]] = []
+    mismatches: list[dict[str, str]] = []
+
+    for case_id, case in sorted(by_id.items()):
+        twin_id = case.get("twin")
+        if not twin_id:
+            continue
+
+        def problem(detail: str) -> dict[str, str]:
+            return {"id": case_id, "twin": twin_id, "detail": detail}
+
+        if twin_id not in by_id:
+            mismatches.append(problem(f"names a twin {twin_id} that is not in the corpus"))
+            continue
+
+        subject, twin = measured.get(case_id), measured.get(twin_id)
+        if subject is None or twin is None:
+            missing = case_id if subject is None else twin_id
+            mismatches.append(problem(f"no result was produced for {missing}"))
+            continue
+
+        subject_error, twin_error = subject.get("error"), twin.get("error")
+        if subject_error and twin_error:
+            # Both refused for the same reason -- most often a level below this
+            # one that is not satisfied locally, such as missing font metrics.
+            # Identical failures are not evidence of anything, so they are
+            # counted apart from the pairs that actually agree on a number.
+            if subject_error == twin_error:
+                unverified.append({"id": case_id, "twin": twin_id, "detail": subject_error})
+            else:
+                mismatches.append(problem(
+                    f"failed differently: {subject_error!r} against {twin_error!r}"))
+            continue
+        if subject_error or twin_error:
+            which = "the resolved case" if subject_error else "the twin"
+            mismatches.append(problem(f"{which} failed to load: {subject_error or twin_error}"))
+            continue
+
+        problems = compare(subject, twin, tolerance)
+        if problems:
+            mismatches.extend(problem(detail) for detail in problems)
+        else:
+            matched.append(case_id)
+
+    return {
+        "schema_version": 1,
+        "tolerance": tolerance,
+        "matched": matched,
+        "unverified": unverified,
+        "mismatches": mismatches,
+        "totals": {
+            "pairs": len(matched) + len(unverified) + len({m["id"] for m in mismatches}),
+            "matched": len(matched),
+            "unverified": len(unverified),
+            "mismatched": len({m["id"] for m in mismatches}),
+        },
+    }
+
+
+def summarise(result: dict[str, Any], limit: int = 25) -> str:
+    totals = result["totals"]
+    lines = [
+        "| twin pairs | agree | not verified here | disagree |",
+        "|---:|---:|---:|---:|",
+        f"| {totals['pairs']} | {totals['matched']} | {totals['unverified']} "
+        f"| {totals['mismatched']} |",
+        "",
+        "Self-consistency only: a pair that agrees says the value reached the "
+        "property, not that the layout is right. The oracle says that.",
+    ]
+    if result["unverified"]:
+        lines += ["", f"### Not verified here ({len(result['unverified'])})", "",
+                  "Both halves failed to load, identically, so the pair proves "
+                  "nothing either way.", ""]
+        for item in result["unverified"][:limit]:
+            lines.append(f"- `{item['id']}` — {item['detail']}")
+    if result["mismatches"]:
+        lines += ["", f"### Disagreements ({len(result['mismatches'])})", ""]
+        for item in result["mismatches"][:limit]:
+            lines.append(f"- `{item['id']}` vs `{item['twin']}` — {item['detail']}")
+        if len(result["mismatches"]) > limit:
+            lines.append(f"- …and {len(result['mismatches']) - limit} more")
+    return "\n".join(lines) + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cases", type=Path, required=True)
+    parser.add_argument("--results", type=Path, required=True,
+                        help="results from the implementation under test")
+    parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE)
+    parser.add_argument("--output", type=Path, help="write the full result as JSON")
+    parser.add_argument("--summary", type=Path, help="where to append the markdown summary")
+    args = parser.parse_args(argv)
+
+    result = check(args.cases, args.results, args.tolerance)
+    text = summarise(result)
+
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(result, indent=1, sort_keys=True) + "\n",
+                               encoding="utf-8")
+    print(text, end="")
+    if args.summary:
+        with args.summary.open("a", encoding="utf-8") as handle:
+            handle.write(text)
+
+    if not result["totals"]["pairs"]:
+        print("no twin pairs found; check --cases", file=sys.stderr)
+        return 2
+    return 1 if result["totals"]["mismatched"] else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
