@@ -32,6 +32,51 @@ instead of them. For the measurements that is `../oracles/<os-build>.json`; for
 the font it is the `font_segoeui` SHA-256 in the same digest, which moves for
 exactly the reason a metric would — the font being serviced.
 
+## The icon fonts
+
+Three families are harvested, not one:
+
+| family | file on the runner | codepoints asked for |
+|---|---|---|
+| Segoe UI | `segoeui.ttf` | U+0020–U+007E, the corpus's text |
+| Segoe MDL2 Assets | `segmdl2.ttf` | the 44 glyphs Terminal's markup names |
+| Segoe Fluent Icons | `SegoeIcons.ttf` | the same 44 |
+
+A `FontIcon`'s size is a glyph measured in an icon font, and fifteen level 7
+cases are one `FontIcon` each — every one of them blocked on these numbers
+rather than on layout. So the harvest reads the icon fonts too.
+
+Which codepoints is not a decision made here. `harvest_icon_glyphs.py` reads
+them out of the Terminal checkout — every literal `Glyph` attribute in WinUI
+markup, markup extensions excluded because a `{TemplateBinding}` names a
+codepoint only the binding knows — and writes them beside the vocabulary
+inventory, at
+[`research/windows-terminal/<commit>/icon-glyphs.json`](../../../research/windows-terminal/).
+That file is committed and CI holds it to reproducing, exactly like the
+inventory: the set is research data about Terminal, and a hand-typed list would
+be wrong the first time Terminal changed an icon.
+
+Two things work differently for an icon font, and both are deliberate:
+
+**A missing glyph is a finding, not a failure.** The two icon families do not
+cover the same set — which is why Terminal writes
+`FontFamily="Segoe UI, Segoe Fluent Icons, Segoe MDL2 Assets"` rather than
+naming one — so `--missing record` puts the absent codepoints in the file's
+`missing` list instead of failing the harvest. For Segoe UI the default stays
+`--missing fail`: an ASCII glyph absent from a text font means the wrong file
+was read. A font covering *none* of what was asked for fails either way.
+
+**Nothing checks them yet.** The Segoe UI harvest runs with `--expect`, against
+numbers solved out of the recorded measurements; there is no equivalent for an
+icon font because until the `L4-icon` cases are measured there was nothing to
+solve from. Those cases exist to close that gap — `L4-icon-rule-segoeui-m-*`
+in particular measures a `FontIcon` in a font whose advance the corpus already
+knows, so the sizing rule can be pinned before any icon metric is trusted. Until
+`derive_font_metrics.py` learns to solve an icon advance out of a `FontIcon`
+measurement, the icon halves of this directory are read but unchecked, and their
+identity travels as the `fonts` map in `../measurements/<build>/oracle.json`
+rather than in the committed digest.
+
 To fill this directory in locally:
 
     python3 phase3/scripts/fetch_measurements.py --fonts   # prints a directory
@@ -85,3 +130,7 @@ than turning into pixel widths that are slightly off everywhere.
 The check runs in both directions. CI also re-derives the file from the
 measurements it has just recorded (`derive_font_metrics.py --check`), so the
 committed numbers cannot drift away from the measurements they were solved from.
+
+Both directions are Segoe UI's alone. The icon families have neither half yet,
+and the section above says so rather than letting three harvested files look
+equally well checked.

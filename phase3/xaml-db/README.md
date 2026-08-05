@@ -24,8 +24,8 @@ the ones below it:
 | L0 | property system: defaults, local values, inheritance, precedence | generated |
 | L1 | one element, no children: explicit size, margin, padding; `Path`, `PathIcon`, `Image` | generated |
 | L2 | one parent, one child: alignment × margin × sizing; `ContentPresenter` content alignment | generated |
-| L3 | panels: `StackPanel`, `Grid` (Auto/Star/Pixel, spans), `Canvas` | generated |
-| L4 | text: `TextBlock` with a pinned font | generated |
+| L3 | panels: `StackPanel`, `Grid` (Auto/Star/Pixel, spans), `Canvas`, `ScrollViewer` | generated |
+| L4 | text: `TextBlock` with a pinned font, `FontIcon` in an icon font | generated |
 | L5 | resources, styles, templates, precedence | authored |
 | L6 | visual states and storyboards, sampled at t=0 and t=end | authored |
 | L7 | Terminal's own pages | harvested |
@@ -73,6 +73,102 @@ because the case said so before the run.
 Everything else at L5 is accountable in the ordinary way: L5 is an authored
 level, and a case there that the runtime refuses without having declared a
 question fails CI exactly as an L1 case would.
+
+## The two questions the last run left open
+
+A measurement run does not only fill cases in; it also says which of them the
+runtime answered in a way nothing predicted. The last one left exactly two, and
+both now have a generated series aimed at them rather than a note saying they
+are hard.
+
+### `ScrollViewer` sizes itself two different ways
+
+Terminal supplies three `ScrollViewer` subtrees. Two of them report their
+content's desired size plus their own padding and then stretch the content to
+the viewport — what a viewer with both scroll directions off does. The third
+asks for sixteen more pixels in each axis, exactly one scroll bar's worth per
+axis, and arranges its content at the content's own desired size — what a
+viewer with both directions *on* does. None of the three sets a scroll bar
+visibility, and no property in the markup separates them. Implementing either
+reading makes six of the nine cases pass and three produce wrong numbers.
+
+`L3-scroll` is 166 cases whose only job is to make that guess unnecessary:
+
+| series | cases | axis |
+|---|---:|---|
+| `vis` | 32 | `HorizontalScrollBarVisibility` × `VerticalScrollBarVisibility`, all sixteen of Disabled/Auto/Hidden/Visible, × content smaller and larger than the viewport, in a viewer pinned at 200×150 |
+| `free` | 48 | the same sixteen, in a viewer with no size at all, at three available sizes including infinity in both axes |
+| `mode` | 24 | `HorizontalScrollMode` × `VerticalScrollMode` against three visibility settings and two content sizes — the properties that decide scrollability independently of whether a bar is shown |
+| `pad` | 24 | padding on the viewer, symmetric and asymmetric, sized and unconstrained: does the reservation land inside the padding or beside it |
+| `fit` | 20 | content width × height across 140/184/200/260 and 110/134/150/220, which are both candidate viewports and one either side — where an `Auto` bar's overflow test either fires per axis or does not |
+| `shape` | 18 | six Border-only replicas of the three recorded shapes, at the harvest's own three available sizes |
+
+Every child is a `Border`, so no answer here is entangled with a text metric.
+The `shape` series is the bisection: the three replicas reproduce the recorded
+skeletons, and the other three isolate `MaxHeight` and `Margin`, which only the
+odd case out sets. If the replicas split the way the recorded three did, the
+rule belongs to the `ScrollViewer`; if they do not, it belongs to the
+`TextBlock` that only the odd one contains.
+
+What the series deliberately does *not* ask: nothing here touches
+`ZoomMode`, `IsScrollInertiaEnabled`, snap points, or a `ScrollViewer` used as a
+control template part, and no case puts a second child or a `ScrollViewer`
+inside another. Those are real parts of the type and none of them is what the
+three recorded cases disagree about.
+
+None of the 166 carries `oracle_decides`. Every property set is a plain enum
+value on a documented property, so a rejection would be a finding about the
+corpus rather than an answer we asked for — and declaring the question in
+advance would only make that finding quiet.
+
+### `FontIcon` measures a glyph nobody has metrics for
+
+Fifteen L7 cases are one `FontIcon` each, in `Segoe MDL2 Assets` or
+`Segoe Fluent Icons`, and neither font's metrics were harvested. That is now
+three changes rather than one:
+
+**The probe was throwing the glyphs away.** Python's `json` writes every
+non-ASCII character as a `\uXXXX` escape, and the probe's unescaper dropped
+every codepoint at or above U+0080 instead of encoding it. A `FontIcon`'s
+`Glyph` therefore reached `XamlReader.Load` empty — and an empty `Glyph`
+measures perfectly happily, so all fifteen recorded measurements are of an icon
+that was never there. It shows in the numbers once you know to look:
+`L7-terminal-88c43239e4` records a desired width of 28 and has `Margin="20,0,8,0"`,
+so the glyph contributed nothing at all. Nothing failed, which is why it stood
+for a whole measurement run.
+
+The fix moved that code to
+[`phase3/harness/json_text.h`](../harness/json_text.h), dependency-free, so the
+Linux test suite can hold it — the probe itself builds only on Windows, which is
+the whole reason the bug survived. `ctest`'s `probe_text` case is that check.
+The consequence for the next run is a *genuine* L7 drift:
+
+    L7: same 69 cases, different answers
+
+which for once is not the corpus changing and not Windows being serviced. It is
+fifteen cases that were measuring the wrong thing starting to measure the right
+one.
+
+**The harvest reads the icon fonts.** For the 44 codepoints Terminal's markup
+actually names, extracted from the checkout by
+[`harvest_icon_glyphs.py`](../scripts/harvest_icon_glyphs.py) and committed
+beside the vocabulary inventory. See [the fonts directory](fonts/) for why a
+missing glyph is recorded rather than fatal there.
+
+**`L4-icon` is 69 cases** that pin the sizing rule instead of assuming it: the
+seven glyphs the blocked cases use across both families and two sizes, the seven
+`FontSize` values Terminal writes including none at all, the four family
+spellings it uses including its fallback list, and eleven cases whose job is to
+separate "measures the glyph" from "reports a `FontSize` square". The sharpest of
+those is a `FontIcon` in Segoe UI holding `M` — an advance the corpus already
+solved out of its own measurements, and not one em, which is what most of an
+icon font is. It answers the question without the harvest having run at all.
+
+A third, smaller gap closed at the same time: `L4-source` is six cases pairing
+`Text="..."` against the same text written as element content. The corpus has
+always written both and never checked they are the same thing, and the
+`brace-escape` case at L5 crosses the two — so a disagreement there today would
+be read as the escape failing when it might be the spelling.
 
 ## Harvesting L7 from Terminal's markup
 
@@ -193,10 +289,11 @@ gate `phase0` and `phase1` already apply to their snapshots.
 
 ## Using the measurements
 
-The measurements are CI output, not repository content: 581 files regenerated
-deterministically in about two minutes. Fetch them from the artifact of a green
+The measurements are CI output, not repository content: 1,031 files regenerated
+deterministically in a few minutes. Fetch them from the artifact of a green
 run. The digest committed under `oracles/` still records 541, which is the
-corpus the last run saw — the 40 L5 cases were authored after it.
+corpus the last run saw — the 40 L5 cases, and the 241 `L3-scroll`, `L4-icon`
+and `L4-source` cases beside them, were all authored after it.
 
     python3 phase3/scripts/fetch_measurements.py          # prints the directory
     python3 phase3/scripts/check_layout.py \
@@ -228,18 +325,40 @@ images move on their own schedule — but it says plainly that nothing is
 verifying those measurements until the digest lands.
 
 **Growing the corpus trips the same gate, on purpose.** The committed digest for
-`10.0.26100.33158` covers 541 cases and no L5; the corpus now has 581 and does.
-The first measurement run after that will stop with
+`10.0.26100.33158` covers 541 cases and no L5; the corpus now has 1,031 and
+does. The first measurement run after that will stop with
 
+    L0: 4 cases -> 18 cases
+    L1: 72 cases -> 132 cases
+    L2: 192 cases -> 264 cases
+    L3: 132 cases -> 361 cases
+    L4: 72 cases -> 147 cases
     L5: new level, 40 cases
+    L7: same 69 cases, different answers
 
-which is not the runtime answering differently — it is the corpus asking a
-question the digest has never seen. The gate cannot tell those apart on its own
-and does not try to: it stops, and a person decides. The resolution is to take
-that run's measurement artifact, confirm the L5 answers are what the cases were
-written to ask, and commit the regenerated digest. Every level below L5 is still
-compared as usual in the same run, so a real regression would be reported beside
-the addition rather than hidden by it.
+Every line but the last is the corpus asking questions the digest has never
+seen, rather than the runtime answering differently. The last one *is* a
+different answer, and it has a cause on our side: fifteen of those cases were
+being measured with an empty `Glyph`, because the probe dropped it — see
+[above](#fonticon-measures-a-glyph-nobody-has-metrics-for).
+
+The gate cannot tell any of those apart on its own and does not try to: it
+stops, and a person decides. The resolution is to take that run's measurement
+artifact, confirm the answers are what the cases were written to ask — and, for
+L7, that the fifteen that moved are the fifteen `FontIcon` ones — then commit the
+regenerated digest. Nothing is hidden by that: every level is compared case by
+case in the same run, so a real regression would be reported beside the
+addition.
+
+**And the gated levels will go red with it.** `L3-scroll` lands in L3, which the
+layout job gates on, and the layout core does not implement `ScrollViewer` — so
+the run after this one reports 166 L3 failures reading
+`the type 'ScrollViewer' is not implemented`. That is the intended cost. The
+series exists to make implementing it possible, the failures name the one type
+that is missing rather than a wrong number, and a gate that stayed green while
+the answer went unused would be worth less than one that says what to do next.
+`L4-icon` does the same for `FontIcon` at L4, which is reported rather than
+gated, so that half is quieter by construction.
 
 ## Layout
 
@@ -261,10 +380,11 @@ the addition rather than hidden by it.
       measurements/<os-build>/oracle.json  build and font identity of that run
       fonts/<family>.json                  metrics read off the runner's font
 
-The vocabulary inventory is research data, not corpus data, so it lives with the
-other pinned snapshots:
+The vocabulary inventory, and the icon-font codepoints beside it, are research
+data rather than corpus data, so they live with the other pinned snapshots:
 
     research/windows-terminal/<commit>/xaml-inventory.json
+    research/windows-terminal/<commit>/icon-glyphs.json
     research/nuget/microsoft.windows.sdk.contracts/<version>/xaml-members.json
 
 ## Progress metric
@@ -295,8 +415,9 @@ it. Three of them are answers this implementation does not have — whether
 `UseLayoutRounding` inherits, how a tie at exactly `.5` breaks, and what a
 `ContentControl` does with content it is not stretching.
 
-A further 235 generated cases in `L1-shape`, `L2-content`, `L3-canvas` and
-`L5-resources` are newer than the last oracle run for the same reason. They do
-not move the numbers above in either direction until CI fills them in; they
-exist because the answers they cover currently rest on one witness each, or on
-none.
+A further 476 generated cases in `L1-shape`, `L2-content`, `L3-canvas`,
+`L3-scroll`, `L4-icon`, `L4-source` and `L5-resources` are newer than the last
+oracle run for the same reason. They do not move the numbers above in either
+direction until CI fills them in; they exist because the answers they cover
+currently rest on one witness each, on three that contradict each other, or on
+none at all.
