@@ -191,6 +191,18 @@ handling was silently dropping every non-ASCII character, which is how fifteen
 recorded `FontIcon` measurements came to be measurements of an empty glyph. The
 code moved into a dependency-free header so that this suite could hold it.
 
+[`tests/error_hygiene_test.cpp`](tests/error_hygiene_test.cpp) is there for the
+same reason and a second probe bug. WinRT restricted error info is per-thread
+global state, so a description left behind by one case was being served to a
+later one that failed with the same `HRESULT`: eleven of the last run's 19
+recorded failures name a resource key their own markup never mentions. The probe
+now clears that state before every load, and
+[`phase3/harness/error_hygiene.h`](../harness/error_hygiene.h) is the check that
+the clearing held — a message naming a key the markup does not contain cannot be
+about this case. It is one-sided by construction, since a key that *is* present
+proves nothing. The contamination and what it costs are written up in
+[the xaml-db README](../xaml-db/README.md#recorded-error-messages-before-run-31017111065-are-not-evidence).
+
 ## The resource system
 
 L5 is implemented and is the one level with nothing to check it against yet:
@@ -408,8 +420,9 @@ Two checks need no oracle at all, and run from a bare checkout:
 
     ctest --test-dir /tmp/layout-build      # what a load refuses, and by what
                                             # name, which slot a value is in,
-                                            # and what the oracle probe reads
-                                            # out of a case file
+                                            # what the oracle probe reads out of
+                                            # a case file, and whether a message
+                                            # it recorded is about that case
     python3 phase3/scripts/check_twins.py \
         --cases phase3/xaml-db/cases --results /tmp/layout-results
 

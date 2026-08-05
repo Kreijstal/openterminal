@@ -25,6 +25,9 @@
 
 #include <windows.h>
 #include <dispatcherqueue.h>
+// RoClearError. See the loop below: the thread's restricted error info is what
+// made eleven of the last run's recorded messages belong to other cases.
+#include <roerrorapi.h>
 
 #include <algorithm>
 #include <cmath>
@@ -41,6 +44,7 @@
 #include <vector>
 
 #include "json_text.h"
+#include "error_hygiene.h"
 
 namespace fs = std::filesystem;
 using namespace winrt;
@@ -230,6 +234,23 @@ int wmain(int argc, wchar_t** argv) {
         std::ostringstream tree;
         std::string error;
         bool first = true;
+
+        // WinRT restricted error info is per-thread global state, and every
+        // case in this loop runs on the same thread. A XamlReader::Load can
+        // originate a description and still *succeed*, and a load that fails
+        // leaves its description behind; when a later case fails with a
+        // matching HRESULT but without originating fresh info,
+        // hresult_error::message() serves that older description as though it
+        // were this case's. Run 31017111065 recorded eleven such messages --
+        // a harvested Terminal subtree "failing" on `BoxWidth`, a key only the
+        // authored resource cases use -- and it is deterministic, so measuring
+        // twice and diffing does not catch it.
+        //
+        // Clearing here means a failure that does not originate its own info
+        // has none to inherit, and message() falls back to the HRESULT's own
+        // text. That is less than the runtime could have said, and it is true.
+        RoClearError();
+
         try {
             auto obj = Markup::XamlReader::Load(to_hstring(*markup));
             auto el = obj.as<UIElement>();
@@ -251,6 +272,18 @@ int wmain(int argc, wchar_t** argv) {
                 code << "the runtime refused the markup with hresult 0x"
                      << std::hex << static_cast<uint32_t>(e.code()) << " and no message";
                 error = code.str();
+            } else {
+                // Belt and braces behind the RoClearError above. A message that
+                // names a resource key this case's markup never mentions cannot
+                // be about this case -- the key a lookup fails on is the key the
+                // markup asked for -- so it is set aside and the HRESULT names
+                // the failure instead. Nothing is silently rewritten: the
+                // suspect text is kept behind a label. See error_hygiene.h, and
+                // phase3/layout/tests/error_hygiene_test.cpp, which is where
+                // this decision is actually tested -- this file builds only on
+                // Windows and never under ctest.
+                error = openxaml_harness::HygienicError(
+                    *markup, error, static_cast<uint32_t>(e.code()));
             }
         } catch (std::exception const& e) {
             // The corpus is growing types the runtime has never been asked
