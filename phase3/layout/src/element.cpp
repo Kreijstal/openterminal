@@ -39,6 +39,17 @@ struct MinMax {
 }  // namespace
 
 void Element::Measure(Size available) {
+    // A collapsed element is suspended from layout rather than merely hidden:
+    // MeasureOverride is never reached, no explicit Width or MinWidth applies,
+    // and the parent is told the element wants nothing. Treating it as a
+    // zero-sized visible element would give the same answer here but not under
+    // a StackPanel, which counts visible children to place its spacing.
+    if (visibility == Visibility::Collapsed) {
+        unclipped_desired_size_ = Size{};
+        desired_size_ = Size{};
+        return;
+    }
+
     // Margins are rounded before they are subtracted, not after. Rounding the
     // difference instead would make the result depend on the available size:
     // the same margin would consume a different amount at different widths.
@@ -98,7 +109,14 @@ void Element::Measure(Size available) {
 }
 
 void Element::Arrange(Rect final_rect) {
+    // The slot is recorded even for a collapsed element -- the parent did
+    // place it, and LayoutInformation reports that placement -- but nothing
+    // below the slot happens.
     layout_slot_ = final_rect;
+    if (visibility == Visibility::Collapsed) {
+        render_size_ = Size{};
+        return;
+    }
 
     Size arrange_size = final_rect.size();
     const double margin_width =

@@ -48,6 +48,7 @@ public:
     Thickness margin;
     HorizontalAlignment horizontal_alignment = HorizontalAlignment::Stretch;
     VerticalAlignment vertical_alignment = VerticalAlignment::Stretch;
+    Visibility visibility = Visibility::Visible;
 
     // On by default, as it is in WinUI. The corpus pins the DPI scale to 1.0,
     // so every case here rounds to whole numbers; the scale is carried as a
@@ -57,13 +58,15 @@ public:
     double dpi_scale_x = 1.0;
     double dpi_scale_y = 1.0;
 
-    // Grid attached properties. They live here rather than on Grid because
-    // that is where XAML puts them: any element can carry them, and only a
-    // Grid parent reads them.
+    // Grid and Canvas attached properties. They live here rather than on the
+    // panel because that is where XAML puts them: any element can carry them,
+    // and only the matching parent reads them.
     int grid_column = 0;
     int grid_row = 0;
     int grid_column_span = 1;
     int grid_row_span = 1;
+    double canvas_left = 0.0;
+    double canvas_top = 0.0;
 
 protected:
     virtual Size MeasureOverride(Size available) = 0;

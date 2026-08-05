@@ -52,6 +52,49 @@ enum class HorizontalAlignment { Left, Center, Right, Stretch };
 enum class VerticalAlignment { Top, Center, Bottom, Stretch };
 enum class Orientation { Horizontal, Vertical };
 
+// Collapsed is not "invisible": it suspends the element from layout entirely,
+// which is a different thing from Hidden (not implemented here, because no
+// case in the corpus uses it and the two would be indistinguishable without
+// one).
+enum class Visibility { Visible, Collapsed };
+
+// Where an element is positioned inside a slot larger than the size it
+// arranged at. The layout slot is what the probe records, so this only becomes
+// observable through a parent that passes an aligned rect down -- a
+// ContentPresenter, for instance -- rather than through the element itself.
+inline double AlignmentOffset(HorizontalAlignment alignment, double client, double ink) {
+    // Stretch degenerates to Left when the content is about to be clipped;
+    // centring something that does not fit would hide both of its edges
+    // instead of one.
+    if (alignment == HorizontalAlignment::Stretch && ink > client)
+        alignment = HorizontalAlignment::Left;
+    switch (alignment) {
+        case HorizontalAlignment::Center:
+        case HorizontalAlignment::Stretch:
+            return (client - ink) / 2.0;
+        case HorizontalAlignment::Right:
+            return client - ink;
+        case HorizontalAlignment::Left:
+            break;
+    }
+    return 0.0;
+}
+
+inline double AlignmentOffset(VerticalAlignment alignment, double client, double ink) {
+    if (alignment == VerticalAlignment::Stretch && ink > client)
+        alignment = VerticalAlignment::Top;
+    switch (alignment) {
+        case VerticalAlignment::Center:
+        case VerticalAlignment::Stretch:
+            return (client - ink) / 2.0;
+        case VerticalAlignment::Bottom:
+            return client - ink;
+        case VerticalAlignment::Top:
+            break;
+    }
+    return 0.0;
+}
+
 // --- DoubleUtil ---------------------------------------------------------------
 // Ported from WindowsBase's DoubleUtil, which the layout code uses in place of
 // bare comparisons.
