@@ -1,0 +1,22 @@
+{
+ "environment": {
+  "available_size": [
+   400.0,
+   300.0
+  ],
+  "dpi_scale": 1.0,
+  "font_family": "Segoe UI",
+  "font_size": 14.0,
+  "language": "en-US",
+  "theme": "Light"
+ },
+ "group": "content",
+ "id": "L2-content-0001",
+ "level": 2,
+ "markup": "<ContentPresenter xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" Padding=\"0\" HorizontalContentAlignment=\"Left\" VerticalContentAlignment=\"Top\"><Border Width=\"40\" Height=\"20\"/></ContentPresenter>",
+ "note": "ContentPresenter content Left/Top padding=0",
+ "requires": [
+  "L2-align"
+ ],
+ "schema_version": 1
+}

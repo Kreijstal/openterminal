@@ -19,18 +19,51 @@ Against build `10.0.26100.33158`:
 | L2 | one parent, one child: alignment × margin × sizing | 192 | **192** |
 | L3 | panels: `StackPanel`, `Grid` | 132 | **132** |
 | L4 | text: `TextBlock` | 72 | **36** without a font — see below |
-| L7 | Terminal's own pages | 69 | 3 |
+| L7 | Terminal's own pages | 69 | **36** |
 
 "Measured" rather than "cases": L0 has eighteen cases and four
 measurements. The other fourteen were authored after the last oracle run and
 are pending, not passing — see [the property system](#the-property-system).
 
 L1–L3 is every case that does not need text measurement or a control set —
-`Border`, `Grid`, `StackPanel`, and the `FrameworkElement` semantics under all
-of them. L7 is 3 rather than 0 because `x:Name` is now accepted and dropped
-instead of rejected; the other 66 fail as `the type 'ScrollViewer' is not
-implemented` and the like, rather than as wrong numbers, which is the
-distinction worth keeping: nothing here is quietly approximate.
+`Border`, `Grid`, `StackPanel`, `Canvas`, and the `FrameworkElement` semantics
+under all of them. The 33 L7 cases that are still red fail as
+`the type 'ScrollViewer' is not implemented` and the like, rather than as wrong
+numbers, which is the distinction worth keeping: nothing here is quietly
+approximate.
+
+A further 195 generated cases — `L1-shape`, `L2-content`, `L3-canvas` — have no
+recorded measurement yet and so are neither passing nor failing. They are
+listed under [what is still open](#what-is-still-open).
+
+### What the 33 red L7 cases are waiting for
+
+Ranked by how many they are, since that is the order they are worth doing in:
+
+| blocked on | cases | why it is not done |
+|---|---:|---|
+| `FontIcon` | 15 | its size is a glyph measured in Segoe MDL2 Assets or Segoe Fluent Icons, and no metrics for either are harvested |
+| `ScrollViewer` | 9 | see below |
+| `ToolTip`, `Run` | 3 | a templated control whose content is an inline |
+| `TextBox`, `Button` | 3 | templated controls with text in them |
+| `Thumb`, `ControlTemplate`, `Rectangle` | 3 | applying a control template is not implemented |
+
+Three more were waiting on a `TextBlock` in Segoe UI, and are not any longer:
+the two numbers the corpus solves for itself are enough for them, so they match
+on a bare checkout along with the rest of L4's derivable half.
+
+`ScrollViewer` is the one that is understood and still not done. Its layout is
+its template's — a content presenter and two scroll bars in a grid — and the
+three recorded cases do not agree with each other under any single reading of
+it. Two of them give the viewer exactly its content's desired size plus its own
+padding, with the content then stretched to the viewport, which is what a
+viewer with both scroll directions disabled does. The third asks for sixteen
+more pixels in each axis, exactly one scroll bar's worth per axis, and arranges
+its content at the content's own size rather than the viewport's — which is
+what a viewer with both directions *enabled* does. Neither case sets a
+scrollbar visibility, and no other property distinguishes them. Implementing
+one reading would make six cases pass and three produce wrong numbers, which is
+a worse result than nine cases that say what is missing.
 
 L4 is implemented and is the one level whose result depends on a font. Two of
 the numbers inside that font can be solved from the recorded measurements
@@ -106,15 +139,25 @@ also works if CMake is not worth the trouble.
 
 ## What it is a port of
 
-The algorithms come from [dotnet/wpf](https://github.com/dotnet/wpf) (MIT), at
-commit `2ca037562c207924e53cfcc99286e523d3694de3` — `FrameworkElement`'s
-`MeasureCore`/`ArrangeCore`, and `Border`, `StackPanel` and `Grid`'s
-`MeasureOverride`/`ArrangeOverride`. WinUI's own layout core is not public;
-WPF's is the same design by the same team, and the corpus decides where they
-part company.
+`FrameworkElement`'s `MeasureCore`/`ArrangeCore`, and `Border`, `StackPanel` and
+`Grid`'s `MeasureOverride`/`ArrangeOverride`, come from
+[dotnet/wpf](https://github.com/dotnet/wpf) (MIT), at commit
+`2ca037562c207924e53cfcc99286e523d3694de3`. WPF's layout is the same design by
+the same team, and the corpus decides where the two part company.
 
-Two places where they do, both found by running the corpus rather than by
-reading:
+The types added since — `Canvas`, `ContentPresenter`, `Image`, `Path`,
+`PathIcon`, and the panel chrome and spacing on `Grid` and `StackPanel` — come
+from [microsoft/microsoft-ui-xaml](https://github.com/microsoft/microsoft-ui-xaml)
+(MIT) instead, at commit `188f602b27cdb47572b28c380e9c087b02e1ccee`. That
+repository publishes the XAML core itself under `dxaml/xcp/core/core/elements`,
+which is the same code the oracle is running rather than a sibling of it, so
+where it is available it is the better source. It also confirms the two
+divergences below directly: `CFrameworkElement::MeasureCore` layout-rounds
+unconditionally, and `CGrid` redistributes its rounding remainder only across
+star definitions.
+
+Three places where the ported source and the recorded oracle disagree, all
+found by running the corpus rather than by reading:
 
 **Layout rounding is on.** WPF leaves `UseLayoutRounding` off unless asked;
 WinUI has it on. A `2*`/`*` split of 100 arranges as 67 and 33, not 66.6667 and
@@ -128,6 +171,14 @@ whose columns are all `Auto` or fixed — which legitimately leave the Grid part
 empty — and grew them by a pixel each. Sixteen L3 cases said otherwise, all of
 them star-free.
 
+**`Canvas` reports no arranged size.** `CCanvas::ArrangeOverride` returns
+`finalSize`, which would make a stretched Canvas report its slot as its
+`ActualWidth`. All three recorded sizes of Terminal's `SelectionCanvas` say the
+Canvas is zero by zero, including the two whose slot is finite and non-empty —
+so it is not a rounding difference or an artefact of one odd constraint. This
+is the one divergence with a single witness, and the 63 pending `L3-canvas`
+cases exist to confirm it or narrow it.
+
 ## Deliberate omissions
 
 Not "to do later" in the vague sense — these are the specific things this code
@@ -139,15 +190,27 @@ does not do, so that a passing run is not read as more than it is:
   shaping, no kerning, no ligatures, no fallback for a character the metrics do
   not cover. It stays quarantined at L4 for that reason — text-measurement
   error would otherwise contaminate every panel that contains it.
-- **No `Canvas`, no `RelativePanel`, no control set.** Only the types the corpus
-  uses.
-  `ContentControl` is here for one reason — it is where L0 sets an inherited
-  `FontSize` — and it is not a real one: it has no template, so the
+- **No `RelativePanel`, and no control templates.** `ContentPresenter` is here
+  because it is a layout type; `Button`, `TextBox`, `ToolTip` and `Thumb` are
+  not, because their size is their template's and applying one is not
+  implemented. `ContentControl` is the exception, and it is not a real one — it
+  is where L0 sets an inherited `FontSize`, and it has no template, so the
   `ContentPresenter` that would carry its `Padding` and content alignment is
   absent rather than modelled. Every measured case that uses it has an empty
   `TextBlock` at the origin, which is where `Left`/`Top` and `Stretch` both land
   it, so none of them can tell the guess from the truth.
   `L0-props-content-stretch` can, and has no measurement yet.
+- **No `FontIcon`.** It is the largest single L7 blocker at fifteen cases, and
+  every one of them is blocked on icon-font glyph metrics rather than on
+  layout. `PathIcon` is implemented because its size comes from a geometry.
+- **No `ScrollViewer`.** See [the table above](#what-the-33-red-l7-cases-are-waiting-for).
+- **No stroked shapes, and no `Stretch` but `None`.** A stroked shape grows by
+  half its thickness on every side and a stretched one is scaled into its
+  constraint; no case in the corpus has either, so markup asking for one is
+  refused by name.
+- **No elliptical arcs in path data.** `A` needs the endpoint-to-centre
+  conversion and then the extremes of a rotated arc. Nothing in the corpus has
+  one.
 - **No `LayoutTransform`.** WPF measures a transformed element by fitting a
   maximal rectangle in local space; none of that is here.
 - **The property store has two sources**, local and inherited. Styles, triggers,
@@ -161,3 +224,26 @@ does not do, so that a passing run is not read as more than it is:
   inherits. Both are the ported behaviour rather than a measured one.
   `L0-props-rounding-half` and `L0-props-rounding-inherited` are the cases
   authored to settle them, and neither has a measurement yet.
+
+## What is still open
+
+Answers this code gives that nothing has yet checked. All of them have
+generated cases waiting for the next oracle run, and until that run they are
+neither passing nor failing:
+
+| group | cases | the question |
+|---|---:|---|
+| `L3-canvas` | 63 | does a `Canvas` report its slot or nothing? |
+| `L2-content` | 72 | what does `ContentPresenter`'s content alignment default to? |
+| `L1-shape` | 60 | are a shape's bounds tight, and is its desired size the right edge or the width? |
+| `L0-props` | 14 | does `UseLayoutRounding` inherit, how does a tie at `.5` break, and what does a `ContentControl` do with content it is not stretching? |
+
+The `L1-shape` answers have two witnesses each already, from Terminal's two
+`PathIcon` cases, but both of those geometries start near the origin and
+neither distinguishes a tight curve bound from the hull of its control points
+by more than a rounding step. The generated ones do.
+
+These land in L1, L2 and L3, which is the range CI gates on, so the next
+measured run either keeps the gate green or turns it red on a specific case
+with a specific number. That is the intended outcome of authoring them: an
+unchecked answer that stays unchecked is worse than one that fails loudly.

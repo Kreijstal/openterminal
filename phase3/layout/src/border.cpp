@@ -9,6 +9,9 @@ const DependencyProperty* const kBorderThickness =
     RegisterProperty("Border", "BorderThickness", {Thickness{}, false, true});
 const DependencyProperty* const kPadding =
     RegisterProperty("Border", "Padding", {Thickness{}, false, true});
+// Border is not a Panel, so it declares its own -- see element.h.
+const DependencyProperty* const kBackground =
+    RegisterProperty("Border", "Background", {std::string(), false, false});
 
 const std::vector<std::string> kOwners = {"Border", "FrameworkElement", "UIElement"};
 
@@ -27,6 +30,7 @@ Element* SingleChild(const Border& border) {
 
 const DependencyProperty& Border::BorderThicknessProperty() { return *kBorderThickness; }
 const DependencyProperty& Border::PaddingProperty() { return *kPadding; }
+const DependencyProperty& Border::BackgroundProperty() { return *kBackground; }
 
 const std::vector<std::string>& Border::Owners() { return kOwners; }
 

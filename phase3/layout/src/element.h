@@ -41,6 +41,13 @@ const DependencyProperty& FontSizeProperty();
 const DependencyProperty& FontFamilyProperty();
 const DependencyProperty& ForegroundProperty();
 
+// Panel.Background: every Panel has one, which is Grid's, StackPanel's and
+// Canvas's. Border and ContentPresenter declare their own, as the runtime
+// does. A free function for the same reason the text properties are: Panel is
+// a class here, but the property is registered against the owner name rather
+// than against it.
+const DependencyProperty& PanelBackgroundProperty();
+
 // The owner shared by Control and TextBlock. Not a runtime type -- see above.
 inline constexpr const char* kTextPropertyOwner = "TextProperties";
 
@@ -100,6 +107,17 @@ public:
         SetValue(VerticalAlignmentProperty(), static_cast<int>(value));
     }
 
+    // Collapsed suspends the element from layout entirely -- see layout.h. It
+    // is UIElement's rather than FrameworkElement's, and it does not inherit:
+    // collapsing a panel removes its subtree by removing the panel, not by
+    // handing each child a value.
+    Visibility visibility() const {
+        return static_cast<Visibility>(GetInt(VisibilityProperty()));
+    }
+    void set_visibility(Visibility value) {
+        SetValue(VisibilityProperty(), static_cast<int>(value));
+    }
+
     // On by default, as it is in WinUI. The corpus pins the DPI scale to 1.0,
     // so every case here rounds to whole numbers; the scale is carried as a
     // plain field anyway because it is not a XAML property -- it comes from the
@@ -127,6 +145,7 @@ public:
     static const DependencyProperty& VerticalAlignmentProperty();
     static const DependencyProperty& UseLayoutRoundingProperty();
     static const DependencyProperty& OpacityProperty();
+    static const DependencyProperty& VisibilityProperty();
 
 protected:
     virtual Size MeasureOverride(Size available) = 0;

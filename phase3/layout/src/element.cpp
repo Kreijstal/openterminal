@@ -51,6 +51,22 @@ const DependencyProperty* const kUseLayoutRounding =
 // Purely visual, so it changes no size. The corpus still has a case for it,
 // because a property system that dropped it would measure identically.
 const DependencyProperty* const kOpacity = RegisterProperty("UIElement", "Opacity", {1.0, false, false});
+// Collapsed suspends the element from layout, so it does affect measure. Not
+// inherited: WinUI collapses a subtree by collapsing the element above it, and
+// a child of a collapsed panel is never measured at all rather than being told
+// it is collapsed too.
+const DependencyProperty* const kVisibility = RegisterProperty(
+    "UIElement", "Visibility", {static_cast<int>(Visibility::Visible), false, true});
+
+// Panel.Background, which is where Grid, StackPanel and Canvas get theirs.
+// Border and ContentPresenter declare their own, as the runtime does.
+//
+// A brush, carried as the name of the type that spells it. Nothing here
+// paints, so the value is stored and never interpreted -- which is honest
+// about what it is: enough to show the property system carried it, and not a
+// colour.
+const DependencyProperty* const kPanelBackground =
+    RegisterProperty("Panel", "Background", {std::string(), false, false});
 
 // The inherited text properties, shared between Control and TextBlock. See
 // element.h for why they are registered once rather than on each of them.
@@ -117,6 +133,8 @@ const DependencyProperty& Element::HorizontalAlignmentProperty() { return *kHori
 const DependencyProperty& Element::VerticalAlignmentProperty() { return *kVerticalAlignment; }
 const DependencyProperty& Element::UseLayoutRoundingProperty() { return *kUseLayoutRounding; }
 const DependencyProperty& Element::OpacityProperty() { return *kOpacity; }
+const DependencyProperty& Element::VisibilityProperty() { return *kVisibility; }
+const DependencyProperty& PanelBackgroundProperty() { return *kPanelBackground; }
 
 void Element::OnPropertyChanged(const DependencyProperty& property) {
     if (property.affects_measure()) needs_measure_ = true;
@@ -131,6 +149,18 @@ std::vector<DependencyObject*> Element::InheritanceChildren() const {
 }
 
 void Element::Measure(Size available) {
+    // A collapsed element is suspended from layout rather than merely hidden:
+    // MeasureOverride is never reached, no explicit Width or MinWidth applies,
+    // and the parent is told the element wants nothing. Treating it as a
+    // zero-sized visible element would give the same answer here but not under
+    // a StackPanel, which counts visible children to place its spacing.
+    if (visibility() == Visibility::Collapsed) {
+        unclipped_desired_size_ = Size{};
+        desired_size_ = Size{};
+        needs_measure_ = false;
+        return;
+    }
+
     const bool rounding = use_layout_rounding();
     const Thickness element_margin = margin();
 
@@ -195,7 +225,14 @@ void Element::Measure(Size available) {
 }
 
 void Element::Arrange(Rect final_rect) {
+    // The slot is recorded even for a collapsed element -- the parent did
+    // place it, and LayoutInformation reports that placement -- but nothing
+    // below the slot happens.
     layout_slot_ = final_rect;
+    if (visibility() == Visibility::Collapsed) {
+        render_size_ = Size{};
+        return;
+    }
 
     const bool rounding = use_layout_rounding();
     const Thickness element_margin = margin();

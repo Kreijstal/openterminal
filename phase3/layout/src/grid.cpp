@@ -30,7 +30,11 @@ const DependencyProperty* const kColumnSpan =
     RegisterProperty("Grid", "Grid.ColumnSpan", {1, false, true});
 const DependencyProperty* const kRowSpan = RegisterProperty("Grid", "Grid.RowSpan", {1, false, true});
 
-const std::vector<std::string> kOwners = {"Grid", "Panel", "FrameworkElement", "UIElement"};
+// kChromePropertyOwner is where BorderThickness and Padding come from -- see
+// chrome.h. Grid grew them in WinUI 2.6, so that a page does not have to wrap
+// a Grid in a Border just to give it one.
+const std::vector<std::string> kOwners = {"Grid", kChromePropertyOwner, "Panel",
+                                          "FrameworkElement", "UIElement"};
 
 }  // namespace
 
@@ -369,6 +373,13 @@ void Grid::ResolveStar(std::vector<Definition>& definitions, double available_si
 }
 
 Size Grid::MeasureOverride(Size available) {
+    // Chrome comes off the top, before any of the definition arithmetic sees
+    // the constraint, and goes back on at the end. Everything in between works
+    // in the Grid's inner coordinates and does not know the chrome exists.
+    const Size chrome = CombinedThickness();
+    available.width = std::max(0.0, available.width - chrome.width);
+    available.height = std::max(0.0, available.height - chrome.height);
+
     // No definitions at all: the Grid is a plain overlay, every child gets the
     // full constraint and the Grid is as big as its largest child.
     if (column_definitions.empty() && row_definitions.empty()) {
@@ -381,7 +392,7 @@ Size Grid::MeasureOverride(Size available) {
             desired.width = std::max(desired.width, child->desired_size().width);
             desired.height = std::max(desired.height, child->desired_size().height);
         }
-        return desired;
+        return {desired.width + chrome.width, desired.height + chrome.height};
     }
 
     // An empty collection still lays out as one implicit Star definition --
@@ -445,7 +456,7 @@ Size Grid::MeasureOverride(Size available) {
         for (const Definition& definition : definitions) total += definition.min_size;
         return total;
     };
-    return {sum_min_sizes(columns_), sum_min_sizes(rows_)};
+    return {sum_min_sizes(columns_) + chrome.width, sum_min_sizes(rows_) + chrome.height};
 }
 
 void Grid::SetFinalSize(std::vector<Definition>& definitions, double final_size, double dpi_scale) {
@@ -607,19 +618,25 @@ void Grid::SetFinalSize(std::vector<Definition>& definitions, double final_size,
 }
 
 Size Grid::ArrangeOverride(Size final_size) {
+    // Definitions are laid out inside the chrome and the whole grid of them is
+    // then shifted by it, so a cell offset is relative to the inner rect
+    // rather than to the Grid.
+    const Rect inner = InnerRect(final_size);
+
     if (columns_.empty() || rows_.empty()) {
-        for (Element* child : Children()) child->Arrange({0.0, 0.0, final_size.width, final_size.height});
+        for (Element* child : Children())
+            child->Arrange({inner.x, inner.y, inner.width, inner.height});
         return final_size;
     }
 
-    SetFinalSize(columns_, final_size.width, dpi_scale_x);
-    SetFinalSize(rows_, final_size.height, dpi_scale_y);
+    SetFinalSize(columns_, inner.width, dpi_scale_x);
+    SetFinalSize(rows_, inner.height, dpi_scale_y);
 
     const std::vector<Element*> children = Children();
     for (size_t i = 0; i < children.size(); ++i) {
         const Cell& cell = cells_[i];
-        children[i]->Arrange({columns_[cell.column_index].final_offset,
-                              rows_[cell.row_index].final_offset,
+        children[i]->Arrange({inner.x + columns_[cell.column_index].final_offset,
+                              inner.y + rows_[cell.row_index].final_offset,
                               GetFinalSizeForRange(columns_, cell.column_index, cell.column_span),
                               GetFinalSizeForRange(rows_, cell.row_index, cell.row_span)});
     }

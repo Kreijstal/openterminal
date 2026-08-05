@@ -31,6 +31,7 @@ public:
 
     static const DependencyProperty& BorderThicknessProperty();
     static const DependencyProperty& PaddingProperty();
+    static const DependencyProperty& BackgroundProperty();
 
 protected:
     Size MeasureOverride(Size available) override;

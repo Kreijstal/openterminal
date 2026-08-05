@@ -16,6 +16,9 @@
 #include <string>
 
 #include "border.h"
+#include "canvas.h"
+#include "chrome.h"
+#include "content_presenter.h"
 #include "control.h"
 #include "grid.h"
 #include "markup.h"
@@ -113,8 +116,43 @@ void NameLookupFollowsTheOwnerChain() {
     CHECK(FindProperty(TextBlock::Owners(), "Grid.Row") == &Grid::RowProperty());
 
     CHECK(FindProperty(Border::Owners(), "Nonsense") == nullptr);
-    // A property of a type this element is not: BorderThickness is Border's.
-    CHECK(FindProperty(StackPanel::Owners(), "BorderThickness") == nullptr);
+    // A property of a type this element is not. BorderThickness reached
+    // StackPanel and Grid in WinUI 2.6, so a TextBlock carries the rule now --
+    // and a Canvas is the one panel that did not get the chrome, because it
+    // has no content rect for a Padding to deflate.
+    CHECK(FindProperty(TextBlock::Owners(), "BorderThickness") == nullptr);
+    CHECK(FindProperty(Canvas::Owners(), "BorderThickness") == nullptr);
+    CHECK(FindProperty(Canvas::Owners(), "Padding") == nullptr);
+
+    // The panels' chrome is one property shared between them, and it is not
+    // Border's. Two properties with the same name on different owners are
+    // different properties -- which is exactly the case where a registry that
+    // matched on the name alone would look correct and be wrong.
+    CHECK(FindProperty(StackPanel::Owners(), "BorderThickness") ==
+          &ChromeBorderThicknessProperty());
+    CHECK(FindProperty(Grid::Owners(), "BorderThickness") == &ChromeBorderThicknessProperty());
+    CHECK(FindProperty(ContentPresenter::Owners(), "Padding") == &ChromePaddingProperty());
+    CHECK(FindProperty(Border::Owners(), "BorderThickness") == &Border::BorderThicknessProperty());
+    CHECK(&Border::BorderThicknessProperty() != &ChromeBorderThicknessProperty());
+    CHECK(&Border::PaddingProperty() != &ChromePaddingProperty());
+
+    // Background is Panel's for the three panels and each type's own for the
+    // two that are not panels -- the runtime's arrangement, and the reason a
+    // Canvas takes a Background while it takes no Padding.
+    CHECK(FindProperty(Canvas::Owners(), "Background") == &PanelBackgroundProperty());
+    CHECK(FindProperty(Grid::Owners(), "Background") == &PanelBackgroundProperty());
+    CHECK(FindProperty(Border::Owners(), "Background") == &Border::BackgroundProperty());
+    CHECK(FindProperty(TextBlock::Owners(), "Background") == nullptr);
+
+    // Canvas.Left and Canvas.Top are attached, so they resolve on anything --
+    // and Spacing is StackPanel's alone, which no other panel answers to.
+    CHECK(FindProperty(Border::Owners(), "Canvas.Left") == &Canvas::LeftProperty());
+    CHECK(FindProperty(StackPanel::Owners(), "Spacing") == &StackPanel::SpacingProperty());
+    CHECK(FindProperty(Grid::Owners(), "Spacing") == nullptr);
+
+    // Visibility is UIElement's, so every type has it.
+    CHECK(FindProperty(Canvas::Owners(), "Visibility") == &Element::VisibilityProperty());
+    CHECK(FindProperty(TextBlock::Owners(), "Visibility") == &Element::VisibilityProperty());
 }
 
 // --- inheritance --------------------------------------------------------------
