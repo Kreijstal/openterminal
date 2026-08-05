@@ -112,6 +112,16 @@ std::vector<Glyph> Shape(const std::string& text, const FontMetrics& font, doubl
     for (char32_t code : DecodeUtf8(text)) {
         const auto found = font.advances.find(code);
         if (found == font.advances.end()) {
+            // Which metrics are loaded decides what the reader has to do about
+            // it: harvest a font that covers the character, or -- for the
+            // derived set, which only carries what the corpus measures on its
+            // own -- fetch the real harvest.
+            if (font.provenance == FontProvenance::Derived) {
+                throw TextError(
+                    "the metrics derived from the recorded measurements have no advance for " +
+                    Describe(code) + "; only characters the corpus measures alone are "
+                    "solvable, so this case needs the harvested metrics");
+            }
             throw TextError("the harvested font metrics have no advance for " + Describe(code));
         }
         Glyph glyph;

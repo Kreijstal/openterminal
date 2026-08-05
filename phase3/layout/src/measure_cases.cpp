@@ -104,7 +104,16 @@ int main(int argc, char** argv) {
     // Not fatal when absent: the cases that need a font say so individually,
     // which names the real problem, where refusing to start would blame the
     // whole corpus for a level that may not even be under test.
-    const int loaded = LoadFontDirectory(FontLibrary::Default(), fonts.string());
+    int loaded = 0;
+    try {
+        loaded = LoadFontDirectory(FontLibrary::Default(), fonts.string());
+    } catch (const std::exception& e) {
+        // A directory that is there but unreadable is not a per-case failure --
+        // every text case would blame itself for it. Say it once, and stop.
+        std::cerr << "cannot load font metrics from " << fonts.string() << ": " << e.what()
+                  << "\n";
+        return 4;
+    }
     std::cerr << "font metrics loaded: " << loaded << " from " << fonts.string() << "\n";
 
     fs::create_directories(out_dir);

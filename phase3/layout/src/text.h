@@ -15,6 +15,15 @@
 
 namespace openxaml {
 
+// Where a set of metrics came from. Not decoration: the derived ones cover the
+// two numbers the corpus measures directly and nothing else, so "no advance for
+// U+0054" means different things for the two and a reader has to be told which
+// one is loaded.
+enum class FontProvenance {
+    Harvested,  // read out of the font file by harvest_font_metrics.py
+    Derived,    // solved out of the recorded measurements by derive_font_metrics.py
+};
+
 // What phase3/scripts/harvest_font_metrics.py extracts from a font file, in
 // design units. Nothing here is scaled: a metric only becomes a distance once
 // a font size divides it by units_per_em.
@@ -25,6 +34,7 @@ struct FontMetrics {
     double descender = 0.0;
     double line_gap = 0.0;
     std::map<char32_t, double> advances;
+    FontProvenance provenance = FontProvenance::Harvested;
 
     // Baseline to baseline, which is what a line of text occupies.
     double LineSpacing() const { return ascender - descender + line_gap; }
