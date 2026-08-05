@@ -8,7 +8,14 @@
 #include <vector>
 
 #include "border.h"
+#include "brush.h"
+#include "canvas.h"
+#include "content_presenter.h"
+#include "geometry.h"
 #include "grid.h"
+#include "icon.h"
+#include "image.h"
+#include "shape.h"
 #include "stack_panel.h"
 
 namespace openxaml {
@@ -269,10 +276,41 @@ const std::map<std::string, TextWrapping> kTextWrappings = {
     {"Wrap", TextWrapping::Wrap},
 };
 
+// Hidden is missing on purpose. It renders nothing but still takes part in
+// layout, so it is indistinguishable from Visible in every number the probe
+// records -- there is no case that could tell a correct implementation of it
+// from a wrong one.
+const std::map<std::string, Visibility> kVisibilities = {
+    {"Visible", Visibility::Visible},
+    {"Collapsed", Visibility::Collapsed},
+};
+
+// BorderThickness and Padding. Border has had them all along; Grid and
+// StackPanel got them in WinUI 2.6, so that a page does not have to wrap a
+// panel in a Border just to give it one. Canvas did not: it has no content
+// rect for a padding to deflate.
+bool TakesBorderAndPadding(const std::string& type) {
+    return type == "Border" || type == "Grid" || type == "StackPanel" ||
+           type == "ContentPresenter";
+}
+
+// Background is older and wider: every Panel has one, and so does anything
+// that draws a border.
+bool TakesBackground(const std::string& type) {
+    return TakesBorderAndPadding(type) || type == "Canvas";
+}
+
 // Attributes every FrameworkElement takes. Returns false if the name is not
 // one of them, so the caller can try the type's own properties next.
 bool ApplyCommonAttribute(MarkupNode& node, const std::string& name, const std::string& value) {
     if (name == "xmlns" || name.rfind("xmlns:", 0) == 0) return true;
+    // A name registers the element in a namescope so that code-behind can
+    // reach it. There is no code-behind here and no namescope, and neither
+    // spelling has ever moved an element.
+    if (name == "x:Name" || name == "Name") return true;
+    // Accessibility metadata. Every property on it describes the element to a
+    // screen reader; none of them is read by measure or arrange.
+    if (name.rfind("AutomationProperties.", 0) == 0) return true;
     if (name == "Width") { node.width = ParseLength(value, "Width"); return true; }
     if (name == "Height") { node.height = ParseLength(value, "Height"); return true; }
     if (name == "MinWidth") { node.min_width = ParseDouble(value, "MinWidth"); return true; }
@@ -298,6 +336,12 @@ bool ApplyCommonAttribute(MarkupNode& node, const std::string& name, const std::
         node.grid_row_span = ParseInt(value, "Grid.RowSpan");
         return true;
     }
+    if (name == "Canvas.Left") { node.canvas_left = ParseDouble(value, "Canvas.Left"); return true; }
+    if (name == "Canvas.Top") { node.canvas_top = ParseDouble(value, "Canvas.Top"); return true; }
+    if (name == "Visibility") {
+        node.visibility = ParseEnum(value, kVisibilities, "Visibility");
+        return true;
+    }
     return false;
 }
 
@@ -305,7 +349,7 @@ void ApplyAttributes(MarkupNode& node, const std::map<std::string, std::string>&
     for (const auto& [name, value] : attributes) {
         if (ApplyCommonAttribute(node, name, value)) continue;
 
-        if (node.type == "Border") {
+        if (TakesBorderAndPadding(node.type)) {
             if (name == "BorderThickness") {
                 node.border_thickness = ParseThickness(value, "BorderThickness");
                 continue;
@@ -315,9 +359,32 @@ void ApplyAttributes(MarkupNode& node, const std::map<std::string, std::string>&
                 continue;
             }
         }
+        if (TakesBackground(node.type) && name == "Background") {
+            // The attribute shorthand is always a colour, and a colour is
+            // always a SolidColorBrush.
+            ValidateColor(value, "Background");
+            node.background = "SolidColorBrush";
+            continue;
+        }
         if (node.type == "StackPanel") {
             if (name == "Orientation") {
                 node.orientation = ParseEnum(value, kOrientations, "Orientation");
+                continue;
+            }
+            if (name == "Spacing") { node.spacing = ParseDouble(value, "Spacing"); continue; }
+        }
+        if (node.type == "Path" || node.type == "PathIcon") {
+            if (name == "Data") { node.data = PathGeometryBounds(value); continue; }
+        }
+        if (node.type == "ContentPresenter") {
+            if (name == "HorizontalContentAlignment") {
+                node.horizontal_content_alignment =
+                    ParseEnum(value, kHorizontalAlignments, "HorizontalContentAlignment");
+                continue;
+            }
+            if (name == "VerticalContentAlignment") {
+                node.vertical_content_alignment =
+                    ParseEnum(value, kVerticalAlignments, "VerticalContentAlignment");
                 continue;
             }
         }
@@ -333,6 +400,82 @@ void ApplyAttributes(MarkupNode& node, const std::map<std::string, std::string>&
         throw MarkupError("the property '" + name + "' was not found in type '" +
                           FullTypeName(node.type) + "'");
     }
+}
+
+// --- property elements --------------------------------------------------------
+
+// Reads the one brush inside a <Something.Background> and the closing tag, and
+// returns the brush's short type name. The brush itself is discarded: a
+// background has no effect on any number the probe records. What matters is
+// that an unimplemented brush type still fails by name here rather than being
+// dropped.
+std::string ParseBrushPropertyElement(Scanner& scanner, const std::string& property_element) {
+    std::string brush;
+    Tag tag;
+    while (scanner.Next(tag)) {
+        if (tag.text_before.find_first_not_of(" \t\r\n") != std::string::npos)
+            throw MarkupError("unexpected text content in <" + property_element + ">");
+        if (tag.closing) {
+            if (tag.name != property_element)
+                throw MarkupError("</" + tag.name + "> closes <" + property_element + ">");
+            if (brush.empty())
+                throw MarkupError("<" + property_element + "> is empty");
+            return brush;
+        }
+        if (!brush.empty())
+            throw MarkupError("<" + property_element + "> takes a single brush");
+        FullBrushTypeName(tag.name);
+        brush = tag.name;
+        if (!tag.self_closing) {
+            // A brush with content -- gradient stops, an image source -- is a
+            // brush whose type is understood but whose contents are not.
+            Tag close;
+            if (!scanner.Next(close) || !close.closing || close.name != brush)
+                throw MarkupError("a <" + brush + "> with content is not implemented");
+        }
+    }
+    throw MarkupError("<" + property_element + "> was not closed");
+}
+
+// Reads a <VisualStateManager.VisualStateGroups> and checks that it changes
+// nothing.
+//
+// A visual state is a set of setters and a storyboard, applied when the state
+// is entered. At the moment the probe measures, no state has been entered, so
+// a group of *empty* states is genuinely inert and can be skipped. A state
+// that carries anything is a different matter -- Terminal's pages use them to
+// change sizes -- and the element inside it is named rather than skipped, so
+// that a case cannot pass by having its styling silently ignored.
+void ParseVisualStateGroups(Scanner& scanner) {
+    const std::string property_element = "VisualStateManager.VisualStateGroups";
+    std::vector<std::string> open;
+    Tag tag;
+    while (scanner.Next(tag)) {
+        if (tag.text_before.find_first_not_of(" \t\r\n") != std::string::npos)
+            throw MarkupError("unexpected text content in <" + property_element + ">");
+        if (tag.closing) {
+            if (open.empty()) {
+                if (tag.name != property_element)
+                    throw MarkupError("</" + tag.name + "> closes <" + property_element + ">");
+                return;
+            }
+            if (tag.name != open.back())
+                throw MarkupError("</" + tag.name + "> does not close the open element");
+            open.pop_back();
+            continue;
+        }
+        const std::string expected = open.empty() ? "VisualStateGroup" : "VisualState";
+        if (open.size() >= 2 || tag.name != expected)
+            throw MarkupError("the visual state element '" + tag.name + "' is not implemented");
+        for (const auto& [name, value] : tag.attributes) {
+            (void)value;
+            if (name != "x:Name" && name != "Name")
+                throw MarkupError("the property '" + name + "' was not found in type '" +
+                                  "Windows.UI.Xaml." + tag.name + "'");
+        }
+        if (!tag.self_closing) open.push_back(tag.name);
+    }
+    throw MarkupError("<" + property_element + "> was not closed");
 }
 
 MarkupDefinition MakeDefinition(const Tag& tag, bool is_column) {
@@ -357,8 +500,12 @@ MarkupDefinition MakeDefinition(const Tag& tag, bool is_column) {
 
 // Attaches a finished node to whatever is currently open above it.
 void AttachChild(MarkupNode& parent, MarkupNode child) {
-    if (parent.type == "Border" && !parent.children.empty())
-        throw MarkupError("a Border takes a single child");
+    if ((parent.type == "Border" || parent.type == "ContentPresenter") &&
+        !parent.children.empty()) {
+        throw MarkupError("a " + parent.type + " takes a single child");
+    }
+    if (parent.type == "Path" || parent.type == "Image" || parent.type == "PathIcon")
+        throw MarkupError("a " + parent.type + " takes no child elements");
     parent.children.push_back(std::move(child));
 }
 
@@ -382,6 +529,8 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
         element = std::move(border);
     } else if (node.type == "Grid") {
         auto grid = std::make_unique<Grid>();
+        grid->border_thickness = node.border_thickness;
+        grid->padding = node.padding;
         for (const MarkupDefinition& definition : node.column_definitions)
             grid->column_definitions.push_back(ToDefinition(definition));
         for (const MarkupDefinition& definition : node.row_definitions)
@@ -391,8 +540,33 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
     } else if (node.type == "StackPanel") {
         auto stack = std::make_unique<StackPanel>();
         stack->orientation = node.orientation;
+        stack->spacing = node.spacing;
+        stack->border_thickness = node.border_thickness;
+        stack->padding = node.padding;
         for (const MarkupNode& child : node.children) stack->AddChild(BuildElement(child));
         element = std::move(stack);
+    } else if (node.type == "Canvas") {
+        auto canvas = std::make_unique<Canvas>();
+        for (const MarkupNode& child : node.children) canvas->AddChild(BuildElement(child));
+        element = std::move(canvas);
+    } else if (node.type == "ContentPresenter") {
+        auto presenter = std::make_unique<ContentPresenter>();
+        presenter->border_thickness = node.border_thickness;
+        presenter->padding = node.padding;
+        presenter->horizontal_content_alignment = node.horizontal_content_alignment;
+        presenter->vertical_content_alignment = node.vertical_content_alignment;
+        if (!node.children.empty()) presenter->SetContent(BuildElement(node.children.front()));
+        element = std::move(presenter);
+    } else if (node.type == "Image") {
+        element = std::make_unique<Image>();
+    } else if (node.type == "Path") {
+        auto path = std::make_unique<Path>();
+        path->data = node.data;
+        element = std::move(path);
+    } else if (node.type == "PathIcon") {
+        auto icon = std::make_unique<PathIcon>();
+        icon->data = node.data;
+        element = std::move(icon);
     } else if (node.type == "TextBlock") {
         auto text = std::make_unique<TextBlock>();
         text->text = node.text;
@@ -415,20 +589,37 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
     element->margin = node.margin;
     element->horizontal_alignment = node.horizontal_alignment;
     element->vertical_alignment = node.vertical_alignment;
+    element->visibility = node.visibility;
     element->grid_column = node.grid_column;
     element->grid_row = node.grid_row;
     element->grid_column_span = node.grid_column_span;
     element->grid_row_span = node.grid_row_span;
+    element->canvas_left = node.canvas_left;
+    element->canvas_top = node.canvas_top;
     return element;
 }
 
 }  // namespace
 
 std::string FullTypeName(const std::string& short_name) {
-    if (short_name == "Border" || short_name == "Grid" || short_name == "StackPanel" ||
-        short_name == "TextBlock")
-        return "Windows.UI.Xaml.Controls." + short_name;
-    throw MarkupError("the type '" + short_name + "' is not implemented");
+    // The namespace is part of the answer, not decoration: it is what the
+    // probe reports as the node's type and what the measured tree is keyed on,
+    // and Shapes do not live where Controls do.
+    static const std::map<std::string, std::string> kTypes = {
+        {"Border", "Windows.UI.Xaml.Controls.Border"},
+        {"Canvas", "Windows.UI.Xaml.Controls.Canvas"},
+        {"ContentPresenter", "Windows.UI.Xaml.Controls.ContentPresenter"},
+        {"Grid", "Windows.UI.Xaml.Controls.Grid"},
+        {"Image", "Windows.UI.Xaml.Controls.Image"},
+        {"Path", "Windows.UI.Xaml.Shapes.Path"},
+        {"PathIcon", "Windows.UI.Xaml.Controls.PathIcon"},
+        {"StackPanel", "Windows.UI.Xaml.Controls.StackPanel"},
+        {"TextBlock", "Windows.UI.Xaml.Controls.TextBlock"},
+    };
+    const auto found = kTypes.find(short_name);
+    if (found == kTypes.end())
+        throw MarkupError("the type '" + short_name + "' is not implemented");
+    return found->second;
 }
 
 MarkupNode ParseMarkup(const std::string& markup) {
@@ -488,10 +679,29 @@ MarkupNode ParseMarkup(const std::string& markup) {
             if (open.empty()) throw MarkupError("<" + tag.name + "> with no element to set it on");
             if (!tag.attributes.empty())
                 throw MarkupError("<" + tag.name + "> cannot carry attributes");
+
+            const std::string owner = tag.name.substr(0, tag.name.find('.'));
+            const std::string property = tag.name.substr(tag.name.find('.') + 1);
+
+            // Attached: it names the class that defines the property, not the
+            // element it is being set on.
+            if (tag.name == "VisualStateManager.VisualStateGroups") {
+                if (tag.self_closing) continue;
+                ParseVisualStateGroups(scanner);
+                continue;
+            }
+
+            if (owner != open.back().type)
+                throw MarkupError("<" + tag.name + "> is only valid on a " + owner);
+
+            if (property == "Background" && TakesBackground(owner)) {
+                if (tag.self_closing) throw MarkupError("<" + tag.name + "> is empty");
+                open.back().background = ParseBrushPropertyElement(scanner, tag.name);
+                continue;
+            }
+
             if (tag.name != "Grid.ColumnDefinitions" && tag.name != "Grid.RowDefinitions")
                 throw MarkupError("the property element '" + tag.name + "' is not implemented");
-            if (open.back().type != "Grid")
-                throw MarkupError("<" + tag.name + "> is only valid on a Grid");
             if (tag.self_closing) continue;
             property_element = tag.name;
             continue;

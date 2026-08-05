@@ -12,6 +12,12 @@ add_library(openxaml_layout STATIC
     src/border.cpp
     src/stack_panel.cpp
     src/grid.cpp
+    src/canvas.cpp
+    src/content_presenter.cpp
+    src/geometry.cpp
+    src/shape.cpp
+    src/icon.cpp
+    src/brush.cpp
     src/text.cpp
     # Text measurement needs numbers out of a font file, and those arrive as
     # JSON, so the reader moves into the library with them.

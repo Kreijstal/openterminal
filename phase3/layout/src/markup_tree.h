@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "geometry.h"
 #include "grid.h"
 #include "layout.h"
 #include "stack_panel.h"
@@ -40,17 +41,33 @@ struct MarkupNode {
     Thickness margin;
     HorizontalAlignment horizontal_alignment = HorizontalAlignment::Stretch;
     VerticalAlignment vertical_alignment = VerticalAlignment::Stretch;
+    Visibility visibility = Visibility::Visible;
     int grid_column = 0;
     int grid_row = 0;
     int grid_column_span = 1;
     int grid_row_span = 1;
+    double canvas_left = 0.0;
+    double canvas_top = 0.0;
 
-    // Border.
+    // Border, and the WinUI 2 panels that grew the same properties.
     Thickness border_thickness;
     Thickness padding;
+    // The short name of whatever brush the Background was set to, or empty.
+    // Recorded rather than realised: it decides nothing about layout, and
+    // keeping it makes the parse round-trippable for a consumer that draws.
+    std::string background;
 
     // StackPanel.
     Orientation orientation = Orientation::Vertical;
+    double spacing = 0.0;
+
+    // Path and PathIcon. Parsed at markup time, because a geometry that
+    // cannot be read is a markup error rather than a measurement of zero.
+    GeometryBounds data;
+
+    // ContentPresenter.
+    HorizontalAlignment horizontal_content_alignment = HorizontalAlignment::Left;
+    VerticalAlignment vertical_content_alignment = VerticalAlignment::Top;
 
     // TextBlock. The defaults are XAML's; every case in the corpus sets all
     // three explicitly, so they are not exercised.
