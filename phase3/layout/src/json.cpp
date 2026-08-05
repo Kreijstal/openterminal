@@ -1,5 +1,6 @@
 #include "json.h"
 
+#include <cctype>
 #include <cstdlib>
 
 namespace openxaml {
@@ -104,6 +105,39 @@ private:
         }
     }
 
+    unsigned int ReadHex4() {
+        if (position_ + 4 > text_.size()) Fail("truncated \\u escape");
+        unsigned int value = 0;
+        for (int i = 0; i < 4; ++i) {
+            const char c = text_[position_ + static_cast<size_t>(i)];
+            if (!std::isxdigit(static_cast<unsigned char>(c))) Fail("a malformed \\u escape");
+            value = value * 16 + static_cast<unsigned int>(
+                                     c <= '9' ? c - '0'
+                                              : (std::tolower(static_cast<unsigned char>(c)) - 'a' +
+                                                 10));
+        }
+        position_ += 4;
+        return value;
+    }
+
+    static void AppendUtf8(std::string& out, unsigned int code) {
+        if (code < 0x80) {
+            out += static_cast<char>(code);
+        } else if (code < 0x800) {
+            out += static_cast<char>(0xC0 | (code >> 6));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        } else if (code < 0x10000) {
+            out += static_cast<char>(0xE0 | (code >> 12));
+            out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        } else {
+            out += static_cast<char>(0xF0 | (code >> 18));
+            out += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+            out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        }
+    }
+
     std::string ParseString() {
         Expect('"');
         std::string out;
@@ -120,14 +154,27 @@ private:
                 case 'b': out += '\b'; break;
                 case 'f': out += '\f'; break;
                 case 'u': {
-                    if (position_ + 4 > text_.size()) Fail("truncated \\u escape");
-                    const int code =
-                        std::stoi(text_.substr(position_, 4), nullptr, 16);
-                    position_ += 4;
-                    // The corpus is ASCII; anything above it would need real
-                    // UTF-16 surrogate handling, so say so rather than guess.
-                    if (code > 0x7f) Fail("non-ASCII \\u escape is not supported");
-                    out += static_cast<char>(code);
+                    // JSON escapes are UTF-16 code units, so a character
+                    // outside the basic plane arrives as a surrogate pair and
+                    // has to be recombined before it can be encoded. The
+                    // corpus is no longer ASCII: an icon glyph is a private-use
+                    // character, and refusing to read one would fail the case
+                    // in the reader rather than in the layout that cannot
+                    // measure it yet.
+                    unsigned int code = ReadHex4();
+                    if (code >= 0xD800 && code <= 0xDBFF) {
+                        if (position_ + 2 > text_.size() || text_[position_] != '\\' ||
+                            text_[position_ + 1] != 'u') {
+                            Fail("a high surrogate with no low surrogate after it");
+                        }
+                        position_ += 2;
+                        const unsigned int low = ReadHex4();
+                        if (low < 0xDC00 || low > 0xDFFF) Fail("a malformed surrogate pair");
+                        code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                    } else if (code >= 0xDC00 && code <= 0xDFFF) {
+                        Fail("a low surrogate with no high surrogate before it");
+                    }
+                    AppendUtf8(out, code);
                     break;
                 }
                 default: out += escape;
