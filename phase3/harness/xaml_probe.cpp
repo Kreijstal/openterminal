@@ -48,7 +48,10 @@
 
 namespace fs = std::filesystem;
 using namespace winrt;
-using namespace Windows::UI::Xaml;
+// Qualified against winrt explicitly: roerrorapi.h declares a global ABI
+// `Windows` namespace, and with `using namespace winrt` in scope an
+// unqualified `Windows::UI::Xaml` is ambiguous between the two.
+using namespace winrt::Windows::UI::Xaml;
 
 namespace {
 
