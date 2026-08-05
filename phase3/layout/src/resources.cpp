@@ -128,6 +128,15 @@ const ResourceValue& LookUpResource(const ResourceScope& scope, const std::strin
                       " dictionary(ies) from the element to the root of the markup");
 }
 
+std::string ValueForProperty(const ResourceValue& value, const std::string& property) {
+    const ValueKind wanted = ExpectedValueKind(property);
+    if (!Assignable(value.kind, wanted)) {
+        throw MarkupError("<" + value.type + "> cannot supply '" + property +
+                          "': that property takes " + KindName(wanted));
+    }
+    return value.text;
+}
+
 std::string ResolveResource(const ResourceScope& scope, const std::string& key,
                             const std::string& property) {
     const std::string where = "'" + property + "'";

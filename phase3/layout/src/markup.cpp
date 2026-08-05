@@ -19,6 +19,7 @@
 #include "resources.h"
 #include "shape.h"
 #include "stack_panel.h"
+#include "xdirectives.h"
 
 namespace openxaml {
 namespace {
@@ -418,18 +419,15 @@ void ApplyAttributes(MarkupNode& node, const std::map<std::string, std::string>&
         // A name registers the element in a namescope so that code-behind can
         // reach it. There is no code-behind here and no namescope, and neither
         // spelling has ever moved an element. `Name` is not a directive, but
-        // it is the same non-effect, so the two are refused or dropped
-        // together rather than by different rules.
+        // it is the same non-effect as x:Name, which xdirectives.cpp drops.
         if (name == "Name") continue;
 
-        // Directives are not properties: they instruct the XAML compiler
-        // rather than setting anything on the object. x:Name is accepted and
-        // dropped because nothing here resolves names -- the corpus reads its
-        // results out of the measured tree by path.
-        if (name.rfind("x:", 0) == 0) {
-            if (name == "x:Name") continue;
+        // Directives are taken off the attributes before this point, by
+        // TakeXDirectives, so that an unimplemented one fails by its own name
+        // rather than as a property the registry could not find. One arriving
+        // here is a caller that skipped that step.
+        if (name.rfind("x:", 0) == 0)
             throw MarkupError("the directive '" + name + "' is not implemented");
-        }
 
         // Accessibility metadata. Attached, so the registry would have to be
         // told about every one of them to reject the rest; every property on
@@ -541,6 +539,31 @@ std::map<std::string, std::string> ResolveAttributes(
     for (const auto& [name, value] : attributes)
         resolved.emplace(name, ResolveAttributeValue(scope, name, value));
     return resolved;
+}
+
+// --- x:Uid --------------------------------------------------------------------
+
+// Writes the properties a uid names into the element's attributes.
+//
+// A uid with no entry sets nothing and is not an error. That is the state every
+// case in the corpus is in -- no table is loaded, and the oracle probe has no
+// resource map to load one from -- and it is also what a real page does before
+// its resources are available. Making it fatal would make the common case the
+// broken one.
+//
+// **Precedence is a provisional choice, not a measured fact.** The uid's value
+// is written over whatever the element wrote in place, on the reading that
+// x:Uid exists to let a translator override the markup: an author who could
+// win by writing the attribute would defeat the localisation the directive is
+// for. WPF has no analogue that settles it and WinUI 2 does not document the
+// order. L5-xdirectives-uid-precedence asks the runtime; until it answers, a
+// case that sets both is the one place this guess is visible.
+void ApplyUid(std::map<std::string, std::string>& attributes, const XDirectives& directives,
+              const StringTable& strings) {
+    if (!directives.has_uid) return;
+    const StringTable::Properties* properties = strings.Find(directives.uid);
+    if (!properties) return;
+    for (const auto& [name, value] : *properties) attributes[name] = value;
 }
 
 // One entry of a resource dictionary: <x:Double x:Key="W">60</x:Double>, or the
@@ -717,7 +740,7 @@ std::string FullTypeName(const std::string& short_name) {
     return found->second;
 }
 
-MarkupNode ParseMarkup(const std::string& markup) {
+MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
     Scanner scanner(markup);
 
     MarkupNode root;
@@ -725,6 +748,11 @@ MarkupNode ParseMarkup(const std::string& markup) {
     // Open elements, innermost last. The root is held separately so it can be
     // returned by value once the stack empties.
     std::vector<MarkupNode> open;
+    // Which of those are deferred, in step with `open`. Alongside rather than
+    // on the node, because deferral is a fact about the parse and not about the
+    // tree: a deferred element never reaches the tree, so a field recording it
+    // there would be false in every node that survives.
+    std::vector<bool> deferred;
     // The property element currently being filled, e.g. Grid.ColumnDefinitions.
     // Empty when ordinary child elements are expected.
     std::string property_element;
@@ -791,8 +819,14 @@ MarkupNode ParseMarkup(const std::string& markup) {
             if (open.empty()) throw MarkupError("</" + tag.name + "> with nothing open");
             MarkupNode finished = std::move(open.back());
             open.pop_back();
+            const bool was_deferred = deferred.back();
+            deferred.pop_back();
             if (tag.name != finished.type)
                 throw MarkupError("</" + tag.name + "> does not close the open element");
+            // A deferred element is described and then dropped: it is not
+            // attached, so it is measured by nothing and occupies no slot. Its
+            // subtree went with it, having been attached to it.
+            if (was_deferred) continue;
             if (open.empty()) {
                 root = std::move(finished);
                 have_root = true;
@@ -890,23 +924,54 @@ MarkupNode ParseMarkup(const std::string& markup) {
         }
 
         if (section == Section::Value) {
-            if (tag.name != "StaticResource") {
-                throw MarkupError("<" + property_element + "> takes a <StaticResource>, not <" +
-                                  tag.name + ">");
-            }
             if (value_filled)
                 throw MarkupError("<" + property_element + "> was given a second value");
+            const std::string member = property_element.substr(property_element.find('.') + 1);
+
+            // A primitive written in place rather than looked up:
+            // <Border.Width><x:Double>60</x:Double></Border.Width>. This is the
+            // form Terminal reaches for when the property is typed `object` and
+            // an attribute would give it a string -- <ToggleButton.Tag> with an
+            // <x:Int32>, <DiscreteObjectKeyFrame.Value> with an <x:Boolean>.
+            //
+            // It goes through MakeResource, so the same shape check runs here
+            // as on a {StaticResource} of the same primitive: an x:String does
+            // not satisfy a Width either way. Then it is applied through the
+            // ordinary attribute path, so the value reaches the property by the
+            // code Width="60" would have used.
+            if (IsResourceType(tag.name)) {
+                if (!tag.attributes.empty()) {
+                    throw MarkupError("<" + tag.name + "> as a value takes no attributes; '" +
+                                      tag.attributes.begin()->first + "' is not implemented");
+                }
+                std::string content;
+                if (!tag.self_closing) {
+                    Tag close;
+                    if (!scanner.Next(close) || !close.closing || close.name != tag.name)
+                        throw MarkupError("<" + tag.name + "> holds only text");
+                    content = close.text_before;
+                }
+                ApplyAttributes(open.back(),
+                                {{member, ValueForProperty(MakeResource(tag.name, content),
+                                                           member)}});
+                value_filled = true;
+                continue;
+            }
+
+            if (tag.name != "StaticResource") {
+                throw MarkupError("<" + property_element + "> takes a <StaticResource> or a "
+                                  "primitive such as <x:Double>, not <" + tag.name + ">");
+            }
             if (!tag.self_closing) {
                 Tag close;
                 if (!scanner.Next(close) || !close.closing || close.name != "StaticResource")
                     throw MarkupError("<StaticResource> must be empty");
             }
-            const std::string property = property_element.substr(property_element.find('.') + 1);
             const std::string key = StaticResourceElementKey(tag.attributes, /*allow_key=*/false);
             // Resolved to its literal and then applied through the ordinary
             // attribute path, so <Border.Width><StaticResource .../></Border.Width>
             // and Width="60" reach the property by the same code.
-            ApplyAttributes(open.back(), {{property, ResolveResource(scope(), key, property)}});
+            ApplyAttributes(open.back(), {{member, ResolveResource(scope(), key, member)}});
             value_filled = true;
             continue;
         }
@@ -933,8 +998,26 @@ MarkupNode ParseMarkup(const std::string& markup) {
         FullTypeName(tag.name);
         MarkupNode node;
         node.type = tag.name;
-        ApplyAttributes(node, ResolveAttributes(tag.attributes, scope()));
+
+        // Directives come off first. They are not properties, so handing them
+        // to the registry would report x:Load as a missing member of Border --
+        // the wrong reason for the right refusal, and no reason at all for the
+        // ones that are implemented.
+        std::map<std::string, std::string> attributes = tag.attributes;
+        const XDirectives directives = TakeXDirectives(attributes);
+        ApplyUid(attributes, directives, strings);
+        ApplyAttributes(node, ResolveAttributes(attributes, scope()));
+
+        // A deferred root would realise nothing at all, and a measurement of
+        // nothing is not a measurement. Named here rather than left to produce
+        // an empty tree that reads like a parser bug.
+        if (directives.deferred && open.empty() && !have_root) {
+            throw MarkupError("the root <" + tag.name +
+                              "> defers its own creation, so this markup realises no element");
+        }
+
         if (tag.self_closing) {
+            if (directives.deferred) continue;
             if (open.empty()) {
                 root = std::move(node);
                 have_root = true;
@@ -943,6 +1026,7 @@ MarkupNode ParseMarkup(const std::string& markup) {
             }
         } else {
             open.push_back(std::move(node));
+            deferred.push_back(directives.deferred);
         }
     }
 
@@ -951,8 +1035,14 @@ MarkupNode ParseMarkup(const std::string& markup) {
     return root;
 }
 
+MarkupNode ParseMarkup(const std::string& markup) { return ParseMarkup(markup, NoStrings()); }
+
 std::unique_ptr<Element> LoadMarkup(const std::string& markup) {
-    return BuildElement(ParseMarkup(markup));
+    return BuildElement(ParseMarkup(markup, NoStrings()));
+}
+
+std::unique_ptr<Element> LoadMarkup(const std::string& markup, const StringTable& strings) {
+    return BuildElement(ParseMarkup(markup, strings));
 }
 
 }  // namespace openxaml

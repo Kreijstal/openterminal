@@ -18,6 +18,7 @@
 #include "layout.h"
 #include "property.h"
 #include "resources.h"
+#include "resw_strings.h"
 #include "stack_panel.h"
 #include "text.h"
 
@@ -123,6 +124,10 @@ struct MarkupNode {
 
     std::vector<MarkupNode> children;
 };
+
+// The parse is the same either way; the string table only decides what an
+// x:Uid resolves to, and an empty one is the state every corpus case is in.
+MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings);
 
 // Throws MarkupError for anything outside the implemented subset. The full
 // runtime class name, as the oracle reports it, for a short markup name.

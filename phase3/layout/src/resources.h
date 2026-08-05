@@ -96,6 +96,17 @@ ValueKind ExpectedValueKind(const std::string& property);
 const ResourceValue& LookUpResource(const ResourceScope& scope, const std::string& key,
                                     const std::string& where);
 
+// The literal `value` supplies for `property`, after checking that its shape
+// can. Throws MarkupError naming both when it cannot -- an x:String does not
+// satisfy a Width whether it arrived through a dictionary or was written in
+// place as <Border.Width><x:String>60</x:String></Border.Width>.
+//
+// Split out of ResolveResource so that both routes to a property run one check.
+// A primitive written as an object element is the same value as the same
+// primitive in a dictionary; only the lookup differs, and only one of the two
+// does a lookup at all.
+std::string ValueForProperty(const ResourceValue& value, const std::string& property);
+
 // Looks `key` up and returns its literal text, after checking that the
 // resource's shape can supply `property`.
 std::string ResolveResource(const ResourceScope& scope, const std::string& key,
