@@ -180,6 +180,13 @@ void walk(const UIElement& el, const std::string& path, std::ostringstream& out,
     } else if (auto cc = el.try_as<Controls::ContentControl>()) {
         if (auto c = cc.Content().try_as<UIElement>())
             walk(c, path + "/" + type_name(c) + "[0]", out, first);
+    // Not a ContentControl, and not covered by any branch above: a
+    // ContentPresenter derives straight from FrameworkElement. Without this it
+    // measures as a leaf, and the content whose alignment it decides is the
+    // one thing that never gets recorded.
+    } else if (auto cp = el.try_as<Controls::ContentPresenter>()) {
+        if (auto c = cp.Content().try_as<UIElement>())
+            walk(c, path + "/" + type_name(c) + "[0]", out, first);
     }
 }
 
