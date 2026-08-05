@@ -63,6 +63,46 @@ jobs:
           path: _terminal
           fetch-depth: 1
 
+      # WinUI 2's theme dictionary. Terminal names about two hundred resource
+      # keys it never defines; most of them are WinUI 2's, and without them the
+      # markup that uses them cannot be realised standalone at all. The
+      # extractor reimplements the build-time merge that produces the
+      # dictionary -- see the script -- so this needs the source and not a
+      # built package.
+      #
+      # Blobless and sparse: the theme XAML and the three project files that
+      # decide the merge order are a few megabytes of a repository that is
+      # otherwise about a gigabyte.
+      - name: Check out WinUI 2.8.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit=$(python3 -c "import sys; sys.path.insert(0, 'phase3/scripts'); \
+            import extract_winui_theme_resources as e; print(e.PINNED_COMMIT)")
+          git clone --filter=blob:none --no-checkout --depth 1 \
+            https://github.com/microsoft/microsoft-ui-xaml _winui
+          git -C _winui sparse-checkout set --cone dev tools FeatureAreas.props
+          git -C _winui fetch --depth 1 origin "$commit"
+          git -C _winui checkout --detach "$commit"
+          echo "winui at $(git -C _winui rev-parse HEAD)"
+
+      # Twice, into separate files, for the same reason the corpus is generated
+      # twice: it is untracked output, and determinism is what stands in for a
+      # committed copy to diff against.
+      - name: Extract the application dictionary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p phase3/xaml-db/theme-resources
+          for out in phase3/xaml-db/theme-resources/winui-2.8.4.json "$RUNNER_TEMP/theme-check.json"; do
+            python3 -B phase3/scripts/extract_winui_theme_resources.py _winui --out "$out"
+          done
+          if ! diff -q phase3/xaml-db/theme-resources/winui-2.8.4.json \
+                       "$RUNNER_TEMP/theme-check.json" >/dev/null; then
+            echo "::error::two extractor runs disagree; the dictionary is not deterministic"
+            exit 1
+          fi
+
       # The cases are not committed: the generators are the source and this
       # step materializes their output. It runs twice into separate trees and
       # diffs them, because an untracked corpus can no longer be checked
@@ -76,6 +116,7 @@ jobs:
             python3 -B phase3/scripts/harvest_terminal_xaml.py _terminal \
               --members "${{ steps.terminal.outputs.members }}" \
               --inventory "${{ steps.terminal.outputs.inventory }}" \
+              --theme-resources phase3/xaml-db/theme-resources/winui-2.8.4.json \
               --cases "$out/L7-terminal"
           done
           if ! diff -r phase3/xaml-db/cases _corpus-check >/dev/null; then
@@ -254,6 +295,16 @@ jobs:
           name: xaml-cases-${{ env.os_build }}
           path: phase3/xaml-db/cases/
 
+      # The dictionary the corpus was harvested against, travelling with it for
+      # the same reason: the layout job must answer lookups out of the same
+      # content the classifier assumed, or the two jobs are measuring different
+      # corpora and neither says so.
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('phase3/xaml-db/theme-resources/*.json') != ''
+        with:
+          name: xaml-theme-resources-${{ env.os_build }}
+          path: phase3/xaml-db/theme-resources/
+
       # Handed to the layout job, which needs to know both which artifact to
       # download and which directory inside it the oracle wrote.
       - name: Publish the oracle identity to dependent jobs
@@ -263,12 +314,14 @@ jobs:
           echo "artifact=xaml-measurements-${os_build}" >> "$GITHUB_OUTPUT"
           echo "fonts=xaml-fonts-${os_build}" >> "$GITHUB_OUTPUT"
           echo "cases=xaml-cases-${os_build}" >> "$GITHUB_OUTPUT"
+          echo "theme=xaml-theme-resources-${os_build}" >> "$GITHUB_OUTPUT"
           echo "os_build=${os_build}" >> "$GITHUB_OUTPUT"
 
     outputs:
       artifact: ${{ steps.oracle.outputs.artifact }}
       fonts: ${{ steps.oracle.outputs.fonts }}
       cases: ${{ steps.oracle.outputs.cases }}
+      theme: ${{ steps.oracle.outputs.theme }}
       os_build: ${{ steps.oracle.outputs.os_build }}
 
   # The reimplementation, checked against what the runtime just answered. This
@@ -303,6 +356,13 @@ jobs:
         with:
           name: ${{ needs.measure.outputs.cases }}
           path: phase3/xaml-db/cases
+
+      # And the application dictionary it was harvested against, so the lookups
+      # here land in the same content the classifier assumed.
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.measure.outputs.theme }}
+          path: phase3/xaml-db/theme-resources
 
       - name: Build the layout core
         run: |
