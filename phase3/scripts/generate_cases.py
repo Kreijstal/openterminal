@@ -830,6 +830,269 @@ def level5() -> Iterator[dict[str, Any]]:
                        requires=requires)
 
 
+# --- L5: the x-namespace primitives as object elements -------------------------
+# XAML lets a value be written as an element instead of an attribute:
+# <Border.Width><x:Double>60</x:Double></Border.Width> says what Width="60"
+# says. Terminal writes eleven of these outside a resource dictionary, all on
+# properties whose declared type is `object` -- <ToggleButton.Tag> and
+# <DiscreteObjectKeyFrame.Value> -- where an attribute would give the property a
+# string and the code reading it back wants an Int32 or a Boolean.
+#
+# The layout core has no object-typed property to reproduce that on, so the
+# cases below put the same primitives on typed layout properties instead. What
+# they check is the mechanism -- that a primitive written as an element reaches
+# the property, carries its type with it, and is refused when the type is wrong
+# -- which is the half of Terminal's usage that is not about Tag.
+#
+# Every one of these is twinned, because the attribute form of the same value is
+# not a guess: it is the same assignment written the way the rest of the corpus
+# writes it, and the two have to measure identically.
+
+def x_primitive_scenarios() -> list[tuple[str, str, list[str], str, str | None, str | None]]:
+    text_attrs = 'FontFamily="Segoe UI" FontSize="14"'
+
+    def wrap(inner: str) -> str:
+        return l5_document("Border", inner)
+
+    return [
+        (
+            "double-width",
+            "an x:Double written as the value of <Border.Width>",
+            ["L1-sizing"],
+            wrap('<Border Height="30"><Border.Width><x:Double>60</x:Double>'
+                 "</Border.Width></Border>"),
+            wrap('<Border Height="30" Width="60"/>'),
+            None,
+        ),
+        (
+            "int32-width",
+            "an x:Int32 on a property whose type is a Double, which is the one "
+            "widening XAML performs on the way in",
+            ["L1-sizing"],
+            wrap('<Border Height="30"><Border.Width><x:Int32>60</x:Int32>'
+                 "</Border.Width></Border>"),
+            wrap('<Border Height="30" Width="60"/>'),
+            None,
+        ),
+        (
+            "double-indented",
+            "the same value written across lines, because a dictionary indents "
+            "its entries and XAML trims what the indentation adds",
+            ["L1-sizing"],
+            wrap('<Border Height="30"><Border.Width><x:Double>\n      60\n    '
+                 "</x:Double></Border.Width></Border>"),
+            wrap('<Border Height="30" Width="60"/>'),
+            None,
+        ),
+        (
+            "double-minmax",
+            "two primitives on two properties of one element, where both clamps "
+            "bite so a value landing on the wrong property is visible",
+            ["L1-sizing"],
+            wrap('<Border Width="20" Height="90">'
+                 "<Border.MinWidth><x:Double>80</x:Double></Border.MinWidth>"
+                 "<Border.MaxHeight><x:Double>40</x:Double></Border.MaxHeight>"
+                 "</Border>"),
+            wrap('<Border Width="20" Height="90" MinWidth="80" MaxHeight="40"/>'),
+            None,
+        ),
+        (
+            "double-fontsize",
+            "an x:Double on TextBlock.FontSize, so the value has to reach text "
+            "measurement rather than only a layout slot",
+            ["L4-text"],
+            wrap('<TextBlock FontFamily="Segoe UI" Text="M">'
+                 "<TextBlock.FontSize><x:Double>24</x:Double></TextBlock.FontSize>"
+                 "</TextBlock>"),
+            wrap('<TextBlock FontFamily="Segoe UI" FontSize="24" Text="M"/>'),
+            None,
+        ),
+        (
+            "string-text",
+            "an x:String on TextBlock.Text, which is the primitive Terminal "
+            "puts in its dictionaries most often",
+            ["L4-text"],
+            wrap(f"<TextBlock {text_attrs}><TextBlock.Text><x:String>M</x:String>"
+                 "</TextBlock.Text></TextBlock>"),
+            wrap(f'<TextBlock {text_attrs} Text="M"/>'),
+            None,
+        ),
+        (
+            "double-spacing",
+            "an x:Double on StackPanel.Spacing, where three children make a "
+            "wrong value show up as a wrong height twice over",
+            ["L3-stack"],
+            l5_document("StackPanel",
+                        "<StackPanel.Spacing><x:Double>6</x:Double></StackPanel.Spacing>"
+                        '<Border Width="30" Height="18"/>'
+                        '<Border Width="30" Height="18"/>'
+                        '<Border Width="30" Height="18"/>'),
+            l5_document("StackPanel",
+                        '<Border Width="30" Height="18"/>'
+                        '<Border Width="30" Height="18"/>'
+                        '<Border Width="30" Height="18"/>',
+                        attributes='Spacing="6"'),
+            None,
+        ),
+        (
+            "boolean-rounding",
+            "an x:Boolean on UseLayoutRounding, at a fractional size so the "
+            "property has somewhere to show",
+            ["L0-props"],
+            wrap('<Border Width="60.5" Height="30.5">'
+                 "<Border.UseLayoutRounding><x:Boolean>False</x:Boolean>"
+                 "</Border.UseLayoutRounding></Border>"),
+            wrap('<Border Width="60.5" Height="30.5" UseLayoutRounding="False"/>'),
+            None,
+        ),
+        (
+            "string-into-enum",
+            "an x:String on a property whose type is an enumeration",
+            ["L2-align"],
+            wrap('<Border Width="20" Height="20">'
+                 "<Border.HorizontalAlignment><x:String>Left</x:String>"
+                 "</Border.HorizontalAlignment></Border>"),
+            None,
+            "An attribute's value is a string that the enum's converter reads. "
+            "An x:String is a String *object*, which is assigned rather than "
+            "converted, so the conversion may not happen at all. Terminal never "
+            "writes one, and the two are indistinguishable in every case that "
+            "uses the attribute form. This implementation accepts it, because "
+            "it has no declared shape for an enum property and so does not "
+            "refuse anything; if the runtime rejects it, the permissiveness is "
+            "the bug.",
+        ),
+    ]
+
+
+def level5_x_primitives() -> Iterator[dict[str, Any]]:
+    for slug, note, requires, markup, inline, question in x_primitive_scenarios():
+        case_id = f"L5-xprimitives-{slug}"
+        twin_id = f"{case_id}-inline" if inline else None
+        yield case(case_id, 5, "xprimitives", markup, [400.0, 300.0], note,
+                   requires=requires, twin=twin_id, question=question)
+        if inline:
+            yield case(twin_id, 5, "xprimitives", inline, [400.0, 300.0],
+                       f"inline twin of {case_id}: {note}",
+                       requires=requires)
+
+
+# --- L5: x:Load, x:DeferLoadStrategy and x:Uid ---------------------------------
+# Every case here carries a question, and none of them has a twin.
+#
+# The reason is the same in both halves of the group. x:Load and
+# x:DeferLoadStrategy are realised by the XAML *compiler*: it emits a stub that a
+# code-behind fills in later, by name. A XamlReader.Load has no compiler and no
+# code-behind, so what it does with the directive is not a thing the
+# documentation covers -- it may honour it, ignore it, or refuse the markup, and
+# those three produce three different trees. Writing an inline twin for one of
+# them would be choosing the answer and then checking that we chose it.
+#
+# x:Uid is the same shape of unknown for a different reason: it resolves against
+# a resource map, and a standalone load has none. Whether "no map" means "sets
+# nothing" or "refuses the markup" is what the case asks.
+#
+# What this implementation does in the meantime is written down in
+# phase3/layout/tests/xdirectives_test.cpp rather than left to be inferred: an
+# x:Load="False" element is absent, and an x:Uid that resolves to nothing sets
+# nothing.
+
+def x_directive_scenarios() -> list[tuple[str, str, list[str], str, str]]:
+    sized = 'Width="30" Height="18"'
+
+    return [
+        (
+            "load-false-sibling",
+            "a panel with two children, one of which defers its own creation",
+            ["L3-stack"],
+            l5_document("StackPanel",
+                        f"<Border {sized}/>"
+                        f'<Border x:Load="False" {sized}/>'
+                        f"<Border {sized}/>"),
+            "Three things the runtime might do, and they are three different "
+            "trees: leave the element out entirely (the panel is 36 tall), "
+            "realise it as an ordinary child (54), or realise it collapsed (36, "
+            "but with a node in the tree at zero size). x:Load is a compiled-"
+            "markup feature and XamlReader.Load has no compiler, so a fourth "
+            "answer -- refusing the markup -- is also live. This implementation "
+            "leaves it out.",
+        ),
+        (
+            "load-false-only-child",
+            "the single child of a Border defers its own creation, so the "
+            "parent has nothing to size to",
+            ["L1-sizing"],
+            l5_document("Border", f'<Border x:Load="False" {sized}/>'),
+            "Whether the outer Border measures as empty or as 30x18 says the "
+            "same thing the sibling case asks, with the answer visible on the "
+            "parent instead of on a stacking offset -- and a Border with a "
+            "deferred child is a Border that must not report its child's size. "
+            "This implementation measures it as empty.",
+        ),
+        (
+            "load-true",
+            "x:Load=\"True\", which asks for nothing but still has to be "
+            "understood",
+            ["L1-sizing"],
+            l5_document("Border", f'<Border x:Load="True" {sized}/>'),
+            "The directive's own no-op case. If XamlReader.Load refuses this "
+            "one, it refuses the directive rather than the deferral, which "
+            "separates two answers the False cases would confound. This "
+            "implementation realises the element normally.",
+        ),
+        (
+            "defer-load-strategy-lazy",
+            "the older spelling of the same instruction, which Terminal still "
+            "uses once",
+            ["L3-stack"],
+            l5_document("StackPanel",
+                        f"<Border {sized}/>"
+                        f'<Border x:DeferLoadStrategy="Lazy" {sized}/>'),
+            "x:DeferLoadStrategy predates x:Load and is documented as the same "
+            "deferral. Whether a runtime load treats them identically is not "
+            "recorded anywhere, and Terminal writes both, so the corpus asks "
+            "both. This implementation treats them as one instruction.",
+        ),
+        (
+            "uid-unresolved",
+            "an x:Uid with no resource map to resolve against, which is every "
+            "standalone load. The uid is one Terminal really declares, so a run "
+            "that *does* supply a table refuses this case by name -- "
+            "Profile_Name sets a Header, and no type here has one",
+            ["L1-sizing"],
+            l5_document("Border", f'<Border x:Uid="Profile_Name" {sized}/>'),
+            "A uid is a key into a localised map that a XamlReader.Load does "
+            "not have. If the load succeeds and measures 30x18, an unresolved "
+            "uid sets nothing and the directive is safe to carry -- which is "
+            "what the harvester would need before it could stop calling x:Uid a "
+            "blocker on 399 attributes. If it refuses, the directive is a "
+            "dependency on the map itself. This implementation sets nothing.",
+        ),
+        (
+            "uid-precedence",
+            "an x:Uid on an element that also writes the property the uid "
+            "would set",
+            ["L1-sizing"],
+            l5_document("Border", '<Border x:Uid="Profile_Name" Width="30" Height="18"/>'),
+            "The precedence question, asked in the only form a standalone load "
+            "can ask it: with no map, the local Width is all there is, so a "
+            "measurement of 30x18 says the uid did not clear it. The question "
+            "this cannot answer is which wins when the map *does* have an entry "
+            "-- there is no way to put one in front of the oracle from markup "
+            "alone. This implementation writes the uid's value over the local "
+            "attribute, on the reading that a directive whose purpose is "
+            "translation must beat the author it is translating; that choice is "
+            "pinned in xdirectives_test.cpp and is a guess.",
+        ),
+    ]
+
+
+def level5_x_directives() -> Iterator[dict[str, Any]]:
+    for slug, note, requires, markup, question in x_directive_scenarios():
+        yield case(f"L5-xdirectives-{slug}", 5, "xdirectives", markup, [400.0, 300.0],
+                   note, requires=requires, question=question)
+
+
 # A list per level rather than one generator, because a level is a question
 # and not a file: level 1 asks what a lone element does, and a Path is as much
 # a lone element as a Border is.
@@ -839,7 +1102,7 @@ LEVELS = {
     2: [level2, level2_content],
     3: [level3, level3_canvas],
     4: [level4],
-    5: [level5],
+    5: [level5, level5_x_primitives, level5_x_directives],
 }
 
 
