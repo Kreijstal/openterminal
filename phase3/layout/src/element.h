@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "brush.h"
 #include "layout.h"
 #include "property.h"
 #include "binding.h"
@@ -97,6 +98,35 @@ public:
     // element's rendered position -- alignment moves the render offset inside
     // the slot but never moves the slot.
     Rect layout_slot() const { return layout_slot_; }
+
+    // Whether the element was given layout storage, which is the difference
+    // between "arranged at zero" and "never arranged". The render pass needs
+    // it: an element with no storage has no rect the corpus has verified, so
+    // it is a named no-draw rather than a rect at the origin.
+    bool has_layout_storage() const { return has_layout_storage_; }
+
+    // Where this element paints, in its parent's coordinates: the slot origin
+    // and the render size.
+    //
+    // Not the slot's size. An element aligned other than Stretch arranges at
+    // what it asked for and the slot stays as wide as the parent gave it, so
+    // the two differ -- and where they differ the runtime also moves the
+    // element inside the slot, which nothing recorded pins. The render pass
+    // detects exactly that case and refuses it by name rather than painting at
+    // an origin no measurement supports; see phase3/render.
+    Rect render_bounds() const {
+        const Size size = render_size();
+        return Rect{layout_slot_.x, layout_slot_.y, size.width, size.height};
+    }
+
+    // The brushes the markup set, carried for the render pass. Layout reads
+    // none of them -- see brush.h.
+    const BrushValue& background_brush() const { return background_brush_; }
+    void set_background_brush(BrushValue value) { background_brush_ = value; }
+    const BrushValue& border_brush() const { return border_brush_; }
+    void set_border_brush(BrushValue value) { border_brush_ = value; }
+    const BrushValue& fill_brush() const { return fill_brush_; }
+    void set_fill_brush(BrushValue value) { fill_brush_ = value; }
 
     virtual std::vector<Element*> Children() const { return {}; }
 
@@ -227,6 +257,9 @@ private:
     Size unclipped_desired_size_;
     Rect layout_slot_;
     bool needs_measure_ = true;
+    BrushValue background_brush_;
+    BrushValue border_brush_;
+    BrushValue fill_brush_;
     std::vector<std::unique_ptr<BindingExpression>> bindings_;
     std::shared_ptr<NameScope> namescope_;
     std::unique_ptr<VisualStateManager> visual_states_;
