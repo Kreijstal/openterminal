@@ -36,6 +36,9 @@ import genxbf_driver
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_CASES = REPO / "phase3" / "xaml-db" / "cases"
+# The metrics the corpus solved for itself, which are committed. The harvested
+# ones are a CI artifact; either directory works, and mixing them is refused.
+DEFAULT_FONTS = REPO / "phase3" / "xaml-db" / "fonts" / "derived"
 DEFAULT_WORK = Path("/tmp/openterminal-xbf-gate")
 
 
@@ -57,9 +60,9 @@ def export_cases(cases_dir: Path, pages_dir: Path) -> dict[str, Path]:
     return exported
 
 
-def run_gate(tool: Path, cases_dir: Path, xbf_dir: Path) -> dict:
+def run_gate(tool: Path, cases_dir: Path, xbf_dir: Path, fonts: Path) -> dict:
     completed = subprocess.run(
-        [str(tool), str(cases_dir), str(xbf_dir)], capture_output=True, text=True
+        [str(tool), str(cases_dir), str(xbf_dir), str(fonts)], capture_output=True, text=True
     )
     if completed.returncode not in (0, 1):
         raise SystemExit(
@@ -71,6 +74,7 @@ def run_gate(tool: Path, cases_dir: Path, xbf_dir: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
+    parser.add_argument("--fonts", type=Path, default=DEFAULT_FONTS)
     parser.add_argument("--work", type=Path, default=DEFAULT_WORK)
     parser.add_argument(
         "--tool", type=Path, required=True, help="the built native xbf_equivalence binary"
@@ -103,8 +107,10 @@ def main() -> int:
             json.dumps(compile_result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
 
-    first = run_gate(args.tool, args.cases, xbf_dir)
-    second = run_gate(args.tool, args.cases, xbf_dir)
+    # Twice, and required to agree: a gate whose own answer moves between runs
+    # is not evidence of anything.
+    first = run_gate(args.tool, args.cases, xbf_dir, args.fonts)
+    second = run_gate(args.tool, args.cases, xbf_dir, args.fonts)
     deterministic = first == second
 
     rejected = {

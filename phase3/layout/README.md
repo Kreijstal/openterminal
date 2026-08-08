@@ -593,6 +593,25 @@ types and ~2900 properties out of the published header would be committing a
 generated file under another name, and an index that is not in the table is
 refused *by number*, which is a fact rather than a guess.
 
+### What is still guessed, and how to stop guessing it
+
+Every one of these is decoded from the published reader but is *not* exercised
+by any case the gate runs, so it is written down here rather than believed. Each
+line names the markup that would exercise it — an authored probe pair whose XBF
+settles the question by being compiled, which costs one file and no oracle run.
+
+| open | the probe that settles it |
+|---|---|
+| types and properties written into the file's own tables rather than as stable indexes: whether a known type's `m_uiTypeNamespace` indexes the namespace table and a property's `m_uiType` indexes the type table | a page referencing a type from a second WinMD, compiled with that WinMD as a reference — Terminal's `HighlightedTextControlStyle.xbf` already contains one and is the file to read |
+| a brush written as a named colour comes back as `#AARRGGBB` | `Foreground="Red"` compiles to the colour `0xFFFF0000`; the name is gone from the file, so a reconstruction cannot recover it. Nothing measurable depends on it — but a consumer that draws would see the difference, and the recorded `background` string on a node does |
+| the line-number stream | its length is computed (a sub-stream after it would otherwise start in the wrong place) and its contents are not decoded. A page whose error message quotes a line number is what would need it |
+| `ResourceDictionary` v1/v2/v4, `Style` v3, `VisualStateGroupCollection`, `DeferredElement` custom writers | each is named and refused today; `Launch.xaml`, `NewTabMenu.xaml`, `TerminalPage.xaml`, `NullableColorPicker.xaml` and `SearchBoxControl.xaml` are the files that hold them |
+| a directive namespace bound to a prefix other than `x` | one corpus case rewritten with `xmlns:xaml=` in place of `xmlns:x=` |
+
+One question that *was* open and is now answered, by compiling both spellings
+and reading the two node streams: `<TextBlock>x</TextBlock>` and
+`<TextBlock Text="x"/>` are different in XBF. See above.
+
 ## What it is a port of
 
 `FrameworkElement`'s `MeasureCore`/`ArrangeCore`, and `Border`, `StackPanel` and

@@ -478,10 +478,14 @@ SubStream ReadSubStream(const char* data, std::size_t size, const Document& docu
             }
 
             default:
+                // Either a byte no node type uses -- which means the stream has
+                // gone out of step and nothing after it can be trusted -- or one
+                // of the writer's internal states that is never persisted. Both
+                // end the sub-stream, and the message says which it was.
                 stream.nodes.push_back(node);
                 stream.truncated_because =
-                    "node type " + std::to_string(static_cast<int>(node.type)) + " at offset " +
-                    std::to_string(node.offset) + " is not a value this format defines";
+                    NodeTypeName(node.type) + " at offset " + std::to_string(node.offset) +
+                    " is not an instruction the compiler writes into a node stream";
                 return stream;
         }
         stream.nodes.push_back(std::move(node));

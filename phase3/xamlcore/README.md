@@ -176,8 +176,12 @@ journal, round-trips ListView selection mode, and opens a Popup.
 - **Not named `windows.ui.xaml.dll`.** It registers the real class names but
   ships as `openxaml.dll`, so it sits alongside Wine's builtin rather than
   replacing it. Dropping it in under the real name is a later, separate step.
-- **No `XamlReader`.** Terminal ships compiled XBF, and text XAML parsing is
-  the client's job here. Nothing in this DLL reads markup.
+- **No `XamlReader`.** Terminal ships compiled XBF, and reading markup is the
+  client's job here. Nothing in this DLL reads it. Both readers now exist in
+  the layout core and are ready to be wired through: `LoadMarkup` in
+  `phase3/layout/src/markup.h` for text, and `LoadXbf` in
+  `phase3/layout/src/xbf_markup.h` for the compiled form the shipped
+  application actually hands the runtime.
 - **No font fallback, no shaping, no kerning.** `TextBlock` sums per-character
   advances out of the harvested metrics. That is what the corpus measures and
   no more: a script needing glyph substitution, or a pair the font kerns, is
