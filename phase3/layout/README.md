@@ -46,21 +46,29 @@ Against build `10.0.26100.33158`:
 
 | level | subject | measured | matching |
 |-------|---------------------------------------------|------:|---------:|
-| L0 | property system | 4 | **4** |
-| L1 | one element: explicit size, margin | 72 | **72** |
-| L2 | one parent, one child: alignment × margin × sizing | 192 | **192** |
-| L3 | panels: `StackPanel`, `Grid` | 132 | **132** |
-| L4 | text: `TextBlock` | 72 | **36** without a font — see below |
-| L5 | resources: `x:Key`, `{StaticResource}`, `{ThemeResource}`; the `x:` directives | 0 | no oracle yet — see below |
-| L5 | styles: `Style`, `Setter`, `BasedOn` | 0 | no oracle yet — see below |
-| L7 | Terminal's own pages | 69 | **33**, down from 36 — see below |
+| L0 | property system | 18 | **18** |
+| L1 | elements: explicit size, margin, shapes | 132 | **132** |
+| L2 | one parent, one child: alignment × margin × sizing, content | 264 | **264** |
+| L3 | panels: `StackPanel`, `Grid`, `Canvas`, `ScrollViewer` | 361 | **361** |
+| L4 | text and icons: `TextBlock`, `FontIcon` | 147 | **145** — two named refusals, see below |
+| L5 | resources, styles and the `x:` directives | 126 | **124** — the brace-escape pair, see the kerning omission |
+| L7 | Terminal's own pages | 90 | **84** — two refusal triples, see below |
 
-"Measured" rather than "cases": L0 has eighteen cases and four measurements,
-L5 has a hundred and twenty-six and none at all, and L7 has ninety cases against
-sixty-nine measurements — the twenty-one the application dictionary unblocked
-are newer than the last oracle run. Everything authored after that run is
-pending, not passing — see [the property system](#the-property-system) and [what
-is still open](#what-is-still-open).
+The two L4 refusals and the two L7 refusal triples are named, not
+approximate: `mdl2-latin-14` (which family the runtime fell back to is
+unrecorded), `mdl2-weight-14` and `88c43239e4-s*` (what `FontWeight`
+adds is unpinned by two observations — cases are authored to ask), and
+`4edb490008-s*` (waiting for the Cascadia Mono harvest to reach an
+oracle run). The counts above are against the fonts of the recorded
+run plus the committed derived kerning.
+
+Every level is now fully measured: run 31019336758 re-baselined the oracle
+from 541 measurements to 1138, and the counts above are against that
+recording. The thirty-nine cases authored since — `L4-kern` asking which
+kerning pairs the runtime applies, and the weight probes beside it — are
+pending, not passing, until the next run records them; the section
+below on the [next re-baseline](#what-is-still-open) says what their
+arrival costs.
 
 ### Why L7 went from 36 to 33
 
@@ -662,31 +670,21 @@ does not do, so that a passing run is not read as more than it is:
 
 ## What is still open
 
-Answers this code gives that nothing has yet checked. All of them have
-generated cases waiting for the next oracle run, and until that run they are
-neither passing nor failing:
+Run 31019336758 recorded every case this table used to list, and the wave-3
+tracks implemented the answers; the groups that once waited here are in the
+level table at the top, passing. What remains open is smaller and sharper:
 
-| group | cases | the question |
+| open | cases | what settles it |
 |---|---:|---|
-| `L4-icon` | 69 | does a `FontIcon` measure its glyph or report a `FontSize` square? |
-| `L5-styles` | 50 | the level has no measurement at all either, and six of them ask a question outright — see below |
-| `L5-resources` | 40 | every one of them: the level has no measurement at all |
-| `L7-terminal` | 21 | does a bare `XamlReader.Load` reach `Application.Resources` — the cases the dictionary unblocked depend on the answer |
-| `L5-xprimitives` | 17 | does a primitive written as an object element reach a typed property, and does an `x:String` convert to an enum? |
-| `L0-props` | 14 | does `UseLayoutRounding` inherit, how does a tie at `.5` break, and what does a `ContentControl` do with content it is not stretching? |
-| `L5-theme` | 13 | the same question the 21 above ask, asked directly: is WinUI 2's dictionary in the probe's host or only the OS's? |
-| `L4-source` | 6 | is `Text="x"` the same thing as `<TextBlock>x</TextBlock>`? |
-| `L5-xdirectives` | 6 | does a runtime load honour `x:Load` at all, and does it tolerate an `x:Uid` with no resource map? |
+| which kern pairs the runtime applies | 34 authored (`L4-kern`) | the next oracle run: one candidate pair per case splits the source-table, magnitude and glyph-class hypotheses |
+| what `FontWeight` adds to a glyph | 5 authored + `mdl2-weight-14`, `88c43239e4-s*` refusing | the next run: two observations fit three rules, the probes were written to disagree |
+| which family `mdl2-latin-14` fell back to | 1 refusing | a new kind of recording — the size is not explained by any harvested family |
+| Cascadia Mono | `4edb490008-s*` refusing | the harvest now reads it from the pinned Terminal checkout; the next run carries it |
+| the `brace-escape` pair | 2 failing on a number | the recorded runs imply a 153-design-unit adjustment somewhere in `{StaticResource NotAKey}`, and advances alone cannot say which pair holds it — `L4-kern` asks |
 
-`L1-shape`, `L2-content`, `L3-canvas` and `L3-scroll` have left this table:
-they were measured, and they are answered by the layout-participation rule and
-the `ContentPresenter` alignment default above, and by the scroll-bar rules
-written up [above](#what-a-scrollviewer-does-with-its-scroll-bars). `L4-icon`
-is a different kind of open from the rest. `L0-props`, `L4-source` and the L5
-groups check answers this code already gives; that one measures a type it
-refuses to give one for at all, so it cannot fail on a number — only on the
-refusal — and it exists so that the next version of this file can move it out
-of this table entirely.
+The 39 authored cases are pending, not passing, and their arrival is priced:
+the digest gate stops the next measured run at `L4: 147 cases -> 186 cases`
+until the re-baseline is read and accepted deliberately.
 
 The six `L5-styles` cases that carry `oracle_decides` are the ones neither
 reference settles for a `XamlReader.Load` with no `Application`:
@@ -707,12 +705,7 @@ together they say an implicit style reaches what already exists when its
 dictionary is attached rather than the subtree written below it, which is the
 opposite of the direction the corpus notes assumed.
 
-The `L1-shape` answers have two witnesses each already, from Terminal's two
-`PathIcon` cases, but both of those geometries start near the origin and
-neither distinguishes a tight curve bound from the hull of its control points
-by more than a rounding step. The generated ones do.
-
-These land in L1, L2 and L3, which is the range CI gates on, so the next
-measured run either keeps the gate green or turns it red on a specific case
-with a specific number. That is the intended outcome of authoring them: an
-unchecked answer that stays unchecked is worse than one that fails loudly.
+That reach rule and the rest of L5 now pass against the recording, so this
+section documents answers rather than bets. The habit it records is the one
+that still applies to the 39 pending cases: an unchecked answer that stays
+unchecked is worse than one that fails loudly.
