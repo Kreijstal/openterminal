@@ -33,6 +33,8 @@ Interface* Activate(const wchar_t* name, const GUID& iid) {
     return SUCCEEDED(queried) ? result : nullptr;
 }
 
+// A static-only class has no instance to activate: its members live on the
+// activation factory, which is what RoGetActivationFactory hands back.
 template <class Interface>
 Interface* Statics(const wchar_t* name, const GUID& iid) {
     HSTRING class_name = nullptr;
@@ -44,6 +46,54 @@ Interface* Statics(const wchar_t* name, const GUID& iid) {
     WindowsDeleteString(class_name);
     return SUCCEEDED(queried) ? result : nullptr;
 }
+
+// A stand-in for a class that derives from Windows.UI.Xaml.Application, doing
+// what C++/WinRT's Application base does: hand itself to the factory as the
+// controlling outer, keep the non-delegating inner, and resolve anything it
+// does not implement through that inner.
+//
+// It exists so the composition is exercised the way the real host exercises
+// it. Composition cannot be checked by activating something -- there is
+// nothing to activate -- and getting it wrong shows up as a refcount that
+// never reaches zero or a QueryInterface that recurses, neither of which a
+// single activation call would reveal.
+class DerivedApp final : public IInspectable {
+public:
+    IInspectable* inner = nullptr;
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        if (IsEqualGUID(iid, IID_IUnknown) || IsEqualGUID(iid, openxaml::iid::IInspectable)) {
+            *object = static_cast<IInspectable*>(this);
+            AddRef();
+            return S_OK;
+        }
+        // Everything this fake derived class does not implement itself is the
+        // base class's, which is exactly what the inner resolves.
+        return inner ? inner->QueryInterface(iid, object) : E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++references; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = --references;
+        if (remaining == 0 && inner) {
+            IInspectable* dying = inner;
+            inner = nullptr;
+            dying->Release();
+        }
+        return remaining;
+    }
+    HRESULT STDMETHODCALLTYPE GetIids(ULONG*, IID**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING* name) override {
+        return WindowsCreateString(L"OpenXaml.Smoke.DerivedApp", 25, name);
+    }
+    HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel* level) override {
+        if (!level) return E_POINTER;
+        *level = BaseTrust;
+        return S_OK;
+    }
+
+    ULONG references = 1;
+};
 
 int main() {
     if (FAILED(RoInitialize(RO_INIT_SINGLETHREADED))) return 1;
@@ -478,6 +528,158 @@ int main() {
                                                 openxaml::iid::Windows_UI_Xaml_Controls_IPathIcon);
     check(path_icon != nullptr, "PathIcon activation");
     if (path_icon) path_icon->Release();
+
+    // DurationHelper. Terminal reaches this one before main, so it is the
+    // first thing the real host asks the runtime for; the values below are the
+    // three-way case analysis the published XAML core does.
+    auto* durations = Statics<wux::IDurationHelperStatics>(
+        L"Windows.UI.Xaml.DurationHelper",
+        openxaml::iid::Windows_UI_Xaml_IDurationHelperStatics);
+    check(durations != nullptr, "DurationHelper statics");
+    if (durations) {
+        // 200ms in 100-nanosecond ticks, the way Pane.cpp builds it.
+        wux::Duration span{};
+        check(SUCCEEDED(durations->FromTimeSpan({2000000}, &span)) &&
+                  span.Type == wux::DurationType_TimeSpan &&
+                  span.TimeSpan.Duration == 2000000,
+              "DurationHelper.FromTimeSpan");
+        check(durations->FromTimeSpan({-1}, &span) == E_INVALIDARG,
+              "DurationHelper.FromTimeSpan rejects a negative span");
+        boolean has_span = 0;
+        check(SUCCEEDED(durations->GetHasTimeSpan(span, &has_span)) && has_span,
+              "DurationHelper.GetHasTimeSpan");
+        wux::Duration automatic{};
+        wux::Duration forever{};
+        check(SUCCEEDED(durations->get_Automatic(&automatic)) &&
+                  automatic.Type == wux::DurationType_Automatic,
+              "DurationHelper.Automatic");
+        check(SUCCEEDED(durations->get_Forever(&forever)) &&
+                  forever.Type == wux::DurationType_Forever,
+              "DurationHelper.Forever");
+        check(SUCCEEDED(durations->GetHasTimeSpan(forever, &has_span)) && !has_span,
+              "DurationHelper.GetHasTimeSpan says Forever has none");
+        INT32 order = 0;
+        check(SUCCEEDED(durations->Compare(automatic, span, &order)) && order == -1,
+              "DurationHelper.Compare puts Automatic first");
+        check(SUCCEEDED(durations->Compare(forever, span, &order)) && order == 1,
+              "DurationHelper.Compare puts Forever last");
+        check(SUCCEEDED(durations->Compare(forever, forever, &order)) && order == 0,
+              "DurationHelper.Compare makes Forever equal to itself");
+        wux::Duration sum{};
+        check(SUCCEEDED(durations->Add(span, span, &sum)) &&
+                  sum.Type == wux::DurationType_TimeSpan &&
+                  sum.TimeSpan.Duration == 4000000,
+              "DurationHelper.Add sums two spans");
+        check(SUCCEEDED(durations->Add(forever, span, &sum)) &&
+                  sum.Type == wux::DurationType_Forever,
+              "DurationHelper.Add keeps Forever");
+        check(SUCCEEDED(durations->Subtract(forever, span, &sum)) &&
+                  sum.Type == wux::DurationType_Forever,
+              "DurationHelper.Subtract keeps Forever");
+        check(SUCCEEDED(durations->Subtract(span, forever, &sum)) &&
+                  sum.Type == wux::DurationType_Automatic,
+              "DurationHelper.Subtract of Forever is Automatic");
+        boolean same = 0;
+        check(SUCCEEDED(durations->Equals(span, span, &same)) && same,
+              "DurationHelper.Equals");
+        check(SUCCEEDED(durations->Equals(automatic, forever, &same)) && !same,
+              "DurationHelper.Equals separates Automatic from Forever");
+        durations->Release();
+    }
+
+    // Application, composed the way a derived App composes it.
+    auto* applications = Statics<wux::IApplicationStatics>(
+        L"Windows.UI.Xaml.Application",
+        openxaml::iid::Windows_UI_Xaml_IApplicationStatics);
+    check(applications != nullptr, "Application statics");
+    if (applications) {
+        wux::IApplication* before = reinterpret_cast<wux::IApplication*>(1);
+        check(SUCCEEDED(applications->get_Current(&before)) && before == nullptr,
+              "Application.Current is null before one is made");
+
+        wux::IApplicationFactory* composer = nullptr;
+        check(SUCCEEDED(applications->QueryInterface(
+                  openxaml::iid::Windows_UI_Xaml_IApplicationFactory,
+                  reinterpret_cast<void**>(&composer))),
+              "Application composable factory");
+        if (composer) {
+            DerivedApp app;
+            wux::IApplication* base = nullptr;
+            check(SUCCEEDED(composer->CreateInstance(&app, &app.inner, &base)) &&
+                      app.inner != nullptr && base != nullptr,
+                  "Application composition");
+            // CreateInstance handed back one reference on the aggregate, so
+            // the derived object's count is two: its own and that one.
+            check(app.references == 2, "Application composition counts the aggregate");
+
+            if (base) {
+                // The composed base is the same COM identity as the derived
+                // object: asking the base for the derived object's own
+                // interface has to come back to the derived object.
+                IInspectable* identity = nullptr;
+                check(SUCCEEDED(base->QueryInterface(openxaml::iid::IInspectable,
+                                                     reinterpret_cast<void**>(&identity))) &&
+                          identity == static_cast<IInspectable*>(&app),
+                      "Application composition is one identity");
+                if (identity) identity->Release();
+
+                // A base interface reached through the derived object, which
+                // is the path C++/WinRT's app.as<IApplication3>() takes.
+                wux::IApplication3* three = nullptr;
+                check(SUCCEEDED(app.QueryInterface(
+                          openxaml::iid::Windows_UI_Xaml_IApplication3,
+                          reinterpret_cast<void**>(&three))),
+                      "Application3 through the aggregate");
+                if (three) {
+                    wux::ApplicationHighContrastAdjustment adjustment =
+                        wux::ApplicationHighContrastAdjustment_None;
+                    check(SUCCEEDED(three->get_HighContrastAdjustment(&adjustment)) &&
+                              adjustment == wux::ApplicationHighContrastAdjustment_Auto,
+                          "HighContrastAdjustment defaults to Auto");
+                    check(SUCCEEDED(three->put_HighContrastAdjustment(
+                              wux::ApplicationHighContrastAdjustment_None)),
+                          "HighContrastAdjustment setter");
+                    check(SUCCEEDED(three->get_HighContrastAdjustment(&adjustment)) &&
+                              adjustment == wux::ApplicationHighContrastAdjustment_None,
+                          "HighContrastAdjustment round-trip");
+                    three->Release();
+                }
+
+                wux::IApplication* current = nullptr;
+                check(SUCCEEDED(applications->get_Current(&current)) && current != nullptr,
+                      "Application.Current after composition");
+                if (current) {
+                    IInspectable* same = nullptr;
+                    check(SUCCEEDED(current->QueryInterface(
+                              openxaml::iid::IInspectable, reinterpret_cast<void**>(&same))) &&
+                              same == static_cast<IInspectable*>(&app),
+                          "Application.Current is the composed application");
+                    if (same) same->Release();
+                    current->Release();
+                }
+
+                // Only one application per process, as the published core
+                // enforces.
+                DerivedApp second;
+                wux::IApplication* refused = nullptr;
+                check(composer->CreateInstance(&second, &second.inner, &refused) ==
+                              E_UNEXPECTED &&
+                          second.inner == nullptr,
+                      "a second Application is refused");
+
+                base->Release();
+            }
+            check(app.references == 1, "Application composition released the aggregate");
+            composer->Release();
+            // Letting `app` die releases the inner, which is the whole
+            // aggregate; Application.Current goes back to null with it.
+            app.Release();
+            wux::IApplication* after = reinterpret_cast<wux::IApplication*>(1);
+            check(SUCCEEDED(applications->get_Current(&after)) && after == nullptr,
+                  "Application.Current is null again once the application dies");
+        }
+        applications->Release();
+    }
 
     RoUninitialize();
     if (!failures) std::puts("Wave 3/4 activation smoke passed");

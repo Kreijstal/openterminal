@@ -1984,25 +1984,101 @@ class ApplicationObject final : public ComObject,
                                 public abi::NotImpl_IApplication3 {
 public:
     using PrimaryInterface = wux::IApplication;
-    explicit ApplicationObject(IInspectable* outer = nullptr) : outer_(outer) {}
+    // Constructed only by ApplicationFactory::CreateInstance, which calls
+    // Compose before the object escapes.
+    ApplicationObject() = default;
     ~ApplicationObject() override {
+        if (Current() == this) Current() = nullptr;
         if (resources_) resources_->Release();
     }
     const wchar_t* RuntimeClassName() const override {
         return L"Windows.UI.Xaml.Application";
     }
+
+    // The one application the process has, as Application.Current reads it: a
+    // raw process-wide pointer set at construction and cleared by the
+    // destructor, so a dead application answers null rather than dangling.
+    static ApplicationObject*& Current() {
+        static ApplicationObject* current = nullptr;
+        return current;
+    }
+
+    // --- the aggregation boundary ---------------------------------------
+    //
+    // A WinRT class derives from Application by composing it: the caller is
+    // the controlling outer and every interface this object hands out must
+    // forward AddRef, Release and QueryInterface to it, or the aggregate
+    // splits into two identities. The object's own count belongs to the
+    // nested non-delegating Inner alone.
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        return outer_->QueryInterface(iid, object);
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return outer_->AddRef(); }
+    ULONG STDMETHODCALLTYPE Release() override { return outer_->Release(); }
+    HRESULT STDMETHODCALLTYPE GetIids(ULONG* count, IID** iids) override {
+        return outer_->GetIids(count, iids);
+    }
+    HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING* name) override {
+        return outer_->GetRuntimeClassName(name);
+    }
+    HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel* level) override {
+        return outer_->GetTrustLevel(level);
+    }
+
+    // The non-delegating identity, and the only pointer whose IUnknown counts
+    // this object. It resolves the composed interfaces itself rather than
+    // asking the outer to: forwarding a QueryInterface back to the aggregator
+    // that just forwarded it here is how an aggregation deadlocks.
+    class Inner final : public IInspectable {
+    public:
+        explicit Inner(ApplicationObject* owner) : owner_(owner) {}
+
+        HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+            if (!object) return E_POINTER;
+            if (IsEqualGUID(iid, IID_IUnknown) ||
+                IsEqualGUID(iid, ::openxaml::iid::IInspectable)) {
+                *object = static_cast<IInspectable*>(this);
+                AddRef();
+                return S_OK;
+            }
+            const HRESULT composed = owner_->QueryComposed(iid, object);
+            if (composed == E_NOINTERFACE)
+                return TraceQueryInterfaceMiss(owner_->RuntimeClassName(), iid);
+            return composed;
+        }
+        ULONG STDMETHODCALLTYPE AddRef() override { return owner_->Retain(); }
+        ULONG STDMETHODCALLTYPE Release() override { return owner_->ReleaseOne(); }
+        HRESULT STDMETHODCALLTYPE GetIids(ULONG*, IID**) override { return E_NOTIMPL; }
+        HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING* name) override {
+            return ::openxaml::winrt::CopyToHString(owner_->RuntimeClassName(), name);
+        }
+        HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel* level) override {
+            if (!level) return E_POINTER;
+            *level = BaseTrust;
+            return S_OK;
+        }
+
+    private:
+        ApplicationObject* owner_;
+    };
+
+    IInspectable* InnerIdentity() { return &inner_; }
+    IInspectable* OuterIdentity() { return outer_; }
+
+    // Called once, by the factory. A null outer means nobody is aggregating
+    // us, so the inner identity is what everything delegates to.
+    void Compose(IInspectable* outer) {
+        outer_ = outer ? outer : static_cast<IInspectable*>(&inner_);
+    }
+
+    HRESULT QueryComposed(REFIID iid, void** object) {
         if (!object) return E_POINTER;
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IApplication, wux::IApplication)
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IApplication2, wux::IApplication2)
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IApplication3, wux::IApplication3)
-        OPENXAML_QI_ARM(IID_IUnknown, wux::IApplication)
-        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wux::IApplication)
-        if (outer_) return outer_->QueryInterface(iid, object);
         *object = nullptr;
-        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+        return E_NOINTERFACE;
     }
-    OPENXAML_COM_BOILERPLATE()
 
     HRESULT STDMETHODCALLTYPE get_Resources(wux::IResourceDictionary** value) override {
         if (!value) return E_POINTER;
@@ -2111,9 +2187,10 @@ private:
     }
 
     wux::IResourceDictionary* resources_ = nullptr;
-    // The composable outer owns this inner object. Keeping this non-owning
-    // avoids a reference cycle while allowing local TerminalApp interfaces to
-    // preserve the outer identity through Application::Current().
+    Inner inner_{this};
+    // The aggregate. Never null after Compose, and deliberately not AddRef'd:
+    // an inner that held a reference on its aggregator would be a cycle
+    // neither could break.
     IInspectable* outer_ = nullptr;
     wux::ApplicationTheme requested_theme_ = wux::ApplicationTheme_Light;
     wux::FocusVisualKind focus_visual_kind_ = wux::FocusVisualKind_HighVisibility;
@@ -2128,15 +2205,18 @@ class ApplicationFactory final : public Factory<ApplicationObject>,
                                  public abi::NotImpl_IApplicationStatics {
 public:
     ApplicationFactory() : Factory(L"Windows.UI.Xaml.Application") {}
-    ~ApplicationFactory() override {
-        if (current_outer_) current_outer_->Release();
-        if (current_inner_) current_inner_->Release();
-    }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
         return Factory<ApplicationObject>::QueryInterface(iid, object);
     }
     OPENXAML_COM_BOILERPLATE()
+
+    // Application is [composable] and not [activatable]: the IDL offers no
+    // default constructor, and an instance made without Compose would have no
+    // identity to delegate to. CreateInstance is the way in.
+    HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable**) override {
+        return E_NOTIMPL;
+    }
 
     HRESULT STDMETHODCALLTYPE CreateInstance(IInspectable* base_interface,
                                              IInspectable** inner_interface,
@@ -2145,32 +2225,40 @@ public:
         *inner_interface = nullptr;
         *value = nullptr;
 
-        auto* application = new ApplicationObject(base_interface);
-        auto* projected = static_cast<wux::IApplication*>(application);
-        projected->AddRef();
-        *inner_interface = static_cast<IInspectable*>(projected);
-        *value = projected;
+        // One application per process. The published core enforces this in
+        // FrameworkApplication::Initialize and fails the second construction;
+        // a runtime that quietly allowed two would have two answers for
+        // Application.Current and no way to say which was right.
+        if (ApplicationObject::Current()) return E_UNEXPECTED;
 
-        if (current_outer_) current_outer_->Release();
-        current_outer_ = base_interface;
-        if (current_outer_) current_outer_->AddRef();
-        if (current_inner_) current_inner_->Release();
-        current_inner_ = projected;
-        current_inner_->AddRef();
+        auto* application = new ApplicationObject();
+        application->Compose(base_interface);
+        ApplicationObject::Current() = application;
+
+        // The inner carries the object's own single reference; the returned
+        // default interface carries one on the aggregate.
+        *inner_interface = application->InnerIdentity();
+        const HRESULT composed = application->QueryComposed(
+            ::openxaml::iid::Windows_UI_Xaml_IApplication,
+            reinterpret_cast<void**>(value));
+        if (FAILED(composed)) {
+            *inner_interface = nullptr;
+            // Releasing the inner drops the object's only reference, and its
+            // destructor is what clears Application.Current again.
+            application->InnerIdentity()->Release();
+            return composed;
+        }
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_Current(wux::IApplication** value) override {
         if (!value) return E_POINTER;
         *value = nullptr;
-        if (current_outer_ && SUCCEEDED(current_outer_->QueryInterface(
-                ::openxaml::iid::Windows_UI_Xaml_IApplication,
-                reinterpret_cast<void**>(value)))) {
-            return S_OK;
-        }
-        if (!current_inner_) return S_OK;
-        current_inner_->AddRef();
-        *value = current_inner_;
-        return S_OK;
+        // Null with S_OK when no Application was made: the published core
+        // returns exactly that, and warns its own callers to expect it.
+        ApplicationObject* current = ApplicationObject::Current();
+        if (!current) return S_OK;
+        return current->QueryComposed(::openxaml::iid::Windows_UI_Xaml_IApplication,
+                                      reinterpret_cast<void**>(value));
     }
     HRESULT STDMETHODCALLTYPE Start(wux::IApplicationInitializationCallback* callback) override {
         return callback ? callback->Invoke(nullptr) : E_INVALIDARG;
@@ -2241,9 +2329,10 @@ public:
     HRESULT ActivateLocalXamlType(const std::string& type, IInspectable** result) {
         if (!result) return E_POINTER;
         *result = nullptr;
-        if (!current_outer_) return REGDB_E_CLASSNOTREG;
+        ApplicationObject* current = ApplicationObject::Current();
+        if (!current) return REGDB_E_CLASSNOTREG;
         wuxmk::IXamlMetadataProvider* provider = nullptr;
-        HRESULT hr = current_outer_->QueryInterface(
+        HRESULT hr = current->OuterIdentity()->QueryInterface(
             ::openxaml::iid::Windows_UI_Xaml_Markup_IXamlMetadataProvider,
             reinterpret_cast<void**>(&provider));
         if (FAILED(hr)) return hr;
@@ -2270,8 +2359,6 @@ protected:
     }
 
 private:
-    IInspectable* current_outer_ = nullptr;
-    wux::IApplication* current_inner_ = nullptr;
     std::map<IInspectable*, std::shared_ptr<xbf::Object>> loaded_components_;
 };
 
