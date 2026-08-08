@@ -119,6 +119,13 @@ add_executable(xdirective_tests
 target_link_libraries(xdirective_tests PRIVATE openxaml_layout)
 add_test(NAME xdirectives COMMAND xdirective_tests)
 
+# Which way a measured text height is turned into a whole number. The corpus
+# has exactly two rows that can tell ceiling from rounding and they disagree,
+# so the rule that separates them is stated here instead.
+add_executable(text_measure_tests tests/text_measure_test.cpp)
+target_link_libraries(text_measure_tests PRIVATE openxaml_layout)
+add_test(NAME text_measure COMMAND text_measure_tests)
+
 add_executable(wave3_tests tests/wave3_test.cpp src/markup.cpp)
 target_link_libraries(wave3_tests PRIVATE openxaml_layout)
 add_test(NAME wave3 COMMAND wave3_tests)
@@ -143,6 +150,7 @@ if(MSVC)
     target_compile_options(probe_text_test PRIVATE /W4)
     target_compile_options(error_hygiene_test PRIVATE /W4)
     target_compile_options(xdirective_tests PRIVATE /W4)
+    target_compile_options(text_measure_tests PRIVATE /W4)
     target_compile_options(wave3_tests PRIVATE /W4)
     target_compile_options(wave4_tests PRIVATE /W4)
     target_compile_options(windows_xaml_completion_tests PRIVATE /W4)
@@ -155,6 +163,7 @@ else()
     target_compile_options(probe_text_test PRIVATE -Wall -Wextra)
     target_compile_options(error_hygiene_test PRIVATE -Wall -Wextra)
     target_compile_options(xdirective_tests PRIVATE -Wall -Wextra)
+    target_compile_options(text_measure_tests PRIVATE -Wall -Wextra)
     target_compile_options(wave3_tests PRIVATE -Wall -Wextra)
     target_compile_options(wave4_tests PRIVATE -Wall -Wextra)
     target_compile_options(windows_xaml_completion_tests PRIVATE -Wall -Wextra)
