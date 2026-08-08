@@ -210,6 +210,31 @@ jobs:
             --output "phase3/xaml-db/fonts/segoe-ui.json"
           test -s phase3/xaml-db/fonts/segoe-ui.json
 
+      # The font Terminal ships and one level 7 case measures in.
+      # L7-terminal-4edb490008 is a TextBlock with FontFamily="Cascadia Mono",
+      # and the oracle records its empty line box as 16.2695 at font size 14 --
+      # a ratio of 1.162109, which is 2380/2048 and is this file's hhea exactly.
+      # None of the three families above is near it (Segoe UI is 1.330078), so
+      # the runtime did not fall back: it measured in Cascadia Mono, and the
+      # only thing missing was a reading of the font.
+      #
+      # Read out of the pinned Terminal checkout rather than off the runner.
+      # That is where the file the recording matches lives, and its identity
+      # travels with the commit the whole level 7 harvest is already pinned to,
+      # so it needs no hash of its own beside the Segoe UI one.
+      #
+      # Not a warning if absent, unlike the icon fonts: this path is inside a
+      # checkout at a known commit rather than whatever the runner image ships,
+      # so a missing file means the harvest is looking in the wrong place.
+      - name: Harvest the metrics of the font Terminal ships
+        shell: bash
+        run: |
+          python3 -B phase3/scripts/harvest_font_metrics.py \
+            "_terminal/res/fonts/CascadiaMono.ttf" \
+            --family "Cascadia Mono" \
+            --output "phase3/xaml-db/fonts/cascadia-mono.json"
+          test -s phase3/xaml-db/fonts/cascadia-mono.json
+
       # The icon fonts, for the codepoints Terminal's markup actually names.
       # Fifteen level 7 cases are one FontIcon each and every one of them is
       # blocked on these numbers rather than on layout.

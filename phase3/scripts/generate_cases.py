@@ -852,6 +852,41 @@ def level4_icon() -> Iterator[dict[str, Any]]:
         ("mdl2-weight-14", font_icon(chr(ICON_SAMPLE), "Segoe MDL2 Assets", "14",
                                      'FontWeight="Black"'),
          "FontWeight on an icon font, which one of the L7 cases sets"),
+        # What that weight *adds*, which the two sizes measuring it cannot say.
+        # `mdl2-weight-14` above answers 15 where the plain glyph answers 14,
+        # and L7-terminal-88c43239e4 answers 11 at size 10 where the plain
+        # glyph answers 10. A whole extra DIP, a twenty-fourth of the em and
+        # two per cent of it all reproduce both, so the pair pins nothing and
+        # the layout core refuses rather than choosing -- see
+        # phase3/xaml-db/fonts/README.md.
+        #
+        # These sizes separate the three. At 100 they answer 101, 104.17 and
+        # 102; at 200, 201, 208.33 and 204 -- distinct whichever way a fraction
+        # becomes a whole number, and distinct again at the second size, so the
+        # rule is confirmed rather than fitted to one observation. The plain
+        # glyph is measured at both sizes beside them so the difference is read
+        # off two recordings instead of off the harvest's claim that this glyph
+        # is exactly one em wide.
+        ("mdl2-plain-100", font_icon(chr(ICON_SAMPLE), "Segoe MDL2 Assets", "100"),
+         "the unweighted glyph at 100, which is what the weighted ones below "
+         "are a difference from"),
+        ("mdl2-weight-100", font_icon(chr(ICON_SAMPLE), "Segoe MDL2 Assets", "100",
+                                      'FontWeight="Black"'),
+         "FontWeight=Black at 100, where a whole DIP, a twenty-fourth of the em "
+         "and two per cent of it no longer agree"),
+        ("mdl2-plain-200", font_icon(chr(ICON_SAMPLE), "Segoe MDL2 Assets", "200"),
+         "the unweighted glyph at 200"),
+        ("mdl2-weight-200", font_icon(chr(ICON_SAMPLE), "Segoe MDL2 Assets", "200",
+                                      'FontWeight="Black"'),
+         "and Black at 200, so whichever rule the pair above picks is confirmed "
+         "at a second size rather than fitted to one"),
+        # And whether the amount is a property of the weight or of there being
+        # one at all: Bold is 700 where Black is 900, so a rule that scales with
+        # the weight answers differently here and a rule that does not, does not.
+        ("mdl2-bold-100", font_icon(chr(ICON_SAMPLE), "Segoe MDL2 Assets", "100",
+                                    'FontWeight="Bold"'),
+         "a lighter weight at the same size: does the amount track which weight "
+         "it is, or only that there is one"),
         ("mdl2-near-14", font_icon(chr(ICON_SAMPLE), "Segoe MDL2 Assets", "14",
                                    'HorizontalAlignment="Left" VerticalAlignment="Top"'),
          "pinned to the corner, so an icon that stretches is visible as one"),

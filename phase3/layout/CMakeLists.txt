@@ -184,6 +184,17 @@ add_executable(windows_xaml_completion_tests
 target_link_libraries(windows_xaml_completion_tests PRIVATE openxaml_layout)
 add_test(NAME windows_xaml_completion COMMAND windows_xaml_completion_tests)
 
+# What the harvested Terminal subtrees pin, and the shape of the tree they are
+# reported in. A recorded tree says which nodes the probe's walk reached, and
+# that is a fact about the walk rather than about layout -- so it is stated
+# here, beside the rules the level 7 numbers pin.
+add_executable(terminal_subtree_tests
+    tests/terminal_subtree_test.cpp
+    src/markup.cpp
+)
+target_link_libraries(terminal_subtree_tests PRIVATE openxaml_layout)
+add_test(NAME terminal_subtree COMMAND terminal_subtree_tests)
+
 if(MSVC)
     target_compile_options(openxaml_layout PRIVATE /W4)
     target_compile_options(measure_cases PRIVATE /W4)
@@ -201,6 +212,7 @@ if(MSVC)
     target_compile_options(scroll_viewer_tests PRIVATE /W4)
     target_compile_options(l4_composition_tests PRIVATE /W4)
     target_compile_options(windows_xaml_completion_tests PRIVATE /W4)
+    target_compile_options(terminal_subtree_tests PRIVATE /W4)
 else()
     target_compile_options(openxaml_layout PRIVATE -Wall -Wextra)
     target_compile_options(measure_cases PRIVATE -Wall -Wextra)
@@ -218,4 +230,5 @@ else()
     target_compile_options(scroll_viewer_tests PRIVATE -Wall -Wextra)
     target_compile_options(l4_composition_tests PRIVATE -Wall -Wextra)
     target_compile_options(windows_xaml_completion_tests PRIVATE -Wall -Wextra)
+    target_compile_options(terminal_subtree_tests PRIVATE -Wall -Wextra)
 endif()

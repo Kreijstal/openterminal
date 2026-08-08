@@ -61,6 +61,12 @@ public:
         return template_root_ ? std::vector<Element*>{template_root_.get()} : std::vector<Element*>{};
     }
 
+    // A template child is a visual child, and the probe's walk reaches no
+    // visual children -- a Control that is not a ContentControl is a leaf in
+    // every recorded tree. L7-terminal-b6a4672b94 is a Thumb whose own
+    // ControlTemplate holds a Rectangle, and the recording is the Thumb alone.
+    std::vector<Element*> RecordedChildren() const override { return {}; }
+
 protected:
     Size MeasureOverride(Size available) override;
     Size ArrangeOverride(Size final_size) override;
@@ -78,10 +84,22 @@ public:
 
     void SetContent(std::unique_ptr<Element> content);
 
+    // The runtime's Content is one `object` property holding either a UIElement
+    // or a value the template's ContentPresenter displays. The two are separate
+    // here because only the first is a child of anything: `<Button>Create</Button>`
+    // sets the second kind, and L7-terminal-0e66f8e18d records that kind as
+    // neither a node in the tree nor a contribution to the measured size.
+    const std::string& content_text() const { return GetString(ContentProperty()); }
+    void set_content_text(std::string value) { SetValue(ContentProperty(), std::move(value)); }
+    static const DependencyProperty& ContentProperty();
+
     std::vector<Element*> Children() const override {
         if (!content_) return {};
         return {content_.get()};
     }
+
+    // Content, unlike a template child, is one of the four the walk asks for.
+    std::vector<Element*> RecordedChildren() const override { return Children(); }
 
 protected:
     Size MeasureOverride(Size available) override;

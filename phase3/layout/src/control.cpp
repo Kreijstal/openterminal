@@ -24,12 +24,20 @@ const DependencyProperty* const kVerticalContentAlignment =
     RegisterProperty("Control", "VerticalContentAlignment",
                      {static_cast<int>(VerticalAlignment::Top), false, false});
 
+// The half of Content that is not an element. It affects no measurement --
+// which is the recorded fact, not a simplification -- so it does not affect
+// measure, and it is kept rather than dropped because markup that says
+// `<Button>Create</Button>` said something.
+const DependencyProperty* const kContent =
+    RegisterProperty("ContentControl", "Content", {std::string(), false, false});
+
 const std::vector<std::string> kOwners = {"ContentControl", "Control", kTextPropertyOwner,
                                           "FrameworkElement", "UIElement"};
 
 }  // namespace
 
 const std::vector<std::string>& ContentControl::Owners() { return kOwners; }
+const DependencyProperty& ContentControl::ContentProperty() { return *kContent; }
 const DependencyProperty& Control::PaddingProperty() { return *kControlPadding; }
 const DependencyProperty& Control::HorizontalContentAlignmentProperty() {
     return *kHorizontalContentAlignment;

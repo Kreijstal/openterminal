@@ -70,7 +70,7 @@ void Walk(const Element& element, const std::string& path, std::vector<std::stri
     out.push_back(line.str());
 
     int index = 0;
-    for (const Element* child : element.Children()) {
+    for (const Element* child : element.RecordedChildren()) {
         Walk(*child, path + "/" + child->TypeName() + "[" + std::to_string(index++) + "]", out);
     }
 }
