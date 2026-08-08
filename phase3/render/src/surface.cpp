@@ -16,6 +16,15 @@ PixelRect SnapRect(const Rect& rect) {
     return out;
 }
 
+PixelRect TouchedRect(const Rect& rect) {
+    PixelRect out;
+    out.left = static_cast<int>(std::floor(rect.x));
+    out.top = static_cast<int>(std::floor(rect.y));
+    out.right = static_cast<int>(std::ceil(rect.x + rect.width));
+    out.bottom = static_cast<int>(std::ceil(rect.y + rect.height));
+    return out;
+}
+
 Surface::Surface(int width, int height, Color clear)
     : width_(std::max(0, width)), height_(std::max(0, height)) {
     pixels_.assign(static_cast<size_t>(width_) * static_cast<size_t>(height_), Pack(clear));

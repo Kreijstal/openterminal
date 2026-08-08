@@ -135,6 +135,15 @@ public:
     static const DependencyProperty& TextProperty();
     static const DependencyProperty& TextWrappingProperty();
 
+    // One advance per character of Text, in DIPs, from the same shaping the
+    // measurement uses -- same kerning, same bold simulation, same snapping.
+    // A backend that lays glyphs on its own advances instead drifts away from
+    // the width the corpus verified: GDI rounds an advance to whole pixels, so
+    // six of Cascadia Mono's 11.71875 at size 20 cover 72 pixels where the
+    // measurement says 70.32. Empty when the family has no metrics, which the
+    // caller must report rather than paper over.
+    std::vector<double> ShapedAdvances() const;
+
 protected:
     Size MeasureOverride(Size available) override;
     Size ArrangeOverride(Size final_size) override;

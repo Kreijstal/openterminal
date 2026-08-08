@@ -57,6 +57,17 @@ struct TextOp {
     std::string text;
     std::string font_family;
     double font_size = 0.0;
+    // Where the baseline sits below the top of the box, from the same harvested
+    // metrics the line box was measured with. A backend that aligns the glyph
+    // cell's top instead lands the baseline wherever *its* notion of ascent
+    // says, which for a font whose win metrics exceed its hhea metrics drops
+    // the descenders out of the measured box. Zero means no metrics were
+    // available and the backend must say so rather than guess.
+    double baseline = 0.0;
+    // One advance per character, from the measurement path's own shaping, so a
+    // backend can lay the glyphs on the widths the corpus verified instead of
+    // on whatever its rasteriser rounds them to.
+    std::vector<double> advances;
     std::string path;
 };
 

@@ -43,7 +43,17 @@ struct PixelRect {
     bool empty() const { return right <= left || bottom <= top; }
 };
 
+// Where a solid fill lands: each edge to the nearest pixel, which is how the
+// runtime rasterises a rectangle and what every recovered rectangle is held to.
 PixelRect SnapRect(const Rect& rect);
+
+// Every pixel the rectangle overlaps at all, however slightly. This is the
+// right box for asking whether ink stayed inside a run, and it is not the fill
+// box: a run measured 70.32 wide covers a third of pixel column 70, so ink
+// there is inside the box the arrange derived even though a fill of the same
+// rectangle would stop at column 69. Using the fill box for containment calls
+// that pixel an escape and is wrong by up to half a pixel on every edge.
+PixelRect TouchedRect(const Rect& rect);
 
 class Surface {
 public:

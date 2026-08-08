@@ -38,6 +38,11 @@ and a non-empty run must have ink in it. Containment on the right edge is the
 part that carries weight -- it holds the advances the corpus verifies to
 actually covering the glyphs the platform drew.
 
+The box read from a run's `pixels` is every pixel its measured rectangle
+overlaps, not the rectangle snapped the way a fill is; the two differ by up to
+half a pixel on each edge and only the first is a fair question to ask of ink.
+See `TouchedRect` in phase3/render/src/surface.h.
+
 A dump written without a glyph backend (the native, Wine-free run) has no ink to
 check. That is reported by name as unchecked rather than counted as a pass.
 """

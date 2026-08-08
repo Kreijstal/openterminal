@@ -15,6 +15,22 @@ namespace openxaml {
 namespace render {
 namespace {
 
+// The baseline's offset below the top of the line box, in the family that owns
+// the line box -- the first installed entry of a fallback list, which is the
+// same one TextBlock::LayoutText measures the height from.
+//
+// The line box is ascent + descent + gap. Where the gap goes has no oracle:
+// nothing in the corpus records a baseline, only line heights, so this puts the
+// whole gap above the ascent (DirectWrite's default) and every font the ink
+// gate exercises has a zero gap, which makes the choice unobservable there. A
+// font with a real gap would be the case that decides it, and there isn't one
+// recorded yet.
+double BaselineOf(const std::string& family, double size) {
+    const FontMetrics* line_font = FontLibrary::Default().Find(family);
+    if (!line_font || line_font->units_per_em <= 0.0) return 0.0;
+    return (line_font->ascender + line_font->line_gap) * size / line_font->units_per_em;
+}
+
 struct Walker {
     DisplayList out;
 
@@ -191,6 +207,8 @@ struct Walker {
                 op.text = text->text();
                 op.font_family = text->font_family();
                 op.font_size = text->font_size();
+                op.baseline = BaselineOf(op.font_family, op.font_size);
+                op.advances = text->ShapedAdvances();
                 op.path = path;
                 out.texts.push_back(op);
             }

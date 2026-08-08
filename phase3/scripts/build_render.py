@@ -35,7 +35,7 @@ REPO_DIR = PHASE3_DIR.parent
 # link failure naming the symbol, which is the failure mode worth having. Not
 # imported from build_xamlcore because that module reaches into phase2's mingw
 # helpers, and this script has no use for a Windows SDK payload.
-LAYOUT_SOURCES = ["property.cpp", "element.cpp", "border.cpp", "control.cpp",
+LAYOUT_SOURCES = ["property.cpp", "element.cpp", "events.cpp", "border.cpp", "control.cpp",
                   "stack_panel.cpp", "grid.cpp", "chrome.cpp", "canvas.cpp",
                   "content_presenter.cpp", "geometry.cpp", "image.cpp", "shape.cpp",
                   "icon.cpp", "brush.cpp", "text.cpp", "fonts.cpp", "json.cpp",

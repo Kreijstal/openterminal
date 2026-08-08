@@ -1,7 +1,7 @@
 # First pixels
 
-The layout core matches the recorded runtime to the half-pixel across 1176 of
-1177 measurements, and until now nothing drew any of it. This does — the minimum
+The layout core matches the recorded runtime to the half-pixel across all 1177
+measurements, and until now nothing drew any of it. This does — the minimum
 that can be drawn honestly, and no more.
 
     cmake -S phase3/render -B build && cmake --build build
@@ -81,14 +81,14 @@ Over the corpus, natively:
 
 | outcome | cases |
 |---|---:|
-| painted, round trip exact | 1147 |
+| painted, round trip exact | 1148 |
 | refused by name | 19 |
 | failed | 0 |
-| not laid out (the measurement path does not load them either) | 11 |
+| not laid out (the measurement path does not load them either) | 10 |
 
-Under Wine with the GDI backend the same corpus gives 1035 / 131 / 0 / 11 — the
-extra 112 refusals are every case that carries text, because they all measure in
-Segoe UI and it is not on this machine.
+Under Wine the GDI backend applies the same geometry gate. On a host without
+Segoe UI, the additional 112 cases that carry text refuse by name instead of
+substituting a different font.
 
 **How much of that is a real rectangle: six cases, twelve rectangles, 608560
 pixels.** The rest of the corpus paints nothing at all, and for those the gate
@@ -122,9 +122,8 @@ sharing no code with any of the above, recovers:
 ## Glyphs are the platform's; positions are ours
 
 There is no oracle for what a glyph looks like, so none is invented. The Wine
-backend selects the real font and calls `ExtTextOutW` at the origin the layout
-produced, unclipped — a clip to the run's own box would erase the evidence
-whenever the box was wrong.
+backend selects the real font and calls `ExtTextOutW`, unclipped — a clip to the
+run's own box would erase the evidence whenever the box was wrong.
 
 What that leaves checkable is containment: the box the harvested advances derive
 has to contain the ink the platform draws. `gdi/ink_check.cpp` puts that question
@@ -132,14 +131,36 @@ to the one font whose metrics *and* glyphs are both available here — Cascadia
 Mono, out of the pinned Terminal checkout, the same file phase3's CI already
 harvests for the level 7 case that measures in it.
 
-**It does not hold, and that is a finding rather than a bug to paper over.** GDI
-rounds a font's per-glyph advances and its ascent and descent to whole pixels;
-the runtime the corpus recorded does not. Measured on six samples, the ink runs
-up to 2 pixels past the box's bottom on any string with a descender, and up to 2
-pixels past its right edge on the widest one, while four of the six stay inside
-horizontally. So the delegation is real in both directions: the imagery is GDI's,
-and so is a metric rounding that is not the runtime's. Pinning that difference
-needs a rendered-output probe, which is the next cycle's work and not this one's.
+It holds on all six samples, and getting there took drawing the run on this
+project's numbers rather than on GDI's. Both of GDI's own placements disagree
+with the recorded runtime, in the same direction and for the same reason — it
+rounds to whole pixels where the runtime does not:
+
+  * **Vertically.** A top-aligned `ExtTextOutW` puts the baseline wherever GDI's
+    glyph cell says, and that cell comes from the font's win metrics, which for
+    Cascadia Mono exceed the `hhea` metrics the line box was measured from. At
+    size 12 the baseline landed about 2 pixels low and every descender fell out
+    of the box. The run is now drawn `TA_BASELINE` at the baseline
+    `display_list.cpp` derives from the same harvested ascent.
+  * **Horizontally.** GDI rounds each advance to a whole pixel, so six of
+    Cascadia Mono's 11.71875 at size 20 walk the pen to 72 where the arrange
+    says 70.32. The run is now drawn with an explicit distance array built from
+    `TextBlock::ShapedAdvances` — the measurement path's own shaping, kerning
+    and snapping included — differenced from rounded *positions* so the error
+    stays under a pixel across the whole run instead of accumulating.
+
+So the delegation is narrower than it was, and honest: the imagery is GDI's, and
+every position is ours. What remains un-pinned is what a glyph looks like, which
+still wants a rendered-output probe and is still the next cycle's work.
+
+One subtlety in the checking. A run's box becomes pixels twice, by two different
+rules, and they are not interchangeable: a *fill* snaps each edge to the nearest
+pixel, because that is how the runtime rasterises a rectangle, while *containment*
+takes every pixel the box overlaps at all (`TouchedRect`). A run measured 70.32
+wide covers a third of pixel column 70, so ink there is inside the measured box
+even though a fill of the same rectangle stops at column 69. Judging ink by the
+fill box calls that pixel an escape and is wrong by up to half a pixel on every
+edge; ink a full pixel beyond still fails, which is the part that carries weight.
 
 ## Layers
 

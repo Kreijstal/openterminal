@@ -402,6 +402,19 @@ const DependencyProperty& TextBlock::TextWrappingProperty() { return *kTextWrapp
 
 const std::vector<std::string>& TextBlock::Owners() { return kOwners; }
 
+std::vector<double> TextBlock::ShapedAdvances() const {
+    const std::string& family = font_family();
+    const std::string& content = text();
+    const FontMetrics* font = FontLibrary::Default().FindForText(family, content);
+    if (!font || font->units_per_em <= 0.0 || content.empty()) return {};
+    const std::vector<Glyph> glyphs =
+        Shape(content, family, *font, font_size(), simulates_bold_, !text_from_property_);
+    std::vector<double> advances;
+    advances.reserve(glyphs.size());
+    for (const Glyph& glyph : glyphs) advances.push_back(glyph.advance);
+    return advances;
+}
+
 Size TextBlock::LayoutText(double limit) const {
     const std::string& family = font_family();
     const double size = font_size();

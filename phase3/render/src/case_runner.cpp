@@ -175,9 +175,13 @@ std::string SidecarJson(const CaseResult& result, const Surface& surface,
     for (size_t i = 0; i < result.list.texts.size(); ++i) {
         const TextOp& op = result.list.texts[i];
         out << "  {\"path\": \"" << JsonEscape(op.path) << "\", \"bounds\": "
-            << RectJson(op.bounds) << ", \"pixels\": " << PixelRectJson(SnapRect(op.bounds))
+            // TouchedRect, not SnapRect: this box is read as "the pixels this
+            // run's ink may occupy", and a run's ink may occupy any pixel its
+            // measured box overlaps. See surface.h.
+            << RectJson(op.bounds) << ", \"pixels\": " << PixelRectJson(TouchedRect(op.bounds))
             << ", \"font_family\": \"" << JsonEscape(op.font_family)
-            << "\", \"font_size\": " << Number(op.font_size) << ", \"text\": \""
+            << "\", \"font_size\": " << Number(op.font_size)
+            << ", \"baseline\": " << Number(op.baseline) << ", \"text\": \""
             << JsonEscape(op.text) << "\"}"
             << (i + 1 < result.list.texts.size() ? ",\n" : "\n");
     }
