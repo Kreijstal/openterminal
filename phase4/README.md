@@ -34,6 +34,40 @@ Nothing in this stack implements `Microsoft.UI.Xaml`: phase 2 produces its
 WinMD and a C++/WinRT projection of it, which is compile-time metadata and not
 a runtime. Advancing past it is the muxc port's work, not the XAML core's.
 
+### What is registered beyond the frontier
+
+The frontier names one class at a time, because the process dies at the first
+one. Asking the activation registry directly — `RoGetActivationFactory` for
+`IActivationFactory`, which creates nothing and so cannot disturb a prefix —
+says what the rest of the near path looks like. Measured in a prefix built by
+`phase3/scripts/build_xamlcore.py`, against wine-11.13:
+
+| class | result | who owns it |
+|---|---|---|
+| `Windows.UI.Xaml.Application` | `S_OK` | phase 3 |
+| `Windows.UI.Xaml.DurationHelper` | `S_OK` | phase 3 |
+| `Windows.UI.Core.CoreWindow` | `S_OK` | Wine |
+| `Windows.System.DispatcherQueueController` | `S_OK` | Wine, `coremessaging.dll` |
+| `Windows.System.DispatcherQueue` | `REGDB_E_CLASSNOTREG` | **Wine gap** |
+| `Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider` | `REGDB_E_CLASSNOTREG` | the muxc port |
+| `Microsoft.UI.Xaml.Controls.XamlControlsResources` | `REGDB_E_CLASSNOTREG` | the muxc port |
+| `Windows.UI.Xaml.Hosting.WindowsXamlManager` | `REGDB_E_CLASSNOTREG` | phase 3 |
+| `Windows.UI.Xaml.Hosting.DesktopWindowXamlSource` | `REGDB_E_CLASSNOTREG` | phase 3 |
+| `Windows.UI.Xaml.Window` | `REGDB_E_CLASSNOTREG` | phase 3 |
+| `Windows.UI.Xaml.ResourceDictionary` | `REGDB_E_CLASSNOTREG` | phase 3 |
+
+`Windows.System.DispatcherQueue` is the interesting one. Wine's
+`coremessaging.dll` registers `DispatcherQueueController` and not the
+`DispatcherQueue` beside it, so `DispatcherQueue.GetForCurrentThread()` —
+which `App::Initialize` calls, and needs to answer *null* — throws instead.
+It cannot honestly be supplied from outside CoreMessaging: the thread-to-queue
+association lives inside the component that creates it, and a class that
+always answered null would be right today and wrong the moment a controller
+existed. That is a Wine patch, not a XAML one.
+
+So two blockers stand between the current frontier and the next class phase 3
+owns: the muxc metadata provider, and that Wine gap.
+
 ### Reading a frontier that did not move
 
 An unchanged `first_missing_class` after a real implementation landed is
