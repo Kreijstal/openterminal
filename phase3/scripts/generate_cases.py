@@ -1756,7 +1756,11 @@ def level5_styles() -> Iterator[dict[str, Any]]:
 #
 # Every one of these is twinned, because the attribute form of the same value is
 # not a guess: it is the same assignment written the way the rest of the corpus
-# writes it, and the two have to measure identically.
+# writes it, and the two have to measure identically. The one exception is
+# int32-width: run 31019336758 recorded the runtime refusing the typed object
+# (0x802b000a) while the attribute spelling loads, so the two provably do not
+# describe the same tree. Its former twin stays in the corpus as a plain case
+# -- the measurement digest pins the case count -- but nothing links them.
 
 def x_primitive_scenarios() -> list[tuple[str, str, list[str], str, str | None, str | None]]:
     text_attrs = 'FontFamily="Segoe UI" FontSize="14"'
@@ -1781,25 +1785,29 @@ def x_primitive_scenarios() -> list[tuple[str, str, list[str], str, str | None, 
             ["L1-sizing"],
             wrap('<Border Height="30"><Border.Width><x:Int32>60</x:Int32>'
                  "</Border.Width></Border>"),
-            wrap('<Border Height="30" Width="60"/>'),
+            None,
             "Whether the widening happens at all. An attribute's value is a "
             "string that Double's converter reads; an object element produces "
             "an Int32 *object*, which is assigned rather than converted, so a "
-            "Double-typed Width may simply refuse it. The last run's evidence "
-            "points at a refusal and cannot be trusted to say so: run "
-            "31017111065 recorded \"Failed to assign to property "
-            "'Windows.UI.Xaml.FrameworkElement.Width' because the type "
-            "'Windows.Foundation.Int32' cannot be assigned to the type "
-            "'Windows.Foundation.Double'\" against L7-terminal-4302b18781-s1, "
-            "a harvested Rectangle that assigns nothing of the kind, and that "
-            "run's messages were served from stale per-thread error state -- "
-            "see the contamination section of phase3/xaml-db/README.md. No "
-            "other case in the corpus could have produced that sentence, so it "
-            "is almost certainly this one's answer, and almost certainly is not "
-            "a measurement. This implementation widens, and the layout core is "
-            "left widening until a clean run says otherwise: changing it on "
-            "contaminated evidence would be guessing twice. The inline twin "
-            "stays as the tree this case has if the widening is real.",
+            "Double-typed Width may simply refuse it. Run 31019336758 -- the "
+            "first with per-case error hygiene, so its messages are its own -- "
+            "recorded the refusal: 0x802b000a. The layout core refuses the "
+            "assignment the same way, so the question is answered; the marker "
+            "stays because a refusal is still this case's expected outcome, "
+            "and the report should keep reading it as the answer rather than "
+            "as an authored level failing.",
+        ),
+        (
+            "int32-width-inline",
+            "the attribute spelling of the assignment x:Int32 is refused for: "
+            "a string through Double's converter, kept as the measured witness "
+            "that only the typed object form is refused. Formerly the twin of "
+            "L5-xprimitives-int32-width; unlinked because the runtime answers "
+            "the two differently, which is the finding",
+            ["L1-sizing"],
+            wrap('<Border Height="30" Width="60"/>'),
+            None,
+            None,
         ),
         (
             "double-indented",
