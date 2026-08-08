@@ -12,6 +12,18 @@ const DependencyProperty* const kTemplateFocusTarget = RegisterProperty(
 const DependencyProperty* const kControlPadding =
     RegisterProperty("Control", "Padding", {Thickness{}, false, true});
 
+// Left/Top, which is what the corpus records: L0-props-content-stretch arranges
+// the Border child of a 400 x 300 ContentControl at 0 x 0, and the
+// L0-props-inherits-* cases arrange the child of a stretched ContentControl at
+// the height its inherited font gives it. Neither affects measure -- the
+// content asks for the same size wherever it is then placed.
+const DependencyProperty* const kHorizontalContentAlignment =
+    RegisterProperty("Control", "HorizontalContentAlignment",
+                     {static_cast<int>(HorizontalAlignment::Left), false, false});
+const DependencyProperty* const kVerticalContentAlignment =
+    RegisterProperty("Control", "VerticalContentAlignment",
+                     {static_cast<int>(VerticalAlignment::Top), false, false});
+
 const std::vector<std::string> kOwners = {"ContentControl", "Control", kTextPropertyOwner,
                                           "FrameworkElement", "UIElement"};
 
@@ -19,6 +31,12 @@ const std::vector<std::string> kOwners = {"ContentControl", "Control", kTextProp
 
 const std::vector<std::string>& ContentControl::Owners() { return kOwners; }
 const DependencyProperty& Control::PaddingProperty() { return *kControlPadding; }
+const DependencyProperty& Control::HorizontalContentAlignmentProperty() {
+    return *kHorizontalContentAlignment;
+}
+const DependencyProperty& Control::VerticalContentAlignmentProperty() {
+    return *kVerticalContentAlignment;
+}
 
 void Control::SetTemplate(std::shared_ptr<const ControlTemplate> value) {
     if (template_ == value) return;
@@ -53,15 +71,11 @@ void ContentControl::SetContent(std::unique_ptr<Element> content) {
 }
 
 Size ContentControl::MeasureOverride(Size available) {
-    // Straight through to the content, with no chrome of its own.
-    //
-    // A real ContentControl reaches its content through a ContentPresenter
-    // that the default template supplies, and that presenter carries the
-    // control's Padding and content alignment. None of it is modelled: the one
-    // case in the corpus leaves Padding at zero, and its content is a
-    // zero-width TextBlock arranged at the origin, which is where Left/Top and
-    // Stretch both put it. Guessing between them would be a rule nothing here
-    // could check.
+    // Straight through to the content, less the padding the default template's
+    // ContentPresenter would apply. The presenter itself is not modelled --
+    // nothing in the corpus reports one inside a ContentControl -- but its two
+    // observable effects are: the padding here, and the content alignment in
+    // Arrange below.
     const Thickness inset = padding();
     if (Children().empty()) return {inset.horizontal(), inset.vertical()};
 
@@ -74,10 +88,27 @@ Size ContentControl::MeasureOverride(Size available) {
 
 Size ContentControl::ArrangeOverride(Size final_size) {
     if (!Children().empty()) {
+        Element* content = Children().front();
         const Thickness inset = padding();
-        Children().front()->Arrange({inset.left, inset.top,
-                                     std::max(0.0, final_size.width - inset.horizontal()),
-                                     std::max(0.0, final_size.height - inset.vertical())});
+        const HorizontalAlignment horizontal = horizontal_content_alignment();
+        const VerticalAlignment vertical = vertical_content_alignment();
+        const Size client{std::max(0.0, final_size.width - inset.horizontal()),
+                          std::max(0.0, final_size.height - inset.vertical())};
+
+        // Only Stretch fills the client rect. The default is Left/Top, so a
+        // ContentControl handed more room than its content asked for leaves the
+        // content at its desired size -- which is what every L0-props case
+        // measuring one records.
+        const Size content_size{horizontal == HorizontalAlignment::Stretch
+                                    ? client.width
+                                    : content->desired_size().width,
+                                vertical == VerticalAlignment::Stretch
+                                    ? client.height
+                                    : content->desired_size().height};
+
+        content->Arrange({inset.left + AlignmentOffset(horizontal, client.width, content_size.width),
+                          inset.top + AlignmentOffset(vertical, client.height, content_size.height),
+                          content_size.width, content_size.height});
     }
     return final_size;
 }

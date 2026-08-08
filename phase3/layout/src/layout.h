@@ -133,20 +133,25 @@ inline bool IsZero(double v) { return std::abs(v) < 10.0 * kDoubleEpsilon; }
 // 33.3333 -- so an implementation without rounding disagrees with the runtime
 // on every layout that does not divide evenly.
 
+// Half rounds up, not to even. The corpus settled it: L0-props-rounding-half
+// records Width="120.5" as 121, and L5-xprimitives-boolean-rounding records a
+// 60.5 x 30.5 child as 61 x 31 through a rounding parent. Round-half-to-even --
+// what nearbyint and the ported Math.Round do -- answers 120, 60 and 30 for
+// those three, so it is not the runtime's rule.
+//
+// floor(v + 0.5) rather than a symmetric round-half-away: only positive ties
+// are recorded, and this is the form the runtime's own rounding helper takes.
+inline double RoundHalfUp(double value) { return std::floor(value + 0.5); }
+
 inline double RoundLayoutValue(double value, double dpi_scale) {
-    // nearbyint under the default rounding mode is round-half-to-even, which
-    // is what the ported source's Math.Round does. The tie-break is not
-    // confirmed against the runtime -- it is the ported behaviour, not a
-    // measured one. L0-props-rounding-half is the case authored to settle it,
-    // and has no measurement yet.
     if (!AreClose(dpi_scale, 1.0)) {
-        const double scaled = std::nearbyint(value * dpi_scale) / dpi_scale;
+        const double scaled = RoundHalfUp(value * dpi_scale) / dpi_scale;
         // Scaling can overflow a very large value into infinity; keeping the
         // original is better than propagating that into a size.
         if (std::isnan(scaled) || std::isinf(scaled)) return value;
         return scaled;
     }
-    return std::nearbyint(value);
+    return RoundHalfUp(value);
 }
 
 inline Size RoundLayoutSize(Size size, double dpi_scale_x, double dpi_scale_y) {

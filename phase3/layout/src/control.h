@@ -30,6 +30,25 @@ public:
     void set_padding(Thickness value) { SetValue(PaddingProperty(), value); }
     static const DependencyProperty& PaddingProperty();
 
+    // Where the content sits inside the control, which is not where the
+    // control sits inside its parent. Control's own pair, distinct from the
+    // ContentPresenter properties of the same name -- the template hands one
+    // to the other, and a case can set either.
+    HorizontalAlignment horizontal_content_alignment() const {
+        return static_cast<HorizontalAlignment>(GetInt(HorizontalContentAlignmentProperty()));
+    }
+    void set_horizontal_content_alignment(HorizontalAlignment value) {
+        SetValue(HorizontalContentAlignmentProperty(), static_cast<int>(value));
+    }
+    VerticalAlignment vertical_content_alignment() const {
+        return static_cast<VerticalAlignment>(GetInt(VerticalContentAlignmentProperty()));
+    }
+    void set_vertical_content_alignment(VerticalAlignment value) {
+        SetValue(VerticalContentAlignmentProperty(), static_cast<int>(value));
+    }
+    static const DependencyProperty& HorizontalContentAlignmentProperty();
+    static const DependencyProperty& VerticalContentAlignmentProperty();
+
     void SetTemplate(std::shared_ptr<const ControlTemplate> value);
     const std::shared_ptr<const ControlTemplate>& templ() const { return template_; }
     bool ApplyTemplate();
