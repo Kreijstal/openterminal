@@ -33,6 +33,11 @@ protected:
 
 class ToolTip : public ContentControl {
 public:
+    // Carries the default style generic.xaml gives the type, which is a fact
+    // about a ToolTip rather than about the markup that made one -- see
+    // basic_controls.cpp for the two values and what pins them.
+    ToolTip();
+
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.ToolTip"; }
     static const std::vector<std::string>& Owners();
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }

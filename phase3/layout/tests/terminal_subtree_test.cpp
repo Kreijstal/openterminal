@@ -3,7 +3,8 @@
 //
 // A level 7 case is a subtree lifted out of Terminal's own markup, so it
 // reaches parts of the runtime the generated levels never do: a Control with a
-// template of its own, a transform hung off a Shape. Each of those is one recorded
+// template of its own, a transform hung off a Shape, a ToolTip's default
+// style, a string handed to a ContentControl. Each of those is one recorded
 // answer, and each is written out here as arithmetic so that changing it is a
 // deliberate edit rather than a case that quietly moves.
 
@@ -13,7 +14,9 @@
 #include <string>
 
 #include "basic_controls.h"
+#include "fonts.h"
 #include "markup.h"
+#include "text.h"
 
 using namespace openxaml;
 
@@ -104,12 +107,71 @@ void ARenderTransformDoesNotReachLayout() {
     CHECK(refusal.find("<Border>") != std::string::npos);
 }
 
+// A font whose line box is exactly its em, so that a line height in this test
+// reads as the font size that produced it and nothing has to be un-rounded.
+FontMetrics EmTallFace() {
+    FontMetrics metrics;
+    metrics.units_per_em = 2048;
+    metrics.ascender = 2048;
+    metrics.descender = 0;
+    return metrics;
+}
+
+// The runtime's default ToolTip style, as L7-terminal-24911ba19e pins it. The
+// case is `<ToolTip><TextBlock><Run/></TextBlock></ToolTip>` -- an empty line
+// of text -- and the oracle records the ToolTip 18 x 30 with the TextBlock at
+// 9 x 6 and 0 x 15.9609. So:
+//
+//   the content sits at 9 across and 6 down, and the ToolTip is 18 wide
+//   around content that is not wide at all, which is ToolTipBorderPadding
+//   ("9,6,9,8" in the harvested dictionary) and 30 - 16 - 6 confirms its
+//   bottom; and
+//   15.9609 is Segoe UI's line box at *12*, not at the 14 the case
+//   environment inherits, which is ToolTipContentThemeFontSize.
+//
+// Both are style values rather than local ones: they are what the content
+// inherits when the markup says nothing, and what the markup overrides when it
+// does.
+void AToolTipCarriesTheRecordedDefaultStyle() {
+    FontLibrary::Default().Add("ToolTip Test Face", EmTallFace());
+
+    ContentControl host;
+    host.set_font_family("ToolTip Test Face");
+    host.set_font_size(14.0);
+
+    auto tip = std::make_unique<ToolTip>();
+    ToolTip& tooltip = *tip;
+    auto line = std::make_unique<TextBlock>();
+    TextBlock& text = *line;
+    tip->SetContent(std::move(line));
+    host.SetContent(std::move(tip));
+
+    host.Measure({400.0, 300.0});
+    host.Arrange({0.0, 0.0, 400.0, 300.0});
+
+    // The style's font size beats the 14 the host would otherwise have passed
+    // down -- and it reaches the content, which sets neither.
+    CHECK(tooltip.font_size() == 12.0);
+    CHECK(text.font_size() == 12.0);
+    CHECK(text.desired_size().height == 12.0);
+
+    CHECK(tooltip.desired_size().width == 18.0);
+    CHECK(tooltip.desired_size().height == 26.0);
+    CHECK(text.layout_slot().x == 9.0);
+    CHECK(text.layout_slot().y == 6.0);
+
+    // Style, not local: markup that sets either one still wins.
+    tooltip.set_font_size(30.0);
+    CHECK(tooltip.font_size() == 30.0);
+}
+
 }  // namespace
 
 int main() {
     ATemplatedControlIsALeafInTheRecordedTree();
     AContentControlsElementContentIsRecorded();
     ARenderTransformDoesNotReachLayout();
+    AToolTipCarriesTheRecordedDefaultStyle();
     std::cout << "terminal subtree rules ok\n";
     return 0;
 }
