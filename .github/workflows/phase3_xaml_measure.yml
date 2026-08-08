@@ -116,6 +116,41 @@ jobs:
             exit 1
           fi
 
+      # The layer underneath that dictionary: the framework's own generic.xaml
+      # and WinUI 2's default styles. The system file lives in the dxaml
+      # publication of the same repository at a different commit, so it is a
+      # second sparse checkout, not a second repository. The database lands in
+      # the same directory as the theme dictionary because measure_cases reads
+      # the two halves from one place -- a run that had one without the other
+      # would resolve a {ThemeResource} in a default style against a
+      # dictionary that is missing its floor.
+      - name: Check out the XAML core publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit=$(python3 -c "import sys; sys.path.insert(0, 'phase3/scripts'); \
+            import extract_default_styles as e; print(e.PINNED_DXAML_COMMIT)")
+          git clone --filter=blob:none --no-checkout --depth 1 \
+            https://github.com/microsoft/microsoft-ui-xaml _dxaml
+          git -C _dxaml sparse-checkout set --cone dxaml/xcp/dxaml/themes
+          git -C _dxaml fetch --depth 1 origin "$commit"
+          git -C _dxaml checkout --detach "$commit"
+          echo "dxaml at $(git -C _dxaml rev-parse HEAD)"
+
+      - name: Extract the default-style database
+        shell: bash
+        run: |
+          set -euo pipefail
+          for out in phase3/xaml-db/theme-resources/default-styles.json "$RUNNER_TEMP/styles-check.json"; do
+            python3 -B phase3/scripts/extract_default_styles.py \
+              --dxaml _dxaml --winui _winui --out "$out"
+          done
+          if ! diff -q phase3/xaml-db/theme-resources/default-styles.json \
+                       "$RUNNER_TEMP/styles-check.json" >/dev/null; then
+            echo "::error::two extractor runs disagree; the database is not deterministic"
+            exit 1
+          fi
+
       # The cases are not committed: the generators are the source and this
       # step materializes their output. It runs twice into separate trees and
       # diffs them, because an untracked corpus can no longer be checked

@@ -5,8 +5,15 @@
 #include <cctype>
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <map>
+#include <sstream>
 #include <vector>
+
+// The default-style database arrives as JSON, the way the font metrics and the
+// theme resources do.
+#include "json.h"
 
 #include "border.h"
 #include "brush.h"
@@ -1224,6 +1231,17 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node, ObservableObject* 
     //
     // Both are set after the children are attached, so that an inherited value
     // flowing down from either reaches a subtree that is already there.
+    // The framework's own style, below both. `CControl::ApplyBuiltInStyle` is
+    // the only thing that writes this layer and it is a Control's method, so
+    // the cast is the rule rather than a convenience: a Border has no built-in
+    // style in the runtime and must not grow one here.
+    //
+    // Registered only when the reconstructed database has been loaded, which a
+    // bare checkout has not done -- so this is inert unless something asked
+    // for it, exactly as the theme dictionary is.
+    if (auto* control = dynamic_cast<Control*>(element.get()))
+        (void)DefaultStyleRegistry::Default().Apply(*control, node.type, OwnersFor(node.type));
+
     if (node.style)
         ApplyStyle(*element, *node.style, node.type, OwnersFor(node.type));
 
@@ -1409,8 +1427,12 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
         for (auto it = open.rbegin(); it != open.rend(); ++it) {
             if (!it->resources.empty()) chain.push_back(&it->resources);
         }
-        if (const ResourceDictionary* application = ThemeResourceLibrary::Default().Active())
-            chain.push_back(application);
+        // Every layer of the application dictionary, highest first --
+        // XamlControlsResources over the framework's own generic.xaml. A key
+        // WinUI 2 redefines answers from WinUI 2; the three `SystemControl*`
+        // brushes it leaves alone fall through to the framework's.
+        for (const ResourceDictionary* layer : ThemeResourceLibrary::Default().ActiveLayers())
+            chain.push_back(layer);
         return chain;
     };
 
@@ -1722,6 +1744,248 @@ std::unique_ptr<Element> LoadMarkup(const std::string& markup, ObservableObject&
 std::unique_ptr<Element> LoadMarkup(const std::string& markup, const StringTable& strings,
                                     ObservableObject& source) {
     return BuildElement(ParseMarkup(markup, strings), &source, std::make_shared<NameScope>());
+}
+
+// --- the framework's own default styles ---------------------------------------
+
+namespace {
+
+// Setters the corpus refuses.
+//
+// This is the one place where the reconstruction is overruled, and it is
+// overruled by measurement. `extract_default_styles.py`'s output comes from
+// the WinUI 3 lineage of the system generic.xaml, not from the
+// `Windows.UI.Xaml` build the oracle records, and the two have had years to
+// drift. Where a setter out of that file changes a measurement the corpus has
+// already recorded, the corpus is right and the setter is wrong -- and a
+// setter that is wrong must not be applied at all, because a wrong number is
+// worse than a missing one.
+//
+// Every entry here is therefore a claim about a specific recorded case, and
+// each one carries the case that refuses it. None of them may be added
+// without one: a hold list that could grow on suspicion would quietly become
+// a way of making the corpus agree.
+//
+// Both entries were found by running the corpus, not by reading the source.
+const std::map<std::string, std::string>& HeldSetters() {
+    static const std::map<std::string, std::string> held = {
+        {"Button.Padding",
+         "L7-terminal-0e66f8e18d-s0 records a bare Button desiring [20, 32]; applying "
+         "ButtonPadding gives [42, 32]. A Control's Padding is consumed by the "
+         "ContentPresenter its template puts inside it, and the recorded tree has no "
+         "template -- see the note on templateless measurement above. Until this project "
+         "builds the reconstructed ControlTemplate, applying the padding directly moves a "
+         "number the oracle has already answered"},
+        {"ToolTip.Padding",
+         "the same rule as Button.Padding, held for the same reason before a case can "
+         "record it: L7-terminal-24911ba19e is a templateless ToolTip and its recorded "
+         "size does not include ToolTipBorderThemePadding"},
+    };
+    return held;
+}
+
+// A value that names no font.
+//
+// `ContentControlThemeFontFamily` is the literal string `XamlAutoFontFamily` in
+// the system generic.xaml, and it is not a family: it is the framework's
+// sentinel for "whatever the system UI font is", resolved inside the text
+// stack against the running system's locale and font settings. This project
+// has no such mapping and -- more to the point -- no measurement to derive one
+// from, so handing it to the font library produces a named failure for every
+// element that inherits it (`L7-terminal-24911ba19e`, a ToolTip, went from a
+// measured tree to "no harvested metrics for the font family
+// XamlAutoFontFamily" the moment the framework dictionary started resolving).
+//
+// So a setter that resolves to it is held, by value rather than by name: five
+// keys in the dictionary carry it, and a list of the keys would go stale the
+// moment a sixth appeared. What it should resolve to is an oracle question
+// (`L5-defaults-autofontfamily`), not a decision to be made here.
+bool IsUnresolvableFontSentinel(const std::string& resolved) {
+    return resolved == "XamlAutoFontFamily";
+}
+
+// The attribute text a classified setter value stands for.
+//
+// The database keeps a reference as the reference it is written as, so this
+// writes it back out in its markup spelling and hands it to the ordinary
+// attribute path. That is the same argument the resource system makes for
+// storing literals rather than parsed values, one level up again: a
+// `{ThemeResource ButtonPadding}` in generic.xaml and one written in a page
+// are not two implementations that agree, they are one reached twice.
+//
+// Returns false for a value with no textual form -- a ControlTemplate, a
+// DataTemplate, a brush object. Those are real content and are reported as
+// dropped rather than skipped silently.
+bool SetterText(const JsonValue& value, std::string& out, std::string& why) {
+    const JsonValue* kind = value.Has("kind") ? &value.At("kind") : nullptr;
+    if (!kind || kind->kind != JsonValue::Kind::String) {
+        why = "the value has no kind";
+        return false;
+    }
+    if (kind->string == "literal") {
+        if (!value.Has("text")) {
+            why = "a literal with no text";
+            return false;
+        }
+        out = value.At("text").string;
+        return true;
+    }
+    if (kind->string == "resource") {
+        const std::string extension =
+            value.Has("extension") ? value.At("extension").string : "StaticResource";
+        const std::string key = value.Has("key") ? value.At("key").string : "";
+        if (key.empty()) {
+            why = "a " + extension + " naming no key";
+            return false;
+        }
+        out = "{" + extension + " " + key + "}";
+        return true;
+    }
+    if (kind->string == "opaque") {
+        why = "a " + (value.Has("type") ? value.At("type").string : std::string("value")) +
+              ", which has no textual form";
+        return false;
+    }
+    why = "an unsupported value";
+    return false;
+}
+
+// One half of the database -- the system's table or WinUI 2's.
+void ReadDefaultStyleTable(const JsonValue& table, const std::string& half,
+                           DefaultStyleRegistry& registry, DefaultStyleReport& report,
+                           int& registered) {
+    // The application dictionary and nothing above it: a default style is
+    // declared in generic.xaml, so a {ThemeResource} inside one resolves where
+    // generic.xaml is, not where the styled element happens to sit.
+    ResourceScope application;
+    for (const ResourceDictionary* layer : ThemeResourceLibrary::Default().ActiveLayers())
+        application.push_back(layer);
+    MarkupStyleHost host(application);
+
+    for (const auto& [type, entry] : table.object) {
+        // A type both halves style is a collision this cannot resolve. The two
+        // tables are keyed by the markup name, and `Button` in WinUI 2's
+        // default styles is `Microsoft.UI.Xaml.Controls.Button` -- a different
+        // type that happens to be spelled the same. Giving a
+        // `Windows.UI.Xaml` Button WinUI 2's setters would be a wrong number by
+        // construction, so the framework's table wins and the muxc entry is
+        // named rather than merged. The types that only exist on the muxc side
+        // -- TabView, Expander, NumberBox and the rest of Terminal's demand
+        // list -- have no such ambiguity and are taken.
+        if (registry.Find(type)) {
+            report.unknown_types.push_back(half + ":" + type +
+                                           " (a type of this name is already styled)");
+            continue;
+        }
+        try {
+            host.ValidateTargetType(type);
+        } catch (const MarkupError&) {
+            // No element of this type can exist here, so no measurement can
+            // depend on its style. Counted, not dropped silently: the list is
+            // the coverage gap, stated in types.
+            report.unknown_types.push_back(half + ":" + type);
+            continue;
+        }
+
+        Style style;
+        style.target_type = type;
+        if (!entry.Has("setters") || entry.At("setters").kind != JsonValue::Kind::Array)
+            throw JsonError("the default style for '" + type + "' has no setters array");
+
+        for (const JsonValue& setter : entry.At("setters").array) {
+            if (!setter.Has("property") || !setter.Has("value"))
+                throw JsonError("a setter of the default style for '" + type + "' is malformed");
+            const std::string property = setter.At("property").string;
+
+            const auto held = HeldSetters().find(type + "." + property);
+            if (held != HeldSetters().end()) {
+                report.held.push_back(type + "." + property + ": " + held->second);
+                continue;
+            }
+
+            std::string text;
+            std::string why;
+            if (!SetterText(setter.At("value"), text, why)) {
+                report.dropped_setters.push_back(type + "." + property + ": " + why);
+                continue;
+            }
+            try {
+                // Resolved once here to look at, and then the *unresolved*
+                // text is what ParseSetter is given -- resolving a literal is
+                // the identity, so the setter that ends up in the style is the
+                // one the ordinary path would have built, not a
+                // pre-substituted copy of it.
+                if (IsUnresolvableFontSentinel(ResolveAttributeValue(application, property, text))) {
+                    report.held.push_back(type + "." + property +
+                                          ": resolves to XamlAutoFontFamily, which names no font "
+                                          "this project can measure; see "
+                                          "L5-defaults-autofontfamily");
+                    continue;
+                }
+                style.setters.push_back(host.ParseSetter(type, property, text));
+            } catch (const MarkupError& error) {
+                // A property this parser does not have, or a literal it cannot
+                // read. Neither can change a measurement -- nothing here reads
+                // a property that does not exist -- but both are the coverage
+                // gap in its most useful form, one line per missing member.
+                report.dropped_setters.push_back(type + "." + property + ": " + error.what());
+            }
+        }
+
+        if (style.setters.empty()) continue;
+        DefaultControlStyle control_style;
+        control_style.style = std::move(style);
+        registry.Register(type, std::move(control_style));
+        report.applied.push_back(type);
+        ++registered;
+    }
+}
+
+}  // namespace
+
+int LoadDefaultStyles(DefaultStyleRegistry& registry, const std::string& path,
+                      DefaultStyleReport* report) {
+    namespace fs = std::filesystem;
+    std::error_code failure;
+
+    std::vector<fs::path> files;
+    if (fs::is_directory(path, failure)) {
+        for (const auto& entry : fs::directory_iterator(path)) {
+            if (entry.path().extension() == ".json") files.push_back(entry.path());
+        }
+        std::sort(files.begin(), files.end());
+    } else if (fs::is_regular_file(path, failure)) {
+        files.push_back(path);
+    } else {
+        return 0;
+    }
+
+    DefaultStyleReport discard;
+    DefaultStyleReport& into = report ? *report : discard;
+    int registered = 0;
+    for (const fs::path& file : files) {
+        std::ifstream in(file, std::ios::binary);
+        std::ostringstream buffer;
+        buffer << in.rdbuf();
+        const JsonValue document = ParseJson(buffer.str());
+        if (!document.Has("default_styles")) continue;
+        const JsonValue& tables = document.At("default_styles");
+        if (tables.kind != JsonValue::Kind::Object)
+            throw JsonError(file.filename().string() + ": \"default_styles\" is not an object");
+        // The system's table first, then WinUI 2's. Both halves register under
+        // their own target types and the registry refuses a duplicate, so a
+        // type both define -- and there are several, `Button` among them --
+        // is a collision this cannot resolve and must not paper over. WinUI 2's
+        // types are muxc types, spelled the same and not the same type, which
+        // is the whole of why they are held out here rather than merged: this
+        // parser has one namespace, and giving a `Windows.UI.Xaml` Button
+        // WinUI 2's setters would be a wrong number by construction.
+        if (tables.Has("system"))
+            ReadDefaultStyleTable(tables.At("system"), "system", registry, into, registered);
+        if (tables.Has("muxc"))
+            ReadDefaultStyleTable(tables.At("muxc"), "muxc", registry, into, registered);
+    }
+    return registered;
 }
 
 }  // namespace openxaml

@@ -113,6 +113,7 @@ def check(cases: Path, results: Path, tolerance: float,
     matched: list[str] = []
     unverified: list[dict[str, str]] = []
     refuted: list[dict[str, str]] = []
+    awaiting: list[dict[str, str]] = []
     mismatches: list[dict[str, str]] = []
 
     for case_id, case in sorted(by_id.items()):
@@ -128,6 +129,18 @@ def check(cases: Path, results: Path, tolerance: float,
         denied = refuted_by(recorded, case_id, twin_id, tolerance)
         if denied:
             refuted.append(problem(denied[0]))
+            continue
+
+        # A case carrying `oracle_decides` was authored saying the recording,
+        # not self-consistency, is its judge -- its twin may legitimately
+        # differ until the oracle has measured both halves. Holding such a
+        # pair to self-consistency now would demand an answer the corpus
+        # deliberately left open. Once both halves are recorded, the pair is
+        # judged exactly like any other: refuted above, or compared below.
+        if case.get("oracle_decides") and (case_id not in recorded
+                                           or twin_id not in recorded):
+            awaiting.append(problem("declares `oracle_decides` and the oracle "
+                                    "has not recorded both halves yet"))
             continue
 
         if twin_id not in by_id:
@@ -169,13 +182,15 @@ def check(cases: Path, results: Path, tolerance: float,
         "matched": matched,
         "unverified": unverified,
         "refuted": refuted,
+        "awaiting": awaiting,
         "mismatches": mismatches,
         "totals": {
             "pairs": (len(matched) + len(unverified) + len(refuted)
-                      + len({m["id"] for m in mismatches})),
+                      + len(awaiting) + len({m["id"] for m in mismatches})),
             "matched": len(matched),
             "unverified": len(unverified),
             "refuted": len(refuted),
+            "awaiting": len(awaiting),
             "mismatched": len({m["id"] for m in mismatches}),
         },
     }
@@ -184,10 +199,12 @@ def check(cases: Path, results: Path, tolerance: float,
 def summarise(result: dict[str, Any], limit: int = 25) -> str:
     totals = result["totals"]
     lines = [
-        "| twin pairs | agree | not verified here | refuted by the oracle | disagree |",
-        "|---:|---:|---:|---:|---:|",
+        "| twin pairs | agree | not verified here | refuted by the oracle "
+        "| awaiting the oracle | disagree |",
+        "|---:|---:|---:|---:|---:|---:|",
         f"| {totals['pairs']} | {totals['matched']} | {totals['unverified']} "
-        f"| {totals.get('refuted', 0)} | {totals['mismatched']} |",
+        f"| {totals.get('refuted', 0)} | {totals.get('awaiting', 0)} "
+        f"| {totals['mismatched']} |",
         "",
         "Self-consistency only: a pair that agrees says the value reached the "
         "property, not that the layout is right. The oracle says that.",
@@ -199,6 +216,14 @@ def summarise(result: dict[str, Any], limit: int = 25) -> str:
                   "`check_layout.py` holds both halves to the recording instead.",
                   ""]
         for item in result["refuted"][:limit]:
+            lines.append(f"- `{item['id']}` vs `{item['twin']}` — {item['detail']}")
+    if result.get("awaiting"):
+        lines += ["", f"### Awaiting the oracle ({len(result['awaiting'])})", "",
+                  "These pairs declare `oracle_decides`: the corpus authored "
+                  "them as questions, and until the oracle records both halves "
+                  "their disagreement is the open question restated, not a "
+                  "defect.", ""]
+        for item in result["awaiting"][:limit]:
             lines.append(f"- `{item['id']}` vs `{item['twin']}` — {item['detail']}")
     if result["unverified"]:
         lines += ["", f"### Not verified here ({len(result['unverified'])})", "",

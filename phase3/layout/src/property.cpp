@@ -88,6 +88,10 @@ const PropertyValue* DependencyObject::OwnValue(const DependencyProperty& proper
     // slot means.
     const auto styled = style_.find(property.index());
     if (styled != style_.end()) return &styled->second;
+    // And the framework's own style below that, which is where a Control's
+    // Padding, MinHeight and FontSize come from when nothing else says.
+    const auto built_in = built_in_style_.find(property.index());
+    if (built_in != built_in_style_.end()) return &built_in->second;
     return nullptr;
 }
 
@@ -180,6 +184,34 @@ void DependencyObject::ClearStyleValues() {
 
 bool DependencyObject::HasStyleValue(const DependencyProperty& property) const {
     return style_.count(property.index()) != 0;
+}
+
+void DependencyObject::SetBuiltInStyleValue(const DependencyProperty& property,
+                                            PropertyValue value) {
+    const PropertyValue before = GetValue(property);
+    built_in_style_[property.index()] = std::move(value);
+    ValueMoved(property, before);
+}
+
+void DependencyObject::ClearBuiltInStyleValues() {
+    if (built_in_style_.empty()) return;
+
+    // Read the before-values while the slots are filled, notify once they are
+    // all gone -- the same whole-style rule ClearStyleValues follows, and for
+    // the same reason.
+    std::vector<std::pair<const DependencyProperty*, PropertyValue>> before;
+    before.reserve(built_in_style_.size());
+    for (const auto& [index, value] : built_in_style_) {
+        const DependencyProperty* property = PropertyByIndex(index);
+        if (!property) throw PropertyError("a built-in style value is filed under no known property");
+        before.emplace_back(property, GetValue(*property));
+    }
+    built_in_style_.clear();
+    for (const auto& [property, was] : before) ValueMoved(*property, was);
+}
+
+bool DependencyObject::HasBuiltInStyleValue(const DependencyProperty& property) const {
+    return built_in_style_.count(property.index()) != 0;
 }
 
 void DependencyObject::SetAnimatedValue(const DependencyProperty& property, PropertyValue value) {
