@@ -66,6 +66,23 @@ That file is committed and CI holds it to reproducing, exactly like the
 inventory: the set is research data about Terminal, and a hand-typed list would
 be wrong the first time Terminal changed an icon.
 
+Two of the `L4-icon` cases are open questions rather than gaps in the harvest,
+and both are refusals in the layout core rather than numbers:
+
+**Where the runtime goes when no named family has the glyph.**
+`L4-icon-rule-mdl2-latin-14` asks Segoe MDL2 Assets for `M`, which it does not
+have, and the oracle answers 10 wide by 14 tall. The 14 is the icon font's line
+box, so that half is settled; the 10 is neither its em nor Segoe UI's `M` at
+that size, which is 12.57. So the runtime fell back past every family the markup
+names, to one chosen by rules nothing here records. Harvesting more families
+would not answer it — knowing *which* font it picked is the missing measurement.
+
+**What a weight the metrics were not read at adds.** `FontWeight="Black"` on a
+square icon is recorded 11 wide at size 10 and 15 at size 14, where the
+unweighted glyph is 10 and 14. More than one rule reproduces both — a whole DIP,
+a twenty-fourth of the em, two percent of it — so two observations do not pin it.
+A third size, or a harvest of the bold face, would.
+
 Two things work differently for an icon font, and both are deliberate:
 
 **A missing glyph is a finding, not a failure.** The two icon families do not

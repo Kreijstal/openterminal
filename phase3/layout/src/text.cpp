@@ -129,7 +129,8 @@ std::string Describe(char32_t code) {
 // corpus separates the two: Segoe UI kerns T before e by -200 units, and at
 // size 12 "Terminal" measures 44.6133, which is the first rule. Snapping the
 // -200 alone gives 44.61.
-std::vector<Glyph> Shape(const std::string& text, const FontMetrics& font, double font_size) {
+std::vector<Glyph> Shape(const std::string& text, const std::string& family,
+                         const FontMetrics& font, double font_size) {
     const std::vector<char32_t> codes = DecodeUtf8(text);
     std::vector<Glyph> glyphs;
     for (size_t index = 0; index < codes.size(); ++index) {
@@ -146,7 +147,16 @@ std::vector<Glyph> Shape(const std::string& text, const FontMetrics& font, doubl
                     Describe(code) + "; only characters the corpus measures alone are "
                     "solvable, so this case needs the harvested metrics");
             }
-            throw TextError("the harvested font metrics have no advance for " + Describe(code));
+            // No family in the list has the character, and the runtime does not
+            // stop there: L4-icon-rule-mdl2-latin-14 asks Segoe MDL2 Assets for
+            // 'M' and the oracle answers 10 wide, which is neither the icon
+            // font's em (14) nor Segoe UI's M at that size (12.57). So it fell
+            // back past every family the markup names, to a font chosen by
+            // rules this corpus records nothing about. Refusing is the only
+            // honest answer until a case measures which font that is.
+            throw TextError("no family in \"" + family + "\" has an advance for " +
+                            Describe(code) + "; the runtime falls back past the families "
+                            "a FontFamily names and this corpus harvests only those");
         }
         const double pair = index + 1 < codes.size()
                                 ? font.PairAdjustment(code, codes[index + 1])
@@ -343,7 +353,7 @@ Size TextBlock::LayoutText(double limit) const {
     // records both: 15.9609 empty against 15.96 with text, at size 12.
     if (content.empty()) return {0.0, AsFloat(spacing)};
 
-    const std::vector<Glyph> glyphs = Shape(content, *font, size);
+    const std::vector<Glyph> glyphs = Shape(content, family, *font, size);
     const double effective_limit = text_wrapping() == TextWrapping::Wrap ? limit : kInfinity;
     const std::vector<double> lines = BreakLines(glyphs, effective_limit);
 
