@@ -108,16 +108,26 @@ add_executable(error_hygiene_test tests/error_hygiene_test.cpp)
 target_include_directories(error_hygiene_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../harness)
 add_test(NAME error_hygiene COMMAND error_hygiene_test)
 
-# What a directive does, and what it refuses to do. A deferred element measures
-# nothing by definition, so the corpus cannot hold this to anything: "the
-# element is absent" and "the element is there but zero-sized" produce different
-# trees, and only a test can say which one this is.
+# What a directive does, and what it refuses to do. The corpus settled deferral
+# -- a runtime load ignores x:Load and realises the element -- but it cannot
+# settle a refusal, and the refusals are most of this file: markup that fails to
+# load has no measurement to compare against.
 add_executable(xdirective_tests
     tests/xdirectives_test.cpp
     src/markup.cpp
 )
 target_link_libraries(xdirective_tests PRIVATE openxaml_layout)
 add_test(NAME xdirectives COMMAND xdirective_tests)
+
+# Two rules the corpus states in one number each: the layout-rounding tie-break
+# and ContentControl's content alignment. Both are measured, so this is not a
+# second authority -- it is the rule written out as arithmetic, so that a change
+# to either one is a deliberate edit rather than a case that quietly moves.
+add_executable(layout_rules_tests
+    tests/layout_rules_test.cpp
+)
+target_link_libraries(layout_rules_tests PRIVATE openxaml_layout)
+add_test(NAME layout_rules COMMAND layout_rules_tests)
 
 add_executable(wave3_tests tests/wave3_test.cpp src/markup.cpp)
 target_link_libraries(wave3_tests PRIVATE openxaml_layout)
@@ -143,6 +153,7 @@ if(MSVC)
     target_compile_options(probe_text_test PRIVATE /W4)
     target_compile_options(error_hygiene_test PRIVATE /W4)
     target_compile_options(xdirective_tests PRIVATE /W4)
+    target_compile_options(layout_rules_tests PRIVATE /W4)
     target_compile_options(wave3_tests PRIVATE /W4)
     target_compile_options(wave4_tests PRIVATE /W4)
     target_compile_options(windows_xaml_completion_tests PRIVATE /W4)
@@ -155,6 +166,7 @@ else()
     target_compile_options(probe_text_test PRIVATE -Wall -Wextra)
     target_compile_options(error_hygiene_test PRIVATE -Wall -Wextra)
     target_compile_options(xdirective_tests PRIVATE -Wall -Wextra)
+    target_compile_options(layout_rules_tests PRIVATE -Wall -Wextra)
     target_compile_options(wave3_tests PRIVATE -Wall -Wextra)
     target_compile_options(wave4_tests PRIVATE -Wall -Wextra)
     target_compile_options(windows_xaml_completion_tests PRIVATE -Wall -Wextra)

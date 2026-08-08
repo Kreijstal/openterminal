@@ -1,14 +1,6 @@
 // The x: directives, and the shape of the tree each one leaves behind.
 //
-// Three things here cannot be a corpus case, and each for its own reason.
-//
-// **Deferral.** An element with x:Load="False" is supposed to be absent. Absent
-// and "present but zero-sized" are different trees, and the corpus compares
-// trees node by node -- but only against a *recorded* measurement, and the
-// runtime has not answered this one yet. Until it does, the corpus asks the
-// question (L5-xdirectives-*) and this file pins what we do in the meantime, so
-// that "provisional" means a decision that is written down rather than one that
-// drifts.
+// Two things here cannot be a corpus case, and each for its own reason.
 //
 // **x:Uid with a table.** No case in the corpus loads a string table, because
 // the oracle probe has no resource map and a case measured against a table one
@@ -104,18 +96,26 @@ void Primitives() {
                         "</Border.Width></Border>"),
                60.0);
 
-    // The widening the resource path already commits to, reached the other way.
-    ChildWidth("an x:Int32 widens into a Double property",
-               Document("Border", "",
-                        "<Border Height=\"30\"><Border.Width><x:Int32>60</x:Int32>"
-                        "</Border.Width></Border>"),
-               60.0);
-
     ChildWidth("XAML trims the whitespace an indented primitive is written with",
                Document("Border", "",
                         "<Border Height=\"30\"><Border.Width><x:Double>\n  60\n  </x:Double>"
                         "</Border.Width></Border>"),
                60.0);
+
+    // There is no widening. L5-xprimitives-int32-width is recorded as a load
+    // failure -- the runtime refused it with 0x802b000a -- so an Int32 does not
+    // reach a Double property even though every value it can hold would fit.
+    // Its Integer properties are a different question and are answered the
+    // other way: L5-resources-int32-attached measures an x:Int32 into
+    // Grid.Column and Grid.ColumnSpan.
+    Rejects("an x:Int32 does not satisfy a Width",
+            Document("Border", "",
+                     "<Border Height=\"30\"><Border.Width><x:Int32>60</x:Int32>"
+                     "</Border.Width></Border>"),
+            "<x:Int32> cannot supply 'Width'");
+
+    ChildWidth("and the same value written as an attribute is still a Double",
+               Document("Border", "", "<Border Height=\"30\" Width=\"60\"/>"), 60.0);
 
     // The check that makes this more than text substitution.
     Rejects("an x:String does not satisfy a Width",
@@ -156,11 +156,16 @@ void Primitives() {
 // --- x:Load and x:DeferLoadStrategy -------------------------------------------
 
 void Deferral() {
-    HasChildren("x:Load=\"False\" leaves the element out of the tree",
+    // The runtime answered, and the answer is that a XamlReader load does not
+    // defer at all. L5-xdirectives-load-false-sibling records a StackPanel with
+    // three 18-high children as 54 high, and load-false-only-child records the
+    // deferring child of a Border at its full 30 x 18. Deferral is the XAML
+    // compiler's, and there is no compiler in front of a string.
+    HasChildren("x:Load=\"False\" is understood and does not defer anything",
                 Document("StackPanel", "",
                          "<Border Width=\"10\" Height=\"10\"/>"
                          "<Border x:Load=\"False\" Width=\"10\" Height=\"10\"/>"),
-                1);
+                2);
 
     HasChildren("x:Load=\"True\" is the ordinary case and changes nothing",
                 Document("StackPanel", "",
@@ -170,27 +175,30 @@ void Deferral() {
     HasChildren("x:DeferLoadStrategy=\"Lazy\" is the older spelling of the same thing",
                 Document("StackPanel", "",
                          "<Border x:DeferLoadStrategy=\"Lazy\" Width=\"10\" Height=\"10\"/>"),
-                0);
+                1);
 
-    // The subtree goes with it: it was attached to an element that was dropped.
-    HasChildren("a deferred element takes its children with it",
+    // The subtree stays with it, because it stays.
+    HasChildren("the children of a deferring element load with it",
                 Document("StackPanel", "",
                          "<Border x:Load=\"False\"><StackPanel><Border Width=\"10\"/>"
                          "</StackPanel></Border>"),
-                0);
+                1);
 
-    // Nothing here can bring one back, and the corpus has no code-behind to do
-    // it, so a deferred element stays deferred for the whole measurement.
-    HasChildren("a deferred element inside a realised one is still absent",
+    HasChildren("a deferring element inside a realised one loads too",
                 Document("StackPanel", "",
                          "<Border><StackPanel><Border x:Load=\"False\" Width=\"10\"/>"
                          "</StackPanel></Border>"),
                 1);
 
-    Rejects("a deferred root realises nothing, and says so",
-            Document("Border", "x:Load=\"False\"", "<Border Width=\"10\"/>"),
-            "defers its own creation");
+    // No case records a deferring root, but it takes the same rule: the
+    // directive instructs a compiler that is not here, so the root loads.
+    HasChildren("a deferring root loads, like every other deferring element",
+                Document("Border", "x:Load=\"False\"", "<Border Width=\"10\"/>"), 1);
 
+    // The value is still read. A directive whose value this parser cannot make
+    // sense of is a named refusal rather than a silently ignored attribute --
+    // the runtime is not recorded refusing these, but a wrong number is worse
+    // than a refusal, and "x:Load=0" quietly meaning nothing hides a typo.
     Rejects("x:Load takes a Boolean",
             Document("StackPanel", "", "<Border x:Load=\"Maybe\"/>"),
             "x:Load takes True or False");

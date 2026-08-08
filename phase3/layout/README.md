@@ -177,12 +177,12 @@ at all come from, and where `FontSize` on a `StackPanel` is refused — with the
 message the real runtime gives, which is the whole reason the corpus has that
 case.
 
-Fourteen of L0's eighteen cases have no measurement yet. They are the questions
-the four measured ones leave open — precedence when a local value equals the
-default, inheritance through an element that does not declare the property, the
-nearest of two ancestors — and three of them settle things this code currently
-guesses at: whether `UseLayoutRounding` inherits, and how a tie at exactly `.5`
-breaks. Until the next oracle run they are pending, and pending is not passing.
+All eighteen L0 cases are measured now, and all eighteen match. Three of them
+settled things this code used to guess at: `UseLayoutRounding` does inherit, a
+tie at exactly `.5` rounds **up** rather than to even, and a `ContentControl`
+does **not** stretch content it was not told to — its content alignment defaults
+to Left/Top, so the content is arranged at its own desired size inside the
+padding rect.
 
 Two things the property system does that no case can ever check, because a
 measurement is a tree of numbers: that a value was inherited rather than copied,
@@ -356,14 +356,23 @@ satisfy a `Width` whether it came out of a dictionary or was written in place.
 The `L5-xprimitives` cases twin each one against the attribute spelling.
 
 **Deferral.** `x:Load="False"` and `x:DeferLoadStrategy="Lazy"` describe an
-element that is not created. Here it is absent: not attached to its parent,
-measured by nothing, occupying no slot — and nothing can bring it back, because
-both directives are realised by a code-behind asking for the element by name and
-a `XamlReader.Load` has none. **That is a provisional reading.** x:Load is a
-compiled-markup feature, the runtime may honour it, ignore it or refuse the
-markup, and those are three different trees; `L5-xdirectives-*` asks, and
-[`tests/xdirectives_test.cpp`](tests/xdirectives_test.cpp) pins what we do in
-the meantime so that "provisional" means written down rather than drifting.
+element that is not created — and a runtime load creates it anyway. The
+directive is a *compiled*-markup feature: the XAML compiler generates the code
+that realises the element on demand, and a load from a string never went through
+it. `L5-xdirectives-load-false-sibling` records a `StackPanel` with three
+18-high children as 54 high, `defer-load-strategy-lazy` records two as 36, and
+`load-false-only-child` records the deferring single child of a `Border` at its
+full 30 × 18. So both directives are read, checked against each other, and then
+not acted on. The value is still parsed: an `x:Load` this parser cannot read is
+a named refusal, because `x:Load="0"` quietly meaning nothing hides a typo.
+
+**No widening.** `<Border.Width><x:Int32>60</x:Int32></Border.Width>` is
+refused, not converted. `L5-xprimitives-int32-width` is recorded as a load
+failure (`0x802b000a`), so an `Int32` does not reach a `Double` property even
+though every value it can hold would fit; `L5-resources-int32-attached` measures
+the same primitive into `Grid.Column` and `Grid.ColumnSpan`, which is the
+assignment that does work. Both spellings — the reference and the property
+element — go through the one shape check, so both refuse it in the same words.
 
 **`x:Uid`.** A uid is a key into a localised string table, and a standalone load
 has no resource map — so by default a uid resolves to nothing and sets nothing,
@@ -524,10 +533,14 @@ does not do, so that a passing run is not read as more than it is:
   `MaxDiscrepancy` rework. The corpus does not distinguish them: it has no
   definition-level `MinWidth`/`MaxWidth`, which is the only thing they disagree
   about.
-- **Round-half-to-even is unconfirmed**, and so is whether `UseLayoutRounding`
-  inherits. Both are the ported behaviour rather than a measured one.
-  `L0-props-rounding-half` and `L0-props-rounding-inherited` are the cases
-  authored to settle them, and neither has a measurement yet.
+- **Layout rounding breaks ties upward**, which is measured and is not what the
+  ported source does. `L0-props-rounding-half` records `Width="120.5"` as 121
+  and `L5-xprimitives-boolean-rounding` records a 60.5 × 30.5 child as 61 × 31
+  through a rounding parent; round-half-to-even answers 120, 60 and 30. Only
+  positive ties are recorded, so the negative direction is `floor(v + 0.5)`
+  rather than a symmetric round-half-away — one rule, no second case needed.
+  `L0-props-rounding-inherited` settled the other half: `UseLayoutRounding`
+  inherits.
 - **`Application.Resources` holds WinUI 2's half and not the OS's.** A lookup
   walks the element, its ancestors, and then the extracted dictionary. What is
   missing from the tail of that chain is the OS's own `Windows.UI.Xaml`
@@ -570,7 +583,14 @@ does not do, so that a passing run is not read as more than it is:
 
 Answers this code gives that nothing has yet checked. All of them have
 generated cases waiting for the next oracle run, and until that run they are
-neither passing nor failing:
+neither passing nor failing.
+
+Three rows have left this table. `L0-props`, `L5-xprimitives` and
+`L5-xdirectives` are measured and matching in full: the rounding tie,
+`UseLayoutRounding` inheritance, what a `ContentControl` does with content it is
+not stretching, whether an `x:Int32` reaches a `Double` property, and whether a
+runtime load honours `x:Load` are answered above rather than open here. The rest
+of the table is as it stood.
 
 | group | cases | the question |
 |---|---:|---|
@@ -582,14 +602,11 @@ neither passing nor failing:
 | `L5-styles` | 50 | the level has no measurement at all either, and six of them ask a question outright — see below |
 | `L5-resources` | 40 | every one of them: the level has no measurement at all |
 | `L7-terminal` | 21 | does a bare `XamlReader.Load` reach `Application.Resources` — the cases the dictionary unblocked depend on the answer |
-| `L5-xprimitives` | 17 | does a primitive written as an object element reach a typed property, and does an `x:String` convert to an enum? |
-| `L0-props` | 14 | does `UseLayoutRounding` inherit, how does a tie at `.5` break, and what does a `ContentControl` do with content it is not stretching? |
 | `L5-theme` | 13 | the same question the 21 above ask, asked directly: is WinUI 2's dictionary in the probe's host or only the OS's? |
 | `L4-source` | 6 | is `Text="x"` the same thing as `<TextBlock>x</TextBlock>`? |
-| `L5-xdirectives` | 6 | does a runtime load honour `x:Load` at all, and does it tolerate an `x:Uid` with no resource map? |
 
 `L3-scroll` and `L4-icon` are a different kind of open from the rest.
-`L3-canvas`, `L1-shape`, `L2-content`, `L0-props`, `L4-source` and all five L5
+`L3-canvas`, `L1-shape`, `L2-content`, `L4-source` and the remaining L5
 groups check answers this code already gives; those two measure types
 it refuses to give one for at all, so they cannot fail on a number — only on
 the refusal — and they exist so that the next version of this file can move

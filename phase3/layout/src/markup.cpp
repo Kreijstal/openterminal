@@ -1288,11 +1288,6 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
     // Open elements, innermost last. The root is held separately so it can be
     // returned by value once the stack empties.
     std::vector<MarkupNode> open;
-    // Which of those are deferred, in step with `open`. Alongside rather than
-    // on the node, because deferral is a fact about the parse and not about the
-    // tree: a deferred element never reaches the tree, so a field recording it
-    // there would be false in every node that survives.
-    std::vector<bool> deferred;
     // The property element currently being filled, e.g. Grid.ColumnDefinitions.
     // Empty when ordinary child elements are expected.
     std::string property_element;
@@ -1407,15 +1402,8 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
             if (open.empty()) throw MarkupError("</" + tag.name + "> with nothing open");
             MarkupNode finished = std::move(open.back());
             open.pop_back();
-            const bool was_deferred = deferred.back();
-            deferred.pop_back();
             if (tag.name != finished.type)
                 throw MarkupError("</" + tag.name + "> does not close the open element");
-            // A deferred element is described and then dropped: it is not
-            // attached, so it is measured by nothing and occupies no slot. Its
-            // subtree went with it, having been attached to it. Nothing will
-            // measure it, so it is not worth an implicit style lookup either.
-            if (was_deferred) continue;
             finish_node(finished);
             if (open.empty()) {
                 root = std::move(finished);
@@ -1631,16 +1619,7 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
         }
         ApplyNodeAttributes(node, attributes, scope());
 
-        // A deferred root would realise nothing at all, and a measurement of
-        // nothing is not a measurement. Named here rather than left to produce
-        // an empty tree that reads like a parser bug.
-        if (directives.deferred && open.empty() && !have_root) {
-            throw MarkupError("the root <" + tag.name +
-                              "> defers its own creation, so this markup realises no element");
-        }
-
         if (tag.self_closing) {
-            if (directives.deferred) continue;
             finish_node(node);
             if (open.empty()) {
                 root = std::move(node);
@@ -1650,7 +1629,6 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
             }
         } else {
             open.push_back(std::move(node));
-            deferred.push_back(directives.deferred);
         }
     }
 
