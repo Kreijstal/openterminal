@@ -84,6 +84,15 @@ public:
 
     void SetContent(std::unique_ptr<Element> content);
 
+    // The runtime's Content is one `object` property holding either a UIElement
+    // or a value the template's ContentPresenter displays. The two are separate
+    // here because only the first is a child of anything: `<Button>Create</Button>`
+    // sets the second kind, and L7-terminal-0e66f8e18d records that kind as
+    // neither a node in the tree nor a contribution to the measured size.
+    const std::string& content_text() const { return GetString(ContentProperty()); }
+    void set_content_text(std::string value) { SetValue(ContentProperty(), std::move(value)); }
+    static const DependencyProperty& ContentProperty();
+
     std::vector<Element*> Children() const override {
         if (!content_) return {};
         return {content_.get()};

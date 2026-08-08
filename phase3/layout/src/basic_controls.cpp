@@ -61,11 +61,20 @@ ToolTip::ToolTip() {
     SetStyleValue(FontSizeProperty(), 12.0);
 }
 
+// What the runtime's default Button template adds around the content, as the
+// corpus's one Button records it. L7-terminal-0e66f8e18d measures
+// `<Button Grid.Row="0">Create</Button>` at three available sizes and answers
+// 20 x 32 every time, with the panel beside it 420 wide against a 400-wide
+// TextBox -- so the 20 is real and the string inside is not in it.
+//
+// Content that measures nothing therefore leaves 20 across and 32 down. Which
+// part of the 32 is chrome and which is the style's minimum height is not
+// something one Button can say, and neither is what the horizontal 20 is made
+// of; the recorded sum is what is written here, as a width the chrome adds and
+// a height it will not go below.
 Size Button::MeasureOverride(Size available) {
     const Size content = ContentControl::MeasureOverride(available);
-    const Thickness p{12, 6, 12, 6};
-    return {std::max(64.0, content.width + p.horizontal()),
-            std::max(32.0, content.height + p.vertical())};
+    return {content.width + 20.0, std::max(32.0, content.height)};
 }
 
 Size Button::ArrangeOverride(Size final_size) {

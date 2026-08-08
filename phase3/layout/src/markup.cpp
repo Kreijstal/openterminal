@@ -1142,9 +1142,11 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node, ObservableObject* 
         if (!node.children.empty()) {
             button->SetContent(BuildElement(node.children.front(), binding_source, namescope));
         } else if (!node.text.empty()) {
-            auto label = std::make_unique<TextBlock>();
-            label->set_text(node.text);
-            button->SetContent(std::move(label));
+            // Not a TextBlock. The runtime sets Content to the string itself,
+            // and L7-terminal-0e66f8e18d records what that is worth: no node
+            // under the Button, and a Button 20 wide around a word that is 41
+            // wide on its own.
+            button->set_content_text(node.text);
         }
         element = std::move(button);
     } else if (node.type == "TextBox") {

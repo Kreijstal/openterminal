@@ -165,6 +165,44 @@ void AToolTipCarriesTheRecordedDefaultStyle() {
     CHECK(tooltip.font_size() == 30.0);
 }
 
+// What a string handed to a ContentControl is worth, which is nothing.
+//
+// L7-terminal-0e66f8e18d holds `<Button Grid.Row="0">Create</Button>` beside a
+// 400-wide TextBox in a horizontal StackPanel, and the oracle records the
+// Button 20 x 32 at all three available sizes, with no node under it and the
+// panel 420 wide. "Create" in Segoe UI at 14 is 41 wide on its own, so the
+// string is not in the 20: the runtime's Content is an `object`, the probe's
+// walk only descends into one that is a UIElement, and a measurement detached
+// from a live tree never turns this one into anything with a size.
+//
+// So 20 is the whole of the Button's chrome, and 32 is what the recording
+// gives a Button whose content asks for nothing. Which part of 32 is chrome
+// and which is the style's minimum height, no recording says; the corpus has
+// exactly one Button in it.
+void AStringContentIsNeitherANodeNorASize() {
+    std::unique_ptr<Element> loaded =
+        LoadMarkup(std::string("<Button") + kXamlNamespaces + " Grid.Row=\"0\">Create</Button>");
+    auto* button = dynamic_cast<Button*>(loaded.get());
+    CHECK(button != nullptr);
+    CHECK(button->content_text() == "Create");
+    CHECK(button->Children().empty());
+    CHECK(button->RecordedChildren().empty());
+
+    // The width a horizontal StackPanel measures its children with.
+    button->Measure({kInfinity, 300.0});
+    CHECK(button->desired_size().width == 20.0);
+    CHECK(button->desired_size().height == 32.0);
+
+    // Content that *is* an element still measures, and still shows through the
+    // same chrome.
+    std::unique_ptr<Element> sized = LoadMarkup(
+        std::string("<Button") + kXamlNamespaces + "><Border Width=\"10\" Height=\"40\"/></Button>");
+    sized->Measure({kInfinity, 300.0});
+    CHECK(sized->desired_size().width == 30.0);
+    CHECK(sized->desired_size().height == 40.0);
+    CHECK(sized->RecordedChildren().size() == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -172,6 +210,7 @@ int main() {
     AContentControlsElementContentIsRecorded();
     ARenderTransformDoesNotReachLayout();
     AToolTipCarriesTheRecordedDefaultStyle();
+    AStringContentIsNeitherANodeNorASize();
     std::cout << "terminal subtree rules ok\n";
     return 0;
 }
