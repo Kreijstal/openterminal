@@ -936,6 +936,36 @@ void SkipPropertySubtree(Scanner& scanner, const std::string& property) {
     if (depth) throw MarkupError("<" + property + "> was not closed");
 }
 
+// The Transform types Windows.UI.Xaml has. Named rather than assumed, so that
+// a misspelt one is refused instead of being waved through as layout-inert.
+bool IsTransformType(const std::string& name) {
+    return name == "CompositeTransform" || name == "MatrixTransform" ||
+           name == "RotateTransform" || name == "ScaleTransform" || name == "SkewTransform" ||
+           name == "TranslateTransform" || name == "TransformGroup";
+}
+
+// <Rectangle.RenderTransform><CompositeTransform/></Rectangle.RenderTransform>.
+//
+// A transform is applied to the element's visual once layout has already
+// decided the element's size and position, so it reaches neither MeasureOverride
+// nor ArrangeOverride: L7-terminal-65dec6afa8 carries one and records exactly
+// what the same Rectangle without one records. So the transform is read for its
+// type and then dropped -- there is nothing here to store it in, and storing it
+// would suggest something reads it.
+void ReadTransformPropertyElement(Scanner& scanner, const std::string& property) {
+    Tag transform;
+    if (!scanner.Next(transform) || transform.closing)
+        throw MarkupError("<" + property + "> was given no transform");
+    if (!IsTransformType(transform.name)) {
+        throw MarkupError("<" + property + "> takes a transform, not <" + transform.name +
+                          ">");
+    }
+    if (!transform.self_closing) SkipPropertySubtree(scanner, transform.name);
+    Tag close;
+    if (!scanner.Next(close) || !close.closing || close.name != property)
+        throw MarkupError("<" + property + "> holds one transform");
+}
+
 MarkupDefinition MakeDefinition(const Tag& tag, bool is_column, const ResourceScope& scope) {
     MarkupDefinition definition;
     const std::string size_property = is_column ? "Width" : "Height";
@@ -1474,6 +1504,11 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
                 section = Section::Resources;
             } else if (member == "ContentTransitions") {
                 if (!tag.self_closing) SkipPropertySubtree(scanner, tag.name);
+                continue;
+            } else if (member == "RenderTransform") {
+                if (tag.self_closing)
+                    throw MarkupError("<" + tag.name + "> was given no value");
+                ReadTransformPropertyElement(scanner, tag.name);
                 continue;
             } else if (member == "Template") {
                 section = Section::Template;
