@@ -329,7 +329,8 @@ DERIVATION = (
 
 
 def derive(cases: Path, measurements: Path, family: str,
-           units_per_em: int = DEFAULT_UNITS_PER_EM) -> dict:
+           units_per_em: int = DEFAULT_UNITS_PER_EM,
+           harvested_advances: dict[int, int] | None = None) -> dict:
     samples = collect(cases, measurements, family)
     if not samples:
         raise DerivationError(
@@ -338,7 +339,11 @@ def derive(cases: Path, measurements: Path, family: str,
     spacing = solve_line_spacing(samples, units_per_em)
     advances, unsolved = solve_advances(samples, units_per_em)
 
-    return {
+    kerning = None
+    if harvested_advances is not None:
+        kerning = solve_pair_adjustments(samples, harvested_advances, units_per_em)
+
+    metrics = {
         "schema_version": 1,
         "family": family,
         "provenance": "derived",
@@ -355,62 +360,97 @@ def derive(cases: Path, measurements: Path, family: str,
         # This is the list of characters the real harvest is needed for.
         "unsolved": unsolved,
     }
+    if kerning is not None:
+        # Which pairs the runtime applies, which is a measurement and not a
+        # reading. The font's own table says more than this and the recorded
+        # runs prove the extra was not applied, so the layout core is given
+        # this and never the font's -- see phase3/xaml-db/fonts/README.md.
+        metrics["kerning"] = {pair_key(left, right): value
+                              for (left, right), value in sorted(kerning.items())}
+    return metrics
 
 
 def render(metrics: dict) -> str:
     return json.dumps(metrics, indent=1, sort_keys=True) + "\n"
 
 
-# --- the kern table, checked rather than derived ------------------------------
+# --- the committed kerning, held to fresh measurements ------------------------
 
 
 def pair_key(left: str, right: str) -> str:
-    """How a harvest spells a pair: the two decimal codepoints, comma joined."""
+    """How a metrics file spells a pair: two decimal codepoints, comma joined."""
     return f"{ord(left)},{ord(right)}"
 
 
-def check_kerning(cases: Path, measurements: Path, harvest: dict) -> list[str]:
-    """Hold a harvested kern table to what the recorded runs imply.
+def read_pairs(kerning: dict[str, int]) -> dict[tuple[str, str], int]:
+    """The stored spelling back into character pairs."""
+    out = {}
+    for key, value in kerning.items():
+        left, right = (chr(int(part)) for part in key.split(","))
+        out[(left, right)] = value
+    return out
 
-    The mirror of `harvest_font_metrics.py --expect`, for the one metric that
-    cannot be solved without the harvest: the corpus needs the advances before
-    it can say anything about a pair, so this reads them out of the harvest and
-    then asks the measurements what is left over. A font whose kern table
-    disagrees is the same finding as an advance that disagrees -- either the
-    rules in text.cpp are wrong or the font is not the one that was measured --
-    and it is a failure either way.
+
+def check_kerning(cases: Path, measurements: Path, advances: dict[int, int],
+                  family: str, units_per_em: int,
+                  committed: dict[tuple[str, str], int]) -> list[str]:
+    """Hold the committed pair adjustments to what fresh measurements say.
+
+    Both directions, because both have already been wrong once. The first run
+    to read a real font's kern tables put every pair it found into the metrics,
+    and four of them -- ox, ro, ve, rm -- are pairs the recorded pangram proves
+    the runtime did not apply. So:
+
+      * every recorded run has to come out right *with* the committed pairs
+        applied, which catches a pair that is missing or has the wrong value;
+      * and every committed pair has to be load-bearing, which catches a pair
+        the runs do not witness at all. A pair that could be dropped without
+        moving a single recorded number is not something the measurements
+        imply, whatever the font says about it.
+
+    The advances come from the harvest, because a word constrains their sum and
+    not any one of them, so there is nothing to solve against without them.
     """
-    advances = {int(codepoint): advance
-                for codepoint, advance in harvest["advances"].items()}
-    samples = collect(cases, measurements, harvest["family"])
+    samples = collect(cases, measurements, family)
     if not samples:
-        return [f"no recorded lone-TextBlock case uses {harvest['family']!r}"]
+        return [f"no recorded lone-TextBlock case uses {family!r}"]
+    usable = [s for s in samples
+              if not s.wraps and len(s.text) > 1
+              and all(ord(c) in advances for c in s.text)]
+    if not usable:
+        return [f"no unwrapped run of two or more harvested characters was recorded "
+                f"for {family!r}; nothing constrains any pair"]
 
-    try:
-        implied = solve_pair_adjustments(samples, advances, harvest["units_per_em"])
-    except DerivationError as failure:
-        return [str(failure)]
+    def disagreeing(kerning):
+        return [s for s in usable
+                if not agrees(run_width(s.text, advances, kerning, units_per_em,
+                                        s.font_size), s.width)]
 
-    found = harvest.get("kerning", {})
-    problems = []
-    for (left, right), value in sorted(implied.items()):
-        key = pair_key(left, right)
-        if found.get(key) != value:
-            problems.append(f"pair {left}{right}: the font says {found.get(key)}, "
-                            f"the oracle implies {value}")
-    # The other direction only for pairs the corpus can see. A font kerns
-    # thousands of pairs and the corpus measures two words; a pair no recorded
-    # run contains is not a disagreement, it is simply unmeasured.
-    measured = {pair_key(s.text[i], s.text[i + 1])
-                for s in samples if not s.wraps
-                for i in range(len(s.text) - 1)}
-    implied_keys = {pair_key(left, right) for left, right in implied}
-    for key in sorted(measured & set(found)):
-        if key not in implied_keys and found[key]:
-            left, right = (chr(int(part)) for part in key.split(","))
-            problems.append(f"pair {left}{right}: the font says {found[key]}, "
-                            f"the oracle implies the runs containing it need no "
-                            f"adjustment at all")
+    problems: list[str] = []
+
+    wrong = disagreeing(committed)
+    for sample in wrong:
+        predicted = run_width(sample.text, advances, committed, units_per_em,
+                              sample.font_size)
+        problems.append(f"{sample.case_id}: {sample.text!r} at {sample.font_size} measures "
+                        f"{sample.width}, the committed pairs predict {predicted:.4f}")
+    if wrong:
+        # Say what would have worked, when a single pair would have.
+        try:
+            implied = solve_pair_adjustments(samples, advances, units_per_em)
+        except DerivationError as failure:
+            problems.append(f"and no single pair explains the difference: {failure}")
+        else:
+            listed = ", ".join(f"{left}{right} {value:+d}"
+                               for (left, right), value in sorted(implied.items()))
+            problems.append(f"the recorded runs imply {listed or 'no adjustment at all'}")
+
+    for pair in sorted(committed):
+        without = {k: v for k, v in committed.items() if k != pair}
+        if not disagreeing(without):
+            problems.append(
+                f"pair {pair[0]}{pair[1]} {committed[pair]:+d}: no recorded run moves when it "
+                f"is dropped, so the measurements do not witness it")
     return problems
 
 
@@ -429,50 +469,77 @@ def main(argv: list[str] | None = None) -> int:
                                  / "fonts" / "derived" / "segoe-ui.json"))
     parser.add_argument("--check", action="store_true",
                         help="verify --output already holds what the measurements "
-                             "imply, and change nothing")
-    parser.add_argument("--check-kerning", type=Path, default=None,
-                        help="a harvested metrics file; hold its kern table to the "
-                             "pair adjustment the recorded runs imply, and derive "
-                             "nothing. Needs the harvest because a word constrains "
-                             "the sum of its advances and not any one of them")
+                             "imply, and change nothing. The kerning is left to "
+                             "--check-kerning, which needs the harvest")
+    parser.add_argument("--advances-from", type=Path, default=None,
+                        help="a harvested metrics file. Kerning needs it: a word "
+                             "constrains the sum of its advances and not any one of "
+                             "them, so there is nothing to solve a pair against until "
+                             "the harvest supplies them")
+    parser.add_argument("--check-kerning", action="store_true",
+                        help="hold --output's committed pair adjustments to the "
+                             "recorded runs, in both directions, and derive nothing. "
+                             "Requires --advances-from")
     args = parser.parse_args(argv)
 
+    harvested_advances = None
+    if args.advances_from:
+        harvest = json.loads(args.advances_from.read_text(encoding="utf-8"))
+        harvested_advances = {int(codepoint): advance
+                              for codepoint, advance in harvest["advances"].items()}
+
     if args.check_kerning:
-        harvest = json.loads(args.check_kerning.read_text(encoding="utf-8"))
-        problems = check_kerning(args.cases, args.measurements, harvest)
+        if harvested_advances is None:
+            print("--check-kerning needs --advances-from: without the advances a "
+                  "recorded word says nothing about any pair", file=sys.stderr)
+            return 2
+        stored = json.loads(args.output.read_text(encoding="utf-8"))
+        problems = check_kerning(args.cases, args.measurements, harvested_advances,
+                                 args.family, stored["units_per_em"],
+                                 read_pairs(stored.get("kerning", {})))
         if problems:
-            print(f"::error::{args.check_kerning} disagrees with what the recorded "
-                  f"measurements imply about kerning", file=sys.stderr)
+            print(f"::error::{args.output} is not the kerning the recorded "
+                  f"measurements imply", file=sys.stderr)
             for problem in problems:
                 print(f"  {problem}", file=sys.stderr)
             return 1
-        print(f"{harvest['family']}: the kern table agrees with the recorded runs",
-              file=sys.stderr)
+        print(f"{args.family}: the committed pair adjustments reproduce every "
+              f"recorded run and every one of them is witnessed", file=sys.stderr)
         return 0
 
     try:
-        metrics = derive(args.cases, args.measurements, args.family, args.units_per_em)
+        metrics = derive(args.cases, args.measurements, args.family, args.units_per_em,
+                         harvested_advances)
     except DerivationError as failure:
         print(f"cannot derive metrics for {args.family!r}: {failure}", file=sys.stderr)
         return 1
 
-    body = render(metrics)
     if args.check:
         if not args.output.exists():
             print(f"{args.output} does not exist; the derived metrics are committed",
                   file=sys.stderr)
             return 1
+        stored = json.loads(args.output.read_text(encoding="utf-8"))
+        # Kerning has its own gate, because it is the one field that cannot be
+        # derived without a harvest and this check has to work on a machine with
+        # no font. Carrying the stored value through compares everything else
+        # byte for byte, which is what pins the formatting too.
+        compared = dict(metrics)
+        if "kerning" in stored and "kerning" not in compared:
+            compared["kerning"] = stored["kerning"]
+        body = render(compared)
         if args.output.read_text(encoding="utf-8") != body:
             print(f"::error::{args.output} is not what the recorded measurements imply",
                   file=sys.stderr)
-            stored = json.loads(args.output.read_text(encoding="utf-8"))
-            for field in ("units_per_em", "hhea", "advances", "unsolved"):
-                if stored.get(field) != metrics[field]:
+            for field in ("units_per_em", "hhea", "advances", "unsolved", "kerning"):
+                if field in compared and stored.get(field) != compared[field]:
                     print(f"  {field}: committed {stored.get(field)}, "
-                          f"measurements imply {metrics[field]}", file=sys.stderr)
+                          f"measurements imply {compared[field]}", file=sys.stderr)
             return 1
         print(f"{args.output.name} matches what the measurements imply", file=sys.stderr)
         return 0
+
+    body = render(metrics)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(body, encoding="utf-8")

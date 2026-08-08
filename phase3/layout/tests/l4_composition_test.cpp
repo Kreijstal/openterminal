@@ -12,7 +12,9 @@
 #include <string>
 
 #include "border.h"
+#include "fonts.h"
 #include "icon.h"
+#include "json.h"
 #include "text.h"
 
 using namespace openxaml;
@@ -174,6 +176,58 @@ void KerningJoinsTheAdvanceBeforeItSnaps() {
     CHECK(Near(text.render_size().width, 12.563333));
 }
 
+// Which pairs the runtime applies is a measurement, not a reading, so a
+// harvested file may not claim it. This is not tidiness: the runner's Segoe UI
+// kerns "ox", "ro", "ve" and "rm", and the recorded pangram containing the
+// first three measures the raw sum of its advances -- so a layout core that
+// installed the font's table would measure those cases too narrow. The refusal
+// is what stops a harvest written before that was understood from loading.
+void AHarvestedFileMayNotClaimKerning() {
+    const std::string body =
+        R"({"family": "Refused", "provenance": "harvested", "units_per_em": 2048,
+            "hhea": {"ascender": 2210, "descender": -514, "line_gap": 0},
+            "advances": {"77": 1839}, "kerning": {"84,101": -200}})";
+    bool refused = false;
+    try {
+        ParseFontMetrics(body, "refused.json");
+    } catch (const JsonError& error) {
+        refused = std::string(error.what()).find("font_kerning") != std::string::npos;
+    }
+    CHECK(refused);
+
+    // The font's own table under its own key is evidence and loads fine,
+    // because nothing here reads it.
+    const std::string evidence =
+        R"({"family": "Evidence", "provenance": "harvested", "units_per_em": 2048,
+            "hhea": {"ascender": 2210, "descender": -514, "line_gap": 0},
+            "advances": {"77": 1839},
+            "font_kerning": {"gpos": {"84,101": -200}, "kern": {"111,120": -25}}})";
+    const FontMetrics metrics = ParseFontMetrics(evidence, "evidence.json");
+    CHECK(metrics.kerning.empty());
+    CHECK(metrics.advances.at(U'M') == 1839);
+}
+
+// The two halves arrive separately, so they have to meet. Advances come from
+// the harvest; the pairs come from the committed file the measurements imply.
+void ImpliedKerningInstallsOntoAHarvestedFamily() {
+    FontMetrics harvested = TallText();
+    harvested.advances[U'T'] = 1073;
+    harvested.advances[U'e'] = 1071;
+    FontLibrary library;
+    library.Add("Implied", harvested);
+    CHECK(library.Find("Implied")->kerning.empty());
+
+    CHECK(library.SetKerning("Implied", {{{U'T', U'e'}, -200}}));
+    CHECK(library.Find("Implied")->PairAdjustment(U'T', U'e') == -200);
+    // A pair the file does not name stays unadjusted rather than defaulting to
+    // whatever the font would have said.
+    CHECK(library.Find("Implied")->PairAdjustment(U'e', U'T') == 0);
+
+    // Naming a family nothing loaded is the case where the two inputs describe
+    // different runs, and silence there would measure every kerned case wrongly.
+    CHECK(!library.SetKerning("Not Loaded", {{{U'T', U'e'}, -200}}));
+}
+
 }  // namespace
 
 int main() {
@@ -181,6 +235,8 @@ int main() {
     AFallbackListSplitsTheLineBoxFromTheGlyph();
     AnUnharvestedWeightIsRefused();
     KerningJoinsTheAdvanceBeforeItSnaps();
+    AHarvestedFileMayNotClaimKerning();
+    ImpliedKerningInstallsOntoAHarvestedFamily();
     std::cout << "level 4 composition tests passed\n";
     return 0;
 }

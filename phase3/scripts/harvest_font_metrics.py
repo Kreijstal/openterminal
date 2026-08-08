@@ -352,29 +352,36 @@ def read_kern_table(kern: bytes) -> dict[tuple[int, int], int]:
     return pairs
 
 
-def read_kerning(font: Font, glyphs: dict[int, int]) -> dict[tuple[int, int], int]:
-    """Codepoint pair -> what it adds to the first glyph's advance.
+def read_font_kerning(font: Font, glyphs: dict[int, int]) -> dict[str, dict[str, int]]:
+    """What each of the font's two kerning tables says, kept apart.
+
+    Kept apart on purpose, and this is the file's most useful column. The first
+    measurement run to read these tables found that the runtime applies some of
+    what they contain and not the rest: Segoe UI kerns `Te` by -200 and the
+    recorded runs show that applied, and it kerns `ox`, `ro`, `ve` and `rm` by
+    -25, -27, -12 and -4, which the recorded pangram shows were *not*. Merging
+    the two tables would throw away the first thing worth knowing about that,
+    which is whether the surviving pairs and the discarded ones come from
+    different places.
 
     Restricted to the codepoints that were asked for: a font kerns thousands of
     pairs and the file stays reviewable only if it carries the ones the corpus
     can reach. A pair reaching a glyph outside the set is a fact about the font
     and not about anything this repository measures.
     """
-    by_glyph: dict[tuple[int, int], int] = {}
-    gpos = font.optional("GPOS")
-    if gpos:
-        by_glyph.update(read_gpos_kerning(gpos))
-    kern = font.optional("kern")
-    if kern:
-        # GPOS wins where both carry a pair: a font shipping both means the
-        # older table for shapers that cannot read the newer one.
-        for pair, value in read_kern_table(kern).items():
-            by_glyph.setdefault(pair, value)
-
     wanted = {glyph: codepoint for codepoint, glyph in glyphs.items()}
-    return {(wanted[left], wanted[right]): value
-            for (left, right), value in by_glyph.items()
-            if left in wanted and right in wanted and value}
+
+    def by_codepoint(pairs: dict[tuple[int, int], int]) -> dict[str, int]:
+        return {f"{wanted[left]},{wanted[right]}": value
+                for (left, right), value in sorted(pairs.items())
+                if left in wanted and right in wanted and value}
+
+    gpos = font.optional("GPOS")
+    kern = font.optional("kern")
+    return {
+        "gpos": by_codepoint(read_gpos_kerning(gpos)) if gpos else {},
+        "kern": by_codepoint(read_kern_table(kern)) if kern else {},
+    }
 
 
 def harvest(path: Path, family: str, codepoints: list[int]) -> dict:
@@ -399,7 +406,7 @@ def harvest(path: Path, family: str, codepoints: list[int]) -> dict:
 
     mapping = read_cmap(font, codepoints)
     advances = read_advances(font, set(mapping.values()))
-    kerning = read_kerning(font, mapping)
+    font_kerning = read_font_kerning(font, mapping)
 
     return {
         "schema_version": 1,
@@ -428,12 +435,17 @@ def harvest(path: Path, family: str, codepoints: list[int]) -> dict:
         # Keyed by decimal codepoint, because JSON object keys are strings and
         # a decimal one sorts and diffs predictably.
         "advances": {str(cp): advances[glyph] for cp, glyph in sorted(mapping.items())},
+        # Evidence, not metrics, and named so that nothing mistakes it for the
+        # second. Layout applies the pairs the recorded measurements imply --
+        # see phase3/xaml-db/fonts/derived/ -- because the runtime was observed
+        # applying some of what is here and not the rest. What the font says is
+        # kept anyway: it is how anyone will work out which rule picks them.
+        #
         # Keyed by the two decimal codepoints the adjustment sits between, so
-        # the block sorts and diffs the way the advances do. An empty one is a
-        # font that kerns nothing among the codepoints asked for -- which every
-        # icon font is, and which is a reading rather than a gap.
-        "kerning": {f"{left},{right}": value
-                    for (left, right), value in sorted(kerning.items())},
+        # the block sorts and diffs the way the advances do. Empty is a font
+        # that kerns nothing among the codepoints asked for -- which every icon
+        # font is, and which is a reading rather than a gap.
+        "font_kerning": font_kerning,
         # Requested and not covered. For a text font this list has to be empty,
         # and main() still fails when it is not; for an icon font it is the
         # answer to "which of Terminal's glyphs does this family actually have",

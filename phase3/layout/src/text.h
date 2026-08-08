@@ -67,6 +67,11 @@ public:
     // that owns the advances. Falls back to Find's answer when nothing covers
     // it, so the failure is "no advance for U+xxxx" and not "no such family".
     const FontMetrics* FindForText(const std::string& family, const std::string& text) const;
+    // Replaces one family's pair adjustments, leaving its advances alone.
+    // False when no such family is loaded. See LoadImpliedKerning in fonts.h
+    // for why the two halves arrive separately.
+    bool SetKerning(const std::string& family,
+                    std::map<std::pair<char32_t, char32_t>, double> pairs);
     bool empty() const { return fonts_.empty(); }
 
     // Process-wide, because the markup builder and the WinRT activation
