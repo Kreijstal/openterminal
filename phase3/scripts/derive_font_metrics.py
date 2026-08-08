@@ -84,6 +84,10 @@ class Sample:
     # A wrapped run's recorded width is its longest line, not the whole run, so
     # it constrains nothing about the pairs that fell on another line.
     wraps: bool = False
+    # Whether the text arrived as the Text property rather than as element
+    # content. The runtime measures the two differently -- rule 7 in
+    # text.cpp -- so the solver has to know which it is looking at.
+    from_property: bool = False
 
 
 def float32(value: float) -> float:
@@ -159,6 +163,7 @@ def collect(cases: Path, measurements: Path, family: str) -> list[Sample]:
             width=float(width),
             height=float(height),
             wraps=element.get("TextWrapping", "NoWrap") != "NoWrap",
+            from_property=element.get("Text") is not None,
         ))
     return samples
 
@@ -238,77 +243,76 @@ def solve_advances(samples: list[Sample],
 
 
 def run_width(text: str, advances: dict[int, int], kerning: dict[tuple[str, str], int],
-              units_per_em: int, font_size: float) -> float:
+              units_per_em: int, font_size: float,
+              anywhere: set[tuple[str, str]] | None = None,
+              snaps: bool = True) -> float:
     """What a single line of `text` measures, per the rules in text.cpp.
 
     A pair adjustment joins the first glyph's advance in design units and
     snaps with it. Snapping it on its own and adding it afterwards is a
     different computation -- at size 12 the two land 1/300 of a DIP apart --
     and the corpus records the first.
+
+    `anywhere` is the subset of pairs that move a run wherever they occur,
+    which is the subset the font's GPOS carries; everything else moves only the
+    run's first pair. `snaps` is false for text that arrived as the Text
+    property, which the runtime measures unsnapped. Both are rules 5 and 7.
     """
+    reach = set() if anywhere is None else anywhere
     width = 0.0
     for index, character in enumerate(text):
         advance = advances[ord(character)]
         if index + 1 < len(text):
-            advance += kerning.get((character, text[index + 1]), 0)
-        width = float32(width + snap(advance * font_size / units_per_em))
+            pair = (character, text[index + 1])
+            if index == 0 or pair in reach:
+                advance += kerning.get(pair, 0)
+        step = advance * font_size / units_per_em
+        width = float32(width + (snap(step) if snaps else step))
     return width
 
 
-def solve_pair_adjustments(samples: list[Sample], advances: dict[int, int],
-                           units_per_em: int) -> dict[tuple[str, str], int]:
-    """What adjacent glyphs do to the advance, solved out of the recorded runs.
+def solve_pairs(samples: list[Sample], advances: dict[int, int],
+                units_per_em: int) -> dict[tuple[str, str], int]:
+    """One adjustment per recorded two-character run.
 
-    Unlike an advance or a line height this cannot be solved from the corpus
-    alone: a word constrains the sum of its advances, so the advances have to
-    come from the harvest first. What the corpus then adds is a check on the
-    font's kern table -- the one number the measurements imply, which the font
-    is allowed to contradict and CI is where it would.
+    Two characters is what makes a pair solvable. A longer run constrains the
+    sum of everything in it, which is why the corpus grew a case per pair
+    rather than being asked to separate them afterwards; with exactly two
+    glyphs the recorded width names one integer and the search confirms it is
+    the only one.
 
-    Only one pair is ever solved for. A corpus needing two adjustments at once
-    cannot separate them from the sums it records, so that is refused by name.
+    The advances still have to come from the harvest -- a run of two constrains
+    a pair only once both its advances are known -- which is the direction the
+    checked-not-trusted bargain runs in.
     """
     usable = [s for s in samples
-              if not s.wraps and len(s.text) > 1
+              if not s.wraps and len(s.text) == 2
               and all(ord(c) in advances for c in s.text)]
     if not usable:
         raise DerivationError(
-            "no unwrapped run of two or more harvested characters was recorded; "
+            "no recorded two-character run uses only harvested characters; "
             "nothing constrains any pair")
 
-    def reproduces(kerning: dict[tuple[str, str], int]) -> list[Sample]:
-        return [s for s in usable
-                if not agrees(run_width(s.text, advances, kerning, units_per_em,
-                                        s.font_size), s.width)]
-
-    disagreeing = reproduces({})
-    if not disagreeing:
-        return {}
-
-    # Only a pair one of the disagreeing runs actually contains can be what
-    # fixes them; a pair that appears solely in runs the advances already
-    # explain would break those instead.
-    candidates = sorted({(s.text[i], s.text[i + 1])
-                         for s in disagreeing for i in range(len(s.text) - 1)})
     # A kern past half an em is not a kern, it is a different glyph.
     bound = units_per_em // 2
-    solutions = [(pair, value)
-                 for pair in candidates
-                 for value in range(-bound, bound + 1)
-                 if value and not reproduces({pair: value})]
-
-    if not solutions:
-        raise DerivationError(
-            f"more than one pair would have to move: no single adjustment "
-            f"reproduces the {len(disagreeing)} recorded run(s) the advances alone "
-            f"do not explain, so the corpus cannot separate them")
-    if len(solutions) > 1:
-        listed = ", ".join(f"{left}{right} {value:+d}" for (left, right), value in solutions)
-        raise DerivationError(
-            f"the pair adjustment is not pinned down: {len(solutions)} of them "
-            f"reproduce every recorded run ({listed})")
-    (pair, value), = solutions
-    return {pair: value}
+    solved: dict[tuple[str, str], int] = {}
+    for sample in usable:
+        pair = (sample.text[0], sample.text[1])
+        candidates = [
+            value for value in range(-bound, bound + 1)
+            if agrees(run_width(sample.text, advances, {pair: value}, units_per_em,
+                                sample.font_size, snaps=not sample.from_property),
+                      sample.width)
+        ]
+        value = _sole_candidate(candidates, f"adjustment for the pair {''.join(pair)!r}", 1)
+        if pair in solved and solved[pair] != value:
+            raise DerivationError(
+                f"the pair {''.join(pair)!r} is recorded at two different adjustments, "
+                f"{solved[pair]} and {value}; the measurements contradict each other")
+        solved[pair] = value
+    # A pair the font does not move is not a pair. Recording the zeroes would
+    # make the file say the corpus had found something where it found nothing.
+    return {pair: value for pair, value in sorted(solved.items()) if value}
 
 
 # --- the file -----------------------------------------------------------------
@@ -341,7 +345,7 @@ def derive(cases: Path, measurements: Path, family: str,
 
     kerning = None
     if harvested_advances is not None:
-        kerning = solve_pair_adjustments(samples, harvested_advances, units_per_em)
+        kerning = solve_pairs(samples, harvested_advances, units_per_em)
 
     metrics = {
         "schema_version": 1,
@@ -382,6 +386,12 @@ def pair_key(left: str, right: str) -> str:
     return f"{ord(left)},{ord(right)}"
 
 
+def pair_of(key: str) -> tuple[str, str]:
+    """"84,101" -> ("T", "e")."""
+    left, right = (chr(int(part)) for part in key.split(","))
+    return (left, right)
+
+
 def read_pairs(kerning: dict[str, int]) -> dict[tuple[str, str], int]:
     """The stored spelling back into character pairs."""
     out = {}
@@ -391,66 +401,65 @@ def read_pairs(kerning: dict[str, int]) -> dict[tuple[str, str], int]:
     return out
 
 
-def check_kerning(cases: Path, measurements: Path, advances: dict[int, int],
-                  family: str, units_per_em: int,
+def check_kerning(cases: Path, measurements: Path, harvest: dict, family: str,
                   committed: dict[tuple[str, str], int]) -> list[str]:
-    """Hold the committed pair adjustments to what fresh measurements say.
+    """Hold the committed pair adjustments to fresh measurements, both ways.
 
-    Both directions, because both have already been wrong once. The first run
-    to read a real font's kern tables put every pair it found into the metrics,
-    and four of them -- ox, ro, ve, rm -- are pairs the recorded pangram proves
-    the runtime did not apply. So:
+    Three checks, and each one has caught something:
 
-      * every recorded run has to come out right *with* the committed pairs
-        applied, which catches a pair that is missing or has the wrong value;
-      * and every committed pair has to be load-bearing, which catches a pair
-        the runs do not witness at all. A pair that could be dropped without
-        moving a single recorded number is not something the measurements
-        imply, whatever the font says about it.
-
-    The advances come from the harvest, because a word constrains their sum and
-    not any one of them, so there is nothing to solve against without them.
+      * the pairs the recorded two-character runs imply are exactly the
+        committed ones, at the same values -- a missing pair and an extra one
+        are both failures;
+      * every committed value is what the font's own tables say, GPOS winning
+        where they disagree, which is what makes the harvest a check on the
+        recordings rather than a second opinion nobody compares;
+      * and the whole model reproduces every recorded run, which is the only
+        thing that tests rule 5 -- that a legacy-table pair moves the front of
+        a run and nothing else. The run that found it, "{StaticResource
+        NotAKey}", is a level 5 case and would otherwise be checked by nothing
+        here.
     """
+    advances = {int(codepoint): advance
+                for codepoint, advance in harvest["advances"].items()}
+    units_per_em = harvest["units_per_em"]
+    tables = harvest.get("font_kerning", {})
+    gpos = {pair_of(key) for key in tables.get("gpos", {})}
+    font_pairs = {}
+    for table in ("kern", "gpos"):          # gpos last, so it wins
+        for key, value in tables.get(table, {}).items():
+            font_pairs[pair_of(key)] = value
+
     samples = collect(cases, measurements, family)
     if not samples:
         return [f"no recorded lone-TextBlock case uses {family!r}"]
-    usable = [s for s in samples
-              if not s.wraps and len(s.text) > 1
-              and all(ord(c) in advances for c in s.text)]
-    if not usable:
-        return [f"no unwrapped run of two or more harvested characters was recorded "
-                f"for {family!r}; nothing constrains any pair"]
-
-    def disagreeing(kerning):
-        return [s for s in usable
-                if not agrees(run_width(s.text, advances, kerning, units_per_em,
-                                        s.font_size), s.width)]
 
     problems: list[str] = []
+    try:
+        implied = solve_pairs(samples, advances, units_per_em)
+    except DerivationError as failure:
+        return [str(failure)]
 
-    wrong = disagreeing(committed)
-    for sample in wrong:
-        predicted = run_width(sample.text, advances, committed, units_per_em,
-                              sample.font_size)
-        problems.append(f"{sample.case_id}: {sample.text!r} at {sample.font_size} measures "
-                        f"{sample.width}, the committed pairs predict {predicted:.4f}")
-    if wrong:
-        # Say what would have worked, when a single pair would have.
-        try:
-            implied = solve_pair_adjustments(samples, advances, units_per_em)
-        except DerivationError as failure:
-            problems.append(f"and no single pair explains the difference: {failure}")
-        else:
-            listed = ", ".join(f"{left}{right} {value:+d}"
-                               for (left, right), value in sorted(implied.items()))
-            problems.append(f"the recorded runs imply {listed or 'no adjustment at all'}")
+    for pair in sorted(set(implied) | set(committed)):
+        name = "".join(pair)
+        if implied.get(pair) != committed.get(pair):
+            problems.append(f"pair {name}: committed {committed.get(pair)}, "
+                            f"the recorded runs imply {implied.get(pair)}")
+        elif font_pairs.get(pair) != committed.get(pair):
+            problems.append(f"pair {name}: committed {committed.get(pair)}, "
+                            f"the font says {font_pairs.get(pair)}")
 
-    for pair in sorted(committed):
-        without = {k: v for k, v in committed.items() if k != pair}
-        if not disagreeing(without):
+    for sample in samples:
+        if sample.wraps or len(sample.text) < 2:
+            continue
+        if not all(ord(c) in advances for c in sample.text):
+            continue
+        predicted = run_width(sample.text, advances, font_pairs, units_per_em,
+                              sample.font_size, anywhere=gpos,
+                              snaps=not sample.from_property)
+        if not agrees(predicted, sample.width):
             problems.append(
-                f"pair {pair[0]}{pair[1]} {committed[pair]:+d}: no recorded run moves when it "
-                f"is dropped, so the measurements do not witness it")
+                f"{sample.case_id}: {sample.text[:32]!r} at {sample.font_size} measures "
+                f"{sample.width}, the model predicts {predicted:.4f}")
     return problems
 
 
@@ -494,8 +503,7 @@ def main(argv: list[str] | None = None) -> int:
                   "recorded word says nothing about any pair", file=sys.stderr)
             return 2
         stored = json.loads(args.output.read_text(encoding="utf-8"))
-        problems = check_kerning(args.cases, args.measurements, harvested_advances,
-                                 args.family, stored["units_per_em"],
+        problems = check_kerning(args.cases, args.measurements, harvest, args.family,
                                  read_pairs(stored.get("kerning", {})))
         if problems:
             print(f"::error::{args.output} is not the kerning the recorded "

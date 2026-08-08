@@ -74,7 +74,7 @@ protected:
     Size MeasureOverride(Size available) override;
     Size ArrangeOverride(Size final_size) override;
 private:
-    void RequireHarvestedWeight() const;
+    bool SimulatesBold() const;
 
     TextBlock content_;
 };

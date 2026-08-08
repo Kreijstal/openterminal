@@ -142,6 +142,10 @@ struct MarkupNode {
     // Text, and the inherited text properties a Control carries as well. The
     // defaults are XAML's.
     std::string text;
+    // Whether `text` arrived as the Text property rather than as character
+    // data between the tags. The runtime measures the two differently -- see
+    // rule 7 in text.cpp -- so the spelling has to survive the parse.
+    bool text_from_property = false;
     std::string glyph;
     std::string font_family = "Segoe UI";
     double font_size = 14.0;

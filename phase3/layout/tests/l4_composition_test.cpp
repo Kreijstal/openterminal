@@ -122,31 +122,62 @@ void AFallbackListSplitsTheLineBoxFromTheGlyph() {
     CHECK(Near(plain.desired_size().width, 12) && Near(plain.desired_size().height, 12));
 }
 
-// A weight the harvested metrics were not read at is a refusal, not a guess.
-// The corpus measures FontWeight="Black" at two sizes and both say the glyph
-// grew, but two observations do not pin how much: +1 DIP, +1/24 em and +2% of
-// the em all reproduce them. Measuring against any one of those would be
-// inventing font data.
-void AnUnharvestedWeightIsRefused() {
+// A weight an icon family does not ship is simulated, and the simulation adds
+// the same fraction of the em whichever heavy weight was asked for. Bold and
+// Black both measure 103 at size 100 where the plain glyph measures 100, which
+// is what says the amount does not track how much heavier the weight was.
+void ASimulatedWeightWidensByAFixedFraction() {
     FontLibrary::Default().Add("Weight Icons", SquareIcons(0xE76C));
 
+    FontIcon plain;
+    plain.set_font_family("Weight Icons");
+    plain.set_font_size(100);
+    plain.set_glyph(u8"");
+    plain.Measure({400, 300});
+    CHECK(Near(plain.desired_size().width, 100));
+
+    for (const char* weight : {"Bold", "Black"}) {
+        FontIcon icon;
+        icon.set_font_family("Weight Icons");
+        icon.set_font_size(100);
+        icon.set_glyph(u8"");
+        icon.set_font_weight(weight);
+        icon.Measure({400, 300});
+        CHECK(Near(icon.desired_size().width, 103));
+        CHECK(Near(icon.desired_size().height, 100));  // the line box is untouched
+    }
+
+    // Every fraction the recordings admit produces these same integers, which
+    // is why the constant in text.cpp is not observable here. What is
+    // observable is that the three rules the two smaller sizes once allowed are
+    // all dead: they answer 201, 204 and 208 where the runtime answered 205.
+    FontIcon at200;
+    at200.set_font_family("Weight Icons");
+    at200.set_font_size(200);
+    at200.set_glyph(u8"");
+    at200.set_font_weight("Black");
+    at200.Measure({400, 300});
+    CHECK(Near(at200.desired_size().width, 205));
+}
+
+// A weight nothing measured is still refused. The corpus records Normal, Bold
+// and Black and no others, so sorting an unseen weight into "simulated" or not
+// would be a threshold this repository invented.
+void AnUnmeasuredWeightIsRefused() {
+    FontLibrary::Default().Add("Unseen Icons", SquareIcons(0xE76C));
+
     FontIcon icon;
-    icon.set_font_family("Weight Icons");
+    icon.set_font_family("Unseen Icons");
     icon.set_font_size(14);
     icon.set_glyph(u8"");
-    icon.set_font_weight("Black");
+    icon.set_font_weight("SemiBold");
     bool refused = false;
     try {
         icon.Measure({400, 300});
     } catch (const TextError& error) {
-        refused = std::string(error.what()).find("Black") != std::string::npos;
+        refused = std::string(error.what()).find("SemiBold") != std::string::npos;
     }
     CHECK(refused);
-
-    // Normal is the weight the metrics were read at, so it measures.
-    icon.set_font_weight("Normal");
-    icon.Measure({400, 300});
-    CHECK(Near(icon.desired_size().width, 14));
 }
 
 // A pair adjustment is part of the first glyph's advance and is applied in
@@ -176,56 +207,138 @@ void KerningJoinsTheAdvanceBeforeItSnaps() {
     CHECK(Near(text.render_size().width, 12.563333));
 }
 
-// Which pairs the runtime applies is a measurement, not a reading, so a
-// harvested file may not claim it. This is not tidiness: the runner's Segoe UI
-// kerns "ox", "ro", "ve" and "rm", and the recorded pangram containing the
-// first three measures the raw sum of its advances -- so a layout core that
-// installed the font's table would measure those cases too narrow. The refusal
-// is what stops a harvest written before that was understood from loading.
-void AHarvestedFileMayNotClaimKerning() {
-    const std::string body =
+// Which pairs reach past the front of a run, and which do not. A pair the
+// font's GPOS carries moves the run wherever it sits; a pair only the legacy
+// `kern` table has moves the first pair and nothing else. This is the rule the
+// L4-kern recordings forced and the one thing here no reader will believe
+// without the numbers, so the test carries both halves against one font.
+//
+// The advances and the adjustment land on whole DIPs at this size, so the
+// arithmetic is readable and no snap can hide the difference.
+void OnlyGposPairsReachPastTheFrontOfARun() {
+    FontMetrics font = TallText();
+    font.advances[U'a'] = 2048;   // one em
+    font.advances[U'b'] = 2048;
+    font.advances[U'c'] = 2048;
+    font.kerning[{U'a', U'b'}] = -1024;   // half an em, from the legacy table
+    font.kerning[{U'c', U'a'}] = -1024;   // and the same from GPOS
+    font.kerns_anywhere.insert({U'c', U'a'});
+    FontLibrary::Default().Add("Positional", font);
+
+    TextBlock text;
+    text.set_font_family("Positional");
+    text.set_font_size(16);   // one em is 16 DIPs and either pair is worth -8
+
+    text.set_text("ab");                    // legacy pair, at the front
+    text.Measure({4000, 300});
+    text.Arrange({0, 0, 4000, 300});
+    CHECK(Near(text.render_size().width, 8 + 16));
+
+    text.set_text("bab");                   // the same pair, one glyph in
+    text.Arrange({0, 0, 4000, 300});
+    CHECK(Near(text.render_size().width, 3 * 16));
+
+    text.set_text("bbbab");                 // and further in, still nothing
+    text.Arrange({0, 0, 4000, 300});
+    CHECK(Near(text.render_size().width, 5 * 16));
+
+    text.set_text("ca");                    // the GPOS pair, at the front
+    text.Arrange({0, 0, 4000, 300});
+    CHECK(Near(text.render_size().width, 8 + 16));
+
+    text.set_text("bca");                   // and away from it, still applied
+    text.Arrange({0, 0, 4000, 300});
+    CHECK(Near(text.render_size().width, 16 + 8 + 16));
+
+    text.set_text("bbbca");
+    text.Arrange({0, 0, 4000, 300});
+    CHECK(Near(text.render_size().width, 3 * 16 + 8 + 16));
+
+    // Two GPOS pairs deep in a run both count, which is what the recorded
+    // "{StaticResource NotAKey}" needs: it is short by three of them.
+    text.set_text("bcaca");
+    text.Arrange({0, 0, 4000, 300});
+    CHECK(Near(text.render_size().width, 16 + 8 + 16 + 8 + 16));
+}
+
+// Where the pair values come from. A harvest carries the font's two tables
+// under "font_kerning" and the layout core reads them, because every isolated
+// two-character run moved by exactly what the font says. GPOS wins where the
+// two disagree, which the recordings settle rather than convention: Segoe UI's
+// tables differ on five pairs and the runtime took the GPOS value every time.
+void AHarvestReadsTheFontsTablesWithGposWinning() {
+    const std::string evidence =
+        R"({"family": "Evidence", "provenance": "harvested", "units_per_em": 2048,
+            "hhea": {"ascender": 2210, "descender": -514, "line_gap": 0},
+            "advances": {"77": 1839},
+            "font_kerning": {"gpos": {"84,101": -200}, "kern": {"84,101": -211,
+                             "111,120": -25}}})";
+    const FontMetrics metrics = ParseFontMetrics(evidence, "evidence.json");
+    CHECK(metrics.PairAdjustment(U'T', U'e', false) == -200);  // GPOS, not the -211
+    CHECK(metrics.kerns_anywhere.count({U'T', U'e'}) == 1);
+    // The legacy table's own pair reaches the front of a run and no further.
+    CHECK(metrics.PairAdjustment(U'o', U'x', true) == -25);
+    CHECK(metrics.PairAdjustment(U'o', U'x', false) == 0);
+    CHECK(metrics.PairAdjustment(U'M', U'M', true) == 0);
+
+    // "kerning" is the derived spelling and means something else -- the pairs
+    // the recordings witnessed, one per two-character run. A harvest claiming
+    // it is the shape of a run that predates the L4-kern series.
+    const std::string wrong_key =
         R"({"family": "Refused", "provenance": "harvested", "units_per_em": 2048,
             "hhea": {"ascender": 2210, "descender": -514, "line_gap": 0},
             "advances": {"77": 1839}, "kerning": {"84,101": -200}})";
     bool refused = false;
     try {
-        ParseFontMetrics(body, "refused.json");
+        ParseFontMetrics(wrong_key, "refused.json");
     } catch (const JsonError& error) {
         refused = std::string(error.what()).find("font_kerning") != std::string::npos;
     }
     CHECK(refused);
 
-    // The font's own table under its own key is evidence and loads fine,
-    // because nothing here reads it.
-    const std::string evidence =
-        R"({"family": "Evidence", "provenance": "harvested", "units_per_em": 2048,
-            "hhea": {"ascender": 2210, "descender": -514, "line_gap": 0},
-            "advances": {"77": 1839},
-            "font_kerning": {"gpos": {"84,101": -200}, "kern": {"111,120": -25}}})";
-    const FontMetrics metrics = ParseFontMetrics(evidence, "evidence.json");
-    CHECK(metrics.kerning.empty());
-    CHECK(metrics.advances.at(U'M') == 1839);
+    // A derived file states the witnessed pairs and is read as such.
+    const std::string derived =
+        R"({"family": "Derived", "provenance": "derived", "units_per_em": 2048,
+            "hhea": {"ascender": 2724, "descender": 0, "line_gap": 0},
+            "advances": {"77": 1839}, "kerning": {"84,101": -200}})";
+    CHECK(ParseFontMetrics(derived, "derived.json").PairAdjustment(U'T', U'e', true) == -200);
 }
 
-// The two halves arrive separately, so they have to meet. Advances come from
-// the harvest; the pairs come from the committed file the measurements imply.
-void ImpliedKerningInstallsOntoAHarvestedFamily() {
-    FontMetrics harvested = TallText();
-    harvested.advances[U'T'] = 1073;
-    harvested.advances[U'e'] = 1071;
-    FontLibrary library;
-    library.Add("Implied", harvested);
-    CHECK(library.Find("Implied")->kerning.empty());
+// The two spellings of a TextBlock's text are not the same measurement. Inline
+// content snaps every advance and the line height to 1/300 of a DIP; the Text
+// property keeps them unsnapped. The L4-source twins were authored to ask
+// whether the two agree, and this is the answer they came back with.
+void TheTextPropertyIsNotSnapped() {
+    FontMetrics font = TallText();
+    font.advances[U'T'] = 1073;
+    font.advances[U'e'] = 1071;
+    font.advances[U'r'] = 712;
+    FontLibrary::Default().Add("Unsnapped", font);
 
-    CHECK(library.SetKerning("Implied", {{{U'T', U'e'}, -200}}));
-    CHECK(library.Find("Implied")->PairAdjustment(U'T', U'e') == -200);
-    // A pair the file does not name stays unadjusted rather than defaulting to
-    // whatever the font would have said.
-    CHECK(library.Find("Implied")->PairAdjustment(U'e', U'T') == 0);
+    TextBlock content;
+    content.set_font_family("Unsnapped");
+    content.set_font_size(14);
+    content.set_text("Ter");
+    content.Measure({400, 300});
+    content.Arrange({0, 0, 400, 300});
 
-    // Naming a family nothing loaded is the case where the two inputs describe
-    // different runs, and silence there would measure every kerned case wrongly.
-    CHECK(!library.SetKerning("Not Loaded", {{{U'T', U'e'}, -200}}));
+    TextBlock property;
+    property.set_font_family("Unsnapped");
+    property.set_font_size(14);
+    property.set_text("Ter");
+    property.set_text_from_property(true);
+    property.Measure({400, 300});
+    property.Arrange({0, 0, 400, 300});
+
+    // Same font, same size, same text; the widths differ by the snap and the
+    // unsnapped one is the larger here.
+    CHECK(!Near(content.render_size().width, property.render_size().width));
+    CHECK(Near(content.render_size().width, 7.333333 + 7.32 + 4.866667));
+    CHECK(Near(property.render_size().width,
+               (1073 + 1071 + 712) * 14.0 / 2048));
+    // And the line box goes the same way.
+    CHECK(Near(content.render_size().height, 18.62));
+    CHECK(Near(property.render_size().height, 2724 * 14.0 / 2048));
 }
 
 }  // namespace
@@ -233,10 +346,12 @@ void ImpliedKerningInstallsOntoAHarvestedFamily() {
 int main() {
     AnIconFillsTheSlotItIsGiven();
     AFallbackListSplitsTheLineBoxFromTheGlyph();
-    AnUnharvestedWeightIsRefused();
+    ASimulatedWeightWidensByAFixedFraction();
+    AnUnmeasuredWeightIsRefused();
     KerningJoinsTheAdvanceBeforeItSnaps();
-    AHarvestedFileMayNotClaimKerning();
-    ImpliedKerningInstallsOntoAHarvestedFamily();
+    OnlyGposPairsReachPastTheFrontOfARun();
+    AHarvestReadsTheFontsTablesWithGposWinning();
+    TheTextPropertyIsNotSnapped();
     std::cout << "level 4 composition tests passed\n";
     return 0;
 }

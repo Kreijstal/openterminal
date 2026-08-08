@@ -34,9 +34,10 @@ char32_t Codepoint(const std::string& text, const std::string& where) {
 // key rather than nested objects so the block sorts and diffs the way the
 // advances do.
 std::map<std::pair<char32_t, char32_t>, double> ParseKerning(const JsonValue& kerning,
-                                                            const std::string& where) {
+                                                            const std::string& where,
+                                                            const std::string& what) {
     if (kerning.kind != JsonValue::Kind::Object)
-        throw JsonError(where + ": \"kerning\" is not an object");
+        throw JsonError(where + ": \"" + what + "\" is not an object");
     std::map<std::pair<char32_t, char32_t>, double> pairs;
     for (const auto& entry : kerning.object) {
         if (entry.second.kind != JsonValue::Kind::Number)
@@ -92,62 +93,44 @@ FontMetrics ParseFontMetrics(const std::string& json, const std::string& where) 
     }
     if (metrics.advances.empty()) throw JsonError(where + ": the metrics have no advances");
 
-    // Kerning is a *derived* metric here, and a harvested file claiming it is
-    // an error rather than a bonus. The recorded runs settle it: the runner's
-    // Segoe UI kerns "ox", "ro", "ve" and "rm", and the pangram containing the
-    // first three measures the raw sum of its advances at all three sizes, so
-    // the runtime did not apply them. It did apply "Te". Which pairs survive is
-    // therefore a question about the runtime and not about the font, and only
-    // the measurements can answer it -- see phase3/xaml-db/fonts/README.md.
-    //
-    // The font's own tables are still harvested, under "font_kerning", as
-    // evidence. Nothing reads them here, which is the whole point of the
-    // separate key.
+    // Two spellings, and which one a file uses says where its numbers came
+    // from. A harvest writes "font_kerning", the font's own two tables kept
+    // apart; a derived file writes "kerning", the pairs the recordings
+    // witnessed. A harvest claiming the second is the shape of a run that
+    // predates the L4-kern series and must not load quietly.
     if (document.Has("kerning")) {
         if (metrics.provenance != FontProvenance::Derived) {
             throw JsonError(
-                where + ": a harvested file may not carry \"kerning\"; which pairs the "
-                "runtime applies is solved from the recorded measurements, not read "
-                "out of the font, and the font's own table belongs in \"font_kerning\"");
+                where + ": a harvested file spells the font's pair table \"font_kerning\"; "
+                "\"kerning\" is what a derived file states the recordings witnessed, and "
+                "the two are not the same claim");
         }
-        metrics.kerning = ParseKerning(document.At("kerning"), where);
+        metrics.kerning = ParseKerning(document.At("kerning"), where, "kerning");
+    }
+    // The font's own pairs, which the L4-kern recordings show the runtime does
+    // apply -- measured on its own, every pair moved by exactly what the font
+    // says.
+    //
+    // The two tables are read in this order for two reasons the recordings
+    // settle. GPOS wins on value where both carry a pair: Segoe UI's disagree
+    // about Te, Ta, To, Wa and Ya (-200/-211, -230/-217, -200/-211, -80/-76,
+    // -180/-199) and the runtime measured the GPOS value in all five. And GPOS
+    // wins on reach: only its pairs move a run away from the front, which is
+    // rule 5 in text.cpp and is why the subset is kept.
+    if (document.Has("font_kerning")) {
+        const JsonValue& tables = document.At("font_kerning");
+        if (tables.kind != JsonValue::Kind::Object)
+            throw JsonError(where + ": \"font_kerning\" is not an object");
+        for (const char* table : {"kern", "gpos"}) {
+            if (!tables.Has(table)) continue;
+            const bool anywhere = std::string(table) == "gpos";
+            for (const auto& entry : ParseKerning(tables.At(table), where, table)) {
+                metrics.kerning[entry.first] = entry.second;
+                if (anywhere) metrics.kerns_anywhere.insert(entry.first);
+            }
+        }
     }
     return metrics;
-}
-
-int LoadImpliedKerning(FontLibrary& library, const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) throw JsonError("cannot read implied kerning from " + path);
-    std::ostringstream buffer;
-    buffer << in.rdbuf();
-
-    const std::string where = fs::path(path).filename().string();
-    const JsonValue document = ParseJson(buffer.str());
-
-    // Derived only. A harvested file has the font's table, which is the one
-    // thing this must not install -- that is the mistake the whole split
-    // exists to prevent.
-    const JsonValue& provenance = document.At("provenance");
-    if (provenance.kind != JsonValue::Kind::String || provenance.string != "derived") {
-        throw JsonError(where + ": implied kerning comes from a derived file; this one's "
-                                "provenance is not \"derived\"");
-    }
-    const JsonValue& family = document.At("family");
-    if (family.kind != JsonValue::Kind::String)
-        throw JsonError(where + ": \"family\" is not a string");
-
-    const std::map<std::pair<char32_t, char32_t>, double> pairs =
-        document.Has("kerning") ? ParseKerning(document.At("kerning"), where)
-                                : std::map<std::pair<char32_t, char32_t>, double>();
-
-    // Naming a family that was not loaded means the two inputs are describing
-    // different runs, which is worth stopping for: silently applying nothing
-    // would measure every kerned case wrongly and blame the layout.
-    if (!library.SetKerning(family.string, pairs)) {
-        throw JsonError(where + ": no metrics are loaded for \"" + family.string +
-                        "\", so there is nothing for its kerning to apply to");
-    }
-    return static_cast<int>(pairs.size());
 }
 
 int LoadFontDirectory(FontLibrary& library, const std::string& directory) {

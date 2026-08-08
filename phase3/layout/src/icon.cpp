@@ -50,24 +50,26 @@ const DependencyProperty& FontIcon::FontSizeProperty() { return *kIconFontSize; 
 const DependencyProperty& FontIcon::FontFamilyProperty() { return *kIconFontFamily; }
 const DependencyProperty& FontIcon::FontWeightProperty() { return *kFontWeight; }
 
-// The metrics are harvested from one file per family, which is one weight. A
-// heavier one is a different face, and the corpus says the runtime measures it
-// wider -- FontWeight="Black" on a square icon reports 11 at size 10 and 15 at
-// size 14, where the unweighted glyph reports 10 and 14. Two observations, and
-// more than one rule reproduces both: a whole extra DIP, a twenty-fourth of the
-// em and two percent of it all land there. So this refuses rather than picking
-// one; see phase3/xaml-db/fonts/README.md.
-void FontIcon::RequireHarvestedWeight() const {
+// An icon family ships one weight, so any heavier one is simulated rather than
+// loaded, and the simulation widens the glyph -- see rule 6 in text.cpp for the
+// amount and for what the corpus does and does not pin about it.
+//
+// Which weights simulate is the part measured here: Bold and Black both do, and
+// by the same amount, while Normal does not. Nothing between or below them is
+// recorded, so nothing between or below them is answered -- a weight the corpus
+// has never seen is refused rather than sorted into one of the two by a
+// threshold this repository would be inventing.
+bool FontIcon::SimulatesBold() const {
     const std::string& weight = font_weight();
-    if (weight.empty() || weight == "Normal") return;
-    throw TextError("the harvested metrics for \"" + font_family() +
-                    "\" were read at Normal weight; FontWeight=\"" + weight +
-                    "\" is a face this corpus has no metrics for, and the two sizes "
-                    "that measure it do not pin what the weight adds");
+    if (weight.empty() || weight == "Normal") return false;
+    if (weight == "Bold" || weight == "Black") return true;
+    throw TextError("FontWeight=\"" + weight + "\" is a weight no case measures; the corpus "
+                    "records only Normal, Bold and Black on a family that ships one face, so "
+                    "whether this one is simulated at all is not something it can say");
 }
 
 Size FontIcon::MeasureOverride(Size available) {
-    RequireHarvestedWeight();
+    content_.set_simulates_bold(SimulatesBold());
     content_.set_text(glyph());
     content_.set_font_size(font_size());
     content_.set_font_family(font_family());

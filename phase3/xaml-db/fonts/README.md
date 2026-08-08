@@ -17,17 +17,16 @@ guess at. It also refuses two files claiming one family, so a derived file
 dropped next to a harvested one is an error rather than a coin toss. Pass one
 directory or the other, never a mixture.
 
-One metric crosses the line, and it is the interesting one. **Kerning is
-derived, never harvested**, even when the layout core is measuring against a
-harvest. The font's pair table is not what the runtime applies — see the open
-question below — so `measure_cases` takes the pairs from the committed file:
+Kerning is the one metric the two files spell differently, and on purpose. A
+harvest writes `font_kerning` — the font's `GPOS` and legacy `kern` tables, kept
+apart — and the layout core reads it. A derived file writes `kerning`, the pairs
+the recordings witnessed one at a time, and that is the committed statement CI
+holds the harvest to. A harvest claiming `kerning` is rejected on sight: it is
+the shape of a run that predates the `L4-kern` series, and the two are not the
+same claim.
 
-    measure_cases <cases> <out> <harvested-fonts> \
-        --kerning phase3/xaml-db/fonts/derived/segoe-ui.json
-
-and a harvested file that carries a `kerning` key is rejected on sight rather
-than believed. What the font's own tables say is harvested anyway, under
-`font_kerning`, where nothing reads it.
+Why the tables are kept apart rather than merged is the whole of "Which pairs
+the runtime applies" below, and it is not a detail: the two behave differently.
 
 ## The harvest, which is not committed
 
@@ -54,6 +53,49 @@ regenerated deterministically by every run, and what pins them is committed
 instead of them. For the measurements that is `../oracles/<os-build>.json`; for
 the font it is the `font_segoeui` SHA-256 in the same digest, which moves for
 exactly the reason a metric would — the font being serviced.
+
+## The icon fonts
+
+Four families are harvested, not one:
+
+| family | file read | codepoints asked for |
+|---|---|---|
+| Segoe UI | `segoeui.ttf` on the runner | U+0020–U+007E, the corpus's text |
+| Segoe MDL2 Assets | `segmdl2.ttf` on the runner | the 44 glyphs Terminal's markup names |
+| Segoe Fluent Icons | `SegoeIcons.ttf` on the runner | the same 44 |
+| Cascadia Mono | `res/fonts/CascadiaMono.ttf` in the Terminal checkout | U+0020–U+007E |
+
+The last of those is not an icon font and is [its own
+section](#the-fourth-family-which-terminal-ships-itself) below.
+
+A `FontIcon`'s size is a glyph measured in an icon font, and fifteen level 7
+cases are one `FontIcon` each — every one of them blocked on these numbers
+rather than on layout. So the harvest reads the icon fonts too.
+
+Which codepoints is not a decision made here. `harvest_icon_glyphs.py` reads
+them out of the Terminal checkout — every literal `Glyph` attribute in WinUI
+markup, markup extensions excluded because a `{TemplateBinding}` names a
+codepoint only the binding knows — and writes them beside the vocabulary
+inventory, at
+[`research/windows-terminal/<commit>/icon-glyphs.json`](../../../research/windows-terminal/).
+That file is committed and CI holds it to reproducing, exactly like the
+inventory: the set is research data about Terminal, and a hand-typed list would
+be wrong the first time Terminal changed an icon.
+
+One `L4-icon` case is still an open question rather than a gap in the harvest,
+and it is a refusal in the layout core rather than a number:
+
+**Where the runtime goes when no named family has the glyph.**
+`L4-icon-rule-mdl2-latin-14` asks Segoe MDL2 Assets for `M`, which it does not
+have, and the oracle answers 10 wide by 14 tall. The 14 is the icon font's line
+box, so that half is settled; the 10 is neither its em, nor Segoe UI's `M` at
+that size (12.57), nor Cascadia Mono's (8.2) now that a fourth family is
+harvested. So the runtime fell back past every family the markup names, to one
+chosen by rules nothing here records. Harvesting more families would not answer
+it — knowing *which* font it picked is the missing measurement.
+
+The other one, what a simulated weight adds, was measured and is answered
+below.
 
 ## The icon fonts
 
@@ -116,10 +158,10 @@ this harvest's claim that the glyph is exactly one em wide. `mdl2-bold-100` asks
 the other half of it: Bold is 700 where Black is 900, so a rule that scales with
 the weight answers differently there and a rule that does not, does not.
 
-Until that run happens the refusal in [`icon.cpp`](../../layout/src/icon.cpp)
-stands, and the committed digest still records 147 level 4 cases against the 152
-the generator now emits — which is the corpus growing, and trips the digest gate
-on purpose. See [the database README](../README.md#using-the-measurements).
+That run has happened, and "Open question: what a simulated weight adds" below
+is what it answered. The refusal in [`icon.cpp`](../../layout/src/icon.cpp) is
+gone for `Bold` and `Black` and stands for every other weight, because those two
+are the only ones anything measured.
 
 Two things work differently for an icon font, and both are deliberate:
 
@@ -203,13 +245,12 @@ checks the harvest. So this half is committed and the harvest is not.
     phase3/layout/build/measure_cases phase3/xaml-db/cases /tmp/results \
         phase3/xaml-db/fonts/derived
 
-That gets 46 of the 147 level 4 cases — every one whose answer needs only a line
-height and the advance of `M`, including the six `FontIcon` cases deliberately
-written in Segoe UI so the icon sizing rule could be pinned before any icon
-metric was trusted. The text cases that remain measure `Terminal` and a pangram,
-which constrain the *sum* of several advances and not any one of them, so those
-characters are absent from the derived file on purpose and the cases that need
-them fail by name:
+That gets the level 4 cases whose answer needs only a line height and the advance
+of `M`, including the six `FontIcon` cases deliberately written in Segoe UI so the
+icon sizing rule could be pinned before any icon metric was trusted. The rest
+measure `Terminal`, a pangram and the `L4-kern` pairs, which need advances the
+corpus never sees alone, so those characters are absent from the derived file on
+purpose and the cases that need them fail by name:
 
     the metrics derived from the recorded measurements have no advance for U+0054
 
@@ -259,44 +300,95 @@ Both directions are Segoe UI's alone. The icon families have neither half yet,
 and the section above says so rather than letting three harvested files look
 equally well checked.
 
-## Open question: which pairs the runtime actually applies
+## Which pairs the runtime applies, answered
 
-The font's kern table is **not** the list of pairs the runtime applies, and the
-corpus is what proves it. Segoe UI on build 10.0.26100.33158 kerns five pairs
-among the characters the recorded runs contain:
+The font's kern table is not, on its own, the list of pairs the runtime applies
+— but it is not the wrong list either. It took the `L4-kern` series to say how
+the two differ, and the answer is about *reach*, not about which pairs count.
 
-| pair | the font says | the runtime applied it |
-|---|---:|---|
-| `Te` | −200 | yes |
-| `ro` | −27 | no |
-| `ox` | −25 | no |
-| `ve` | −12 | no |
-| `rm` | −4 | no |
+Every pair, measured on its own in a two-character run, moved the run by exactly
+what the font says. All twelve, at every size recorded:
 
-`Terminal` is 200 design units narrower than its advances add up to at all three
-recorded sizes — exactly `Te` and nothing else, so `rm` was not applied — and
-the pangram, which contains `ro`, `ox` and `ve`, measures the raw sum of its
-advances at all three. That is not a near miss: applying the whole table puts
-the pangram 0.38 DIPs out at size 12 and 0.75 at size 24.
+| pair | GPOS | legacy `kern` | measured | pair | GPOS | legacy `kern` | measured |
+|---|---:|---:|---:|---|---:|---:|---:|
+| `Te` | −200 | −211 | **−200** | `ry` | — | 82 | **82** |
+| `Ta` | −230 | −217 | **−230** | `vo` | — | −12 | **−12** |
+| `To` | −200 | −211 | **−200** | `yo` | — | −10 | **−10** |
+| `Wa` | −80 | −76 | **−80** | `ox` | — | −25 | **−25** |
+| `Ya` | −180 | −199 | **−180** | `rm` | — | −4 | **−4** |
+| | | | | `ro` | — | −27 | **−27** |
+| | | | | `ve` | — | −12 | **−12** |
 
-So a rule picks the survivors, and **we do not know what it is.** Three
-candidates the data does not separate:
+Two things fall out of it. **Where the tables disagree, GPOS wins** — five pairs
+disagree and the runtime took the GPOS value every time. And the split between
+the two tables is exactly the split in behaviour: **a GPOS pair moves a run
+wherever it sits; a pair only the legacy table carries moves the run's first
+pair and nothing else.**
 
-* **the source table.** `Te` may live in `GPOS` and the other four in the
-  legacy `kern` table, or the reverse. This is why `font_kerning` records the
-  two apart instead of merging them, and the next measurement run answers it
-  for free — no new cases needed, just a look at which side each pair is on.
-* **magnitude.** −200 survived and −4 to −27 did not. A threshold is a poor
-  explanation for a text engine, but four observations cannot rule it out.
-* **the glyph classes.** `Te` is uppercase-then-lowercase and the other four
-  are lowercase pairs, so a subtable or class restriction would separate them
-  exactly as observed.
+That is what reconciles the isolated runs with the words:
 
-Nothing here guesses between them. The layout core applies the committed list
-and only that, so a case whose answer depends on an unwitnessed pair is wrong
-by the amount the runtime is wrong by, and not by an invented rule.
+* `Terminal` is short by `Te` and not by `rm`. `rm` is legacy-only and sits at
+  index 2.
+* the pangram holds `ro`, `ox` and `ve`, all legacy-only and all mid-word, and
+  measures the raw sum of its advances at all three sizes.
+* `{StaticResource NotAKey}` is short by 153 units, which is `St` + `Re` + `Ke`
+  at indices 1, 7 and 20 — three GPOS pairs, deep in the run — while `rc` at
+  index 12, its one legacy-only pair, moves nothing.
 
-What would settle it: short runs holding exactly one candidate pair each, at
-several sizes, so every pair is witnessed on its own instead of inside a word
-with six others. Those are authored in
-[`generate_cases.py`](../../scripts/generate_cases.py) as the `L4-kern` group.
+So the three candidates the earlier evidence admitted are all settled:
+**magnitude** is dead (`rm` at −4 applies in isolation while −27 does not apply
+mid-word), **glyph class** is dead (seven lowercase pairs apply in isolation),
+and **the source table** is the answer — though not in the shape it was posed.
+
+### What is still open
+
+**Why the legacy table is read at the front of a run at all.** "the first pair"
+and "a run of exactly two glyphs" fit every recording equally well, because no
+recorded run of three or more begins with a legacy-only pair. The layout core
+implements the first. A three-character run starting with `ox`, `ro`, `ve` or
+`rm` would separate them in one measurement.
+
+**Whether the harvest sees all of GPOS.** `read_gpos_kerning` skips a
+class-2 pair whose second glyph falls in class 0, so the GPOS column above may
+be short. It cannot be short in a way that changes the rules — a pair missing
+from it would have to apply everywhere and the pangram says these do not — but
+a fuller reader may move pairs from the right-hand column to the left.
+
+## Open question: what a simulated weight adds
+
+`FontWeight` on a family that ships one face is simulated, and the five
+`L4-icon-rule-mdl2-*` probes settled the shape of it: the simulation adds a
+fixed fraction of the em to every advance, the line box is untouched, and the
+fraction does not depend on how much heavier the weight was — `Bold` and `Black`
+both measure 103 where the plain glyph measures 100.
+
+What they do not settle is the fraction. Black is 103 at size 100, 205 at 200
+and 15 at 14, which bounds it to (2%, 2.5%] of the em and no tighter: a
+`FontIcon`'s desired width is a ceiling, so every value in that interval
+produces those same three integers. The three rules the two smaller sizes once
+admitted are all dead — a whole DIP gives 101/201, a twenty-fourth of the em
+104.17/208.33, two per cent 102/204 — so the probes did their job; the interval
+is simply where the ceiling stops.
+
+`text.cpp` implements the closed end of the interval and says so. Nothing the
+corpus records can tell the difference. What would: a `TextBlock` in an icon
+font at `Black`, written as `Text=` so the recording keeps the unsnapped width
+(see the next section), at two sizes.
+
+## The two spellings of a TextBlock's text are not one measurement
+
+The `L4-source` twins were authored to check that `Text="M"` and
+`<TextBlock>M</TextBlock>` are the same thing. They are not:
+
+| | width | height |
+|---|---:|---:|
+| `<TextBlock Text="M"/>` | 12.5713 | 18.6211 |
+| `<TextBlock>M</TextBlock>` | 12.57 | 18.62 |
+
+Inline content snaps every advance and the line height to 1/300 of a DIP; the
+`Text` property keeps them unsnapped. The same split appears at `Terminal`
+(52.042 against 52.04) and at `{StaticResource NotAKey}` (156.2285 against
+156.2167), where the accumulated difference finally grows past the corpus's
+tolerance and stops being a curiosity. Content becomes an implicit `Run` in the
+`Inlines` collection and the property does not, so they are different text
+sources in the runtime; that they are also different arithmetic is the finding.
