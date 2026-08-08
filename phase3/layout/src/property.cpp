@@ -79,6 +79,8 @@ const DependencyProperty* PropertyByIndex(size_t index) {
 // --- DependencyObject ---------------------------------------------------------
 
 const PropertyValue* DependencyObject::OwnValue(const DependencyProperty& property) const {
+    const auto animated = animated_.find(property.index());
+    if (animated != animated_.end()) return &animated->second;
     const auto local = local_.find(property.index());
     if (local != local_.end()) return &local->second;
     // Below a local value and above an inherited one. See the precedence note
@@ -114,6 +116,19 @@ void DependencyObject::ValueMoved(const DependencyProperty& property,
     if (SameValue(before, GetValue(property))) return;
 
     OnPropertyChanged(property);
+    const PropertyValue after = GetValue(property);
+    // A handler is allowed to detach itself. Copying the token set keeps that
+    // safe without retaining a callback that another handler removed.
+    std::vector<PropertyChangedToken> tokens;
+    tokens.reserve(property_changed_handlers_.size());
+    for (const auto& [token, handler] : property_changed_handlers_) {
+        (void)handler;
+        tokens.push_back(token);
+    }
+    for (PropertyChangedToken token : tokens) {
+        const auto found = property_changed_handlers_.find(token);
+        if (found != property_changed_handlers_.end()) found->second(*this, property, after);
+    }
     if (property.inherits()) {
         for (DependencyObject* child : InheritanceChildren())
             child->InvalidateInherited(property, before);
@@ -165,6 +180,50 @@ void DependencyObject::ClearStyleValues() {
 
 bool DependencyObject::HasStyleValue(const DependencyProperty& property) const {
     return style_.count(property.index()) != 0;
+}
+
+void DependencyObject::SetAnimatedValue(const DependencyProperty& property, PropertyValue value) {
+    const PropertyValue before = GetValue(property);
+    animated_[property.index()] = std::move(value);
+    ValueMoved(property, before);
+}
+
+void DependencyObject::ClearAnimatedValue(const DependencyProperty& property) {
+    const auto found = animated_.find(property.index());
+    if (found == animated_.end()) return;
+    const PropertyValue before = found->second;
+    animated_.erase(found);
+    ValueMoved(property, before);
+}
+
+void DependencyObject::ClearAnimatedValues() {
+    if (animated_.empty()) return;
+    std::vector<std::pair<const DependencyProperty*, PropertyValue>> before;
+    before.reserve(animated_.size());
+    for (const auto& [index, value] : animated_) {
+        (void)value;
+        const DependencyProperty* property = PropertyByIndex(index);
+        if (!property) throw PropertyError("an animated value is filed under no known property");
+        before.emplace_back(property, GetValue(*property));
+    }
+    animated_.clear();
+    for (const auto& [property, was] : before) ValueMoved(*property, was);
+}
+
+bool DependencyObject::HasAnimatedValue(const DependencyProperty& property) const {
+    return animated_.count(property.index()) != 0;
+}
+
+DependencyObject::PropertyChangedToken DependencyObject::AddPropertyChangedHandler(
+    PropertyChangedHandler handler) {
+    if (!handler) throw PropertyError("a property-changed handler cannot be empty");
+    const PropertyChangedToken token = next_property_changed_token_++;
+    property_changed_handlers_.emplace(token, std::move(handler));
+    return token;
+}
+
+void DependencyObject::RemovePropertyChangedHandler(PropertyChangedToken token) {
+    property_changed_handlers_.erase(token);
 }
 
 double DependencyObject::GetDouble(const DependencyProperty& property) const {

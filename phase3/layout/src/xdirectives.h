@@ -24,6 +24,9 @@ namespace openxaml {
 
 // What an element's x: directives tell the loader to do with it.
 struct XDirectives {
+    // x:Name, retained for namescope registration and storyboard targets.
+    std::string name;
+
     // x:Load="False", or x:DeferLoadStrategy="Lazy". The element is described
     // by the markup but not created: it is absent from the tree, takes part in
     // no measure or arrange pass, and occupies no slot in its parent.
@@ -42,6 +45,11 @@ struct XDirectives {
     // Whether an x:Uid was written at all, which is not the same as it being
     // non-empty: x:Uid="" is markup that names no resource and is refused.
     bool has_uid = false;
+
+    // Compile-time source type for {x:Bind}. The native loader receives the
+    // already-adapted ObservableObject, so this is validation metadata rather
+    // than a runtime cast, but it must still be retained and checked.
+    std::string data_type;
 };
 
 // Removes every x: attribute from `attributes` and reports what they said,

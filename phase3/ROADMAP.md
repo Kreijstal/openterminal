@@ -39,6 +39,22 @@ Waves 5–6 need new oracle *kinds* (input event traces, rendered-output
 probes), not just more layout cases — extending the probe is part of those
 waves, and the probe extension lands before the implementation it gates.
 
+Implementation status as of the Wave-2 baseline: the native Wave-3 binding,
+visual-state/storyboard and template mechanisms and the Wave-4 framework
+control state machines are present and focused-tested. The Windows UI DLL
+projects the framework controls through their SDK interfaces. The exit
+criteria remain open until an L6 oracle is authored/recorded, reconstructed
+generic.xaml is diffed, the muxc WinMD contracts are projected, and the L7
+subtree count is remeasured; implementation status is not measurement status.
+
+The subsequent Windows.UI.Xaml completion pass removes every named type
+failure from the pinned L7 corpus and projects all 26 native markup/runtime
+classes through the DLL. It adds ScrollViewer viewport state, FontIcon glyph
+measurement/fallback, the remaining shape/control blockers, and focused native
+and Wine ABI smoke coverage. This advances the implementation side of Waves 3
+and 4; the unchanged exit gates above still require fresh L3-scroll/L4-icon/L6
+oracle data, full generic.xaml reconstruction and muxc ABI projection.
+
 ## Repo split
 
 The runtime may move to its own repository once it stands alone (roughly

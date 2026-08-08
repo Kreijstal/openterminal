@@ -22,6 +22,7 @@
 #include "stack_panel.h"
 #include "style.h"
 #include "text.h"
+#include "scroll_viewer.h"
 
 namespace openxaml {
 
@@ -42,13 +43,47 @@ struct MarkupProperty {
     PropertyValue value;
 };
 
+struct MarkupBinding {
+    const DependencyProperty* property = nullptr;
+    Binding binding;
+};
+
+struct MarkupVisualSetter {
+    std::string target_name;
+    std::string property;
+    std::string value;
+};
+
+struct MarkupTimeline {
+    std::string target_name;
+    std::string property;
+    std::string from;
+    std::string to;
+    bool has_from = false;
+    double duration_seconds = 0.0;
+};
+
+struct MarkupVisualState {
+    std::string name;
+    std::vector<MarkupVisualSetter> setters;
+    std::vector<MarkupTimeline> timelines;
+};
+
+struct MarkupVisualStateGroup {
+    std::string name;
+    std::vector<MarkupVisualState> states;
+};
+
 struct MarkupNode {
     // The short name as written in the markup: "Border", "Grid", "StackPanel".
     std::string type;
+    std::string name;
 
     // Everything the markup set on this element, in the form the property
     // store takes it. This is what the layout core realises.
     std::vector<MarkupProperty> properties;
+    std::vector<MarkupBinding> bindings;
+    std::vector<MarkupVisualStateGroup> visual_state_groups;
 
     // The same values again, as typed fields.
     //
@@ -107,6 +142,7 @@ struct MarkupNode {
     // Text, and the inherited text properties a Control carries as well. The
     // defaults are XAML's.
     std::string text;
+    std::string glyph;
     std::string font_family = "Segoe UI";
     double font_size = 14.0;
     std::string foreground;

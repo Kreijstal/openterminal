@@ -13,6 +13,7 @@
 #include <string>
 
 #include "element.h"
+#include "binding.h"
 #include "resw_strings.h"
 
 namespace openxaml {
@@ -29,6 +30,13 @@ std::unique_ptr<Element> LoadMarkup(const std::string& markup);
 // either; this one is what a measurement run against Terminal's own strings
 // would use.
 std::unique_ptr<Element> LoadMarkup(const std::string& markup, const StringTable& strings);
+
+// Realises {Binding}/{x:Bind} expressions against an observable data source.
+// The source must outlive the returned tree, matching DataContext ownership in
+// the WinUI object graph.
+std::unique_ptr<Element> LoadMarkup(const std::string& markup, ObservableObject& source);
+std::unique_ptr<Element> LoadMarkup(const std::string& markup, const StringTable& strings,
+                                    ObservableObject& source);
 
 }  // namespace openxaml
 

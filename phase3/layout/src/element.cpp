@@ -57,6 +57,8 @@ const DependencyProperty* const kOpacity = RegisterProperty("UIElement", "Opacit
 // it is collapsed too.
 const DependencyProperty* const kVisibility = RegisterProperty(
     "UIElement", "Visibility", {static_cast<int>(Visibility::Visible), false, true});
+const DependencyProperty* const kRenderTransformOrigin = RegisterProperty(
+    "UIElement", "RenderTransformOrigin", {std::string("0,0"), false, false});
 
 // Panel.Background, which is where Grid, StackPanel and Canvas get theirs.
 // Border and ContentPresenter declare their own, as the runtime does.
@@ -134,6 +136,7 @@ const DependencyProperty& Element::VerticalAlignmentProperty() { return *kVertic
 const DependencyProperty& Element::UseLayoutRoundingProperty() { return *kUseLayoutRounding; }
 const DependencyProperty& Element::OpacityProperty() { return *kOpacity; }
 const DependencyProperty& Element::VisibilityProperty() { return *kVisibility; }
+const DependencyProperty& Element::RenderTransformOriginProperty() { return *kRenderTransformOrigin; }
 const DependencyProperty& PanelBackgroundProperty() { return *kPanelBackground; }
 
 void Element::OnPropertyChanged(const DependencyProperty& property) {

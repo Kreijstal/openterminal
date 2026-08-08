@@ -279,10 +279,11 @@ void StillBlocked() {
     // The rule the whole file exists to protect: a directive that is not
     // implemented fails by its own name. Dropping one would change what the
     // markup means with nothing in any number to show for it.
-    Rejects("x:Bind", Document("StackPanel", "", "<Border Width=\"{x:Bind W}\"/>"),
-            "'{x:Bind}' is not implemented");
-    Rejects("x:DataType", Document("StackPanel", "", "<Border x:DataType=\"local:Profile\"/>"),
-            "the directive 'x:DataType' is not implemented");
+    Rejects("x:Bind without a generated source",
+            Document("StackPanel", "", "<Border Width=\"{x:Bind W}\"/>"),
+            "the binding path 'W' has no data source");
+    HasChildren("x:DataType metadata",
+                Document("StackPanel", "", "<Border x:DataType=\"local:Profile\"/>"), 1);
     Rejects("x:Class", Document("StackPanel", "x:Class=\"App.Page\"", "<Border/>"),
             "the directive 'x:Class' is not implemented");
     Rejects("x:FieldModifier",

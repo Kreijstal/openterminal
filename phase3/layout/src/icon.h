@@ -6,12 +6,9 @@
 // appears in the measured tree, which is why a PathIcon shows up as a leaf
 // even though there is a Path inside it.
 //
-// FontIcon is the other subclass and is not here. Its content is a glyph run,
-// so its desired size is a text measurement in an icon font, and the harvested
-// metrics for Segoe MDL2 Assets and Segoe Fluent Icons are not in the corpus.
-// Implementing it would mean inventing glyph advances, and fifteen L7 cases
-// would then agree or disagree with the oracle for reasons that had nothing to
-// do with layout.
+// FontIcon is the text-backed sibling. It uses the same deterministic glyph
+// metric pipeline as TextBlock; icon-font metrics remain a harvested /tmp CI
+// artifact rather than a committed binary.
 
 #ifndef OPENXAML_ICON_H
 #define OPENXAML_ICON_H
@@ -22,6 +19,7 @@
 
 #include "element.h"
 #include "shape.h"
+#include "text.h"
 
 namespace openxaml {
 
@@ -44,6 +42,27 @@ protected:
 
 private:
     Path content_;
+};
+
+class FontIcon : public Element {
+public:
+    std::string TypeName() const override { return "Windows.UI.Xaml.Controls.FontIcon"; }
+    static const std::vector<std::string>& Owners();
+    const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
+    const std::string& glyph() const { return GetString(GlyphProperty()); }
+    void set_glyph(std::string value) { SetValue(GlyphProperty(), std::move(value)); }
+    double font_size() const { return GetDouble(FontSizeProperty()); }
+    void set_font_size(double value) { SetValue(FontSizeProperty(), value); }
+    const std::string& font_family() const { return GetString(FontFamilyProperty()); }
+    void set_font_family(std::string value) { SetValue(FontFamilyProperty(), std::move(value)); }
+    static const DependencyProperty& GlyphProperty();
+    static const DependencyProperty& FontSizeProperty();
+    static const DependencyProperty& FontFamilyProperty();
+protected:
+    Size MeasureOverride(Size available) override;
+    Size ArrangeOverride(Size final_size) override;
+private:
+    TextBlock content_;
 };
 
 }  // namespace openxaml

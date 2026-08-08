@@ -195,13 +195,13 @@ void Dictionaries() {
 // --- markup extensions --------------------------------------------------------
 
 void Extensions() {
-    Rejects("an extension that is not implemented",
+    Rejects("a Binding without a DataContext",
             Document("Border", "", "<Border Width=\"{Binding Width}\"/>"),
-            "the markup extension '{Binding}' is not implemented");
+            "the binding path 'Width' has no data source");
 
-    Rejects("a binding is not a resource",
+    Rejects("an x:Bind without a generated source",
             Document("Border", "", "<Border Width=\"{x:Bind Width}\"/>"),
-            "the markup extension '{x:Bind}' is not implemented");
+            "the binding path 'Width' has no data source");
 
     Rejects("{StaticResource} with no key",
             Document("Border", "", "<Border Width=\"{StaticResource}\"/>"),

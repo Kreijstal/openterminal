@@ -43,6 +43,16 @@ protected:
     Size ArrangeOverride(Size final_size) override { return final_size; }
 };
 
+class Rectangle : public Element {
+public:
+    std::string TypeName() const override { return "Windows.UI.Xaml.Shapes.Rectangle"; }
+    static const std::vector<std::string>& Owners();
+    const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
+protected:
+    Size MeasureOverride(Size) override { return {}; }
+    Size ArrangeOverride(Size final_size) override { return final_size; }
+};
+
 }  // namespace openxaml
 
 #endif  // OPENXAML_SHAPE_H

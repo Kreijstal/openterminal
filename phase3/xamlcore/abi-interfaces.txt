@@ -17,6 +17,28 @@ ABI::Windows::UI::Xaml::Controls::IPanel
 ABI::Windows::UI::Xaml::Controls::IBorder
 ABI::Windows::UI::Xaml::Controls::IGrid
 ABI::Windows::UI::Xaml::Controls::IStackPanel
+ABI::Windows::UI::Xaml::Controls::ICanvas
+ABI::Windows::UI::Xaml::Controls::IContentPresenter
+ABI::Windows::UI::Xaml::Controls::IImage
+ABI::Windows::UI::Xaml::Controls::IPathIcon
+ABI::Windows::UI::Xaml::Shapes::IPath
+
+# Wave 3/4 control base and framework controls.
+ABI::Windows::UI::Xaml::Controls::IControl
+ABI::Windows::UI::Xaml::Controls::IContentControl
+ABI::Windows::UI::Xaml::Controls::IPage
+ABI::Windows::UI::Xaml::Controls::IFrame
+ABI::Windows::UI::Xaml::Controls::IItemsControl
+ABI::Windows::UI::Xaml::Controls::IListView
+ABI::Windows::UI::Xaml::Controls::IListViewBase
+ABI::Windows::UI::Xaml::Controls::Primitives::IPopup
+ABI::Windows::UI::Xaml::Controls::IFontIcon
+ABI::Windows::UI::Xaml::Controls::IScrollViewer
+ABI::Windows::UI::Xaml::Controls::IButton
+ABI::Windows::UI::Xaml::Controls::ITextBox
+ABI::Windows::UI::Xaml::Controls::IToolTip
+ABI::Windows::UI::Xaml::Controls::Primitives::IThumb
+ABI::Windows::UI::Xaml::Shapes::IRectangle
 
 # Text. FontFamily is a runtime class rather than a string, so putting one on
 # a TextBlock means implementing it too -- there is no way to say "Segoe UI"

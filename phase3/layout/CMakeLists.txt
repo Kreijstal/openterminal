@@ -22,6 +22,8 @@ add_library(openxaml_layout STATIC
     src/image.cpp
     src/shape.cpp
     src/icon.cpp
+    src/scroll_viewer.cpp
+    src/basic_controls.cpp
     src/brush.cpp
     src/text.cpp
     # Text measurement needs numbers out of a font file, and those arrive as
@@ -42,6 +44,12 @@ add_library(openxaml_layout STATIC
     # layout pass.
     src/xdirectives.cpp
     src/resw_strings.cpp
+    # Wave 3: observable bindings, visual states/storyboards and generic.xaml
+    # control templates. Wave 4: virtualized items, navigation and overlays.
+    src/binding.cpp
+    src/visual_state.cpp
+    src/default_styles.cpp
+    src/advanced_controls.cpp
 )
 target_include_directories(openxaml_layout PUBLIC src)
 
@@ -111,6 +119,21 @@ add_executable(xdirective_tests
 target_link_libraries(xdirective_tests PRIVATE openxaml_layout)
 add_test(NAME xdirectives COMMAND xdirective_tests)
 
+add_executable(wave3_tests tests/wave3_test.cpp src/markup.cpp)
+target_link_libraries(wave3_tests PRIVATE openxaml_layout)
+add_test(NAME wave3 COMMAND wave3_tests)
+
+add_executable(wave4_tests tests/wave4_test.cpp src/markup.cpp)
+target_link_libraries(wave4_tests PRIVATE openxaml_layout)
+add_test(NAME wave4 COMMAND wave4_tests)
+
+add_executable(windows_xaml_completion_tests
+    tests/windows_xaml_completion_test.cpp
+    src/markup.cpp
+)
+target_link_libraries(windows_xaml_completion_tests PRIVATE openxaml_layout)
+add_test(NAME windows_xaml_completion COMMAND windows_xaml_completion_tests)
+
 if(MSVC)
     target_compile_options(openxaml_layout PRIVATE /W4)
     target_compile_options(measure_cases PRIVATE /W4)
@@ -120,6 +143,9 @@ if(MSVC)
     target_compile_options(probe_text_test PRIVATE /W4)
     target_compile_options(error_hygiene_test PRIVATE /W4)
     target_compile_options(xdirective_tests PRIVATE /W4)
+    target_compile_options(wave3_tests PRIVATE /W4)
+    target_compile_options(wave4_tests PRIVATE /W4)
+    target_compile_options(windows_xaml_completion_tests PRIVATE /W4)
 else()
     target_compile_options(openxaml_layout PRIVATE -Wall -Wextra)
     target_compile_options(measure_cases PRIVATE -Wall -Wextra)
@@ -129,4 +155,7 @@ else()
     target_compile_options(probe_text_test PRIVATE -Wall -Wextra)
     target_compile_options(error_hygiene_test PRIVATE -Wall -Wextra)
     target_compile_options(xdirective_tests PRIVATE -Wall -Wextra)
+    target_compile_options(wave3_tests PRIVATE -Wall -Wextra)
+    target_compile_options(wave4_tests PRIVATE -Wall -Wextra)
+    target_compile_options(windows_xaml_completion_tests PRIVATE -Wall -Wextra)
 endif()

@@ -12,12 +12,21 @@ const DependencyProperty* const kData =
     RegisterProperty("Path", "Data", {std::string(), false, true});
 
 const std::vector<std::string> kOwners = {"Path", "Shape", "FrameworkElement", "UIElement"};
+const std::vector<std::string> kRectangleOwners = {
+    "Rectangle", "Shape", "FrameworkElement", "UIElement"};
+const DependencyProperty* const kFill =
+    RegisterProperty("Shape", "Fill", {std::string(), false, false});
+const DependencyProperty* const kRadiusX =
+    RegisterProperty("Rectangle", "RadiusX", {0.0, false, false});
+const DependencyProperty* const kRadiusY =
+    RegisterProperty("Rectangle", "RadiusY", {0.0, false, false});
 
 }  // namespace
 
 const DependencyProperty& Path::DataProperty() { return *kData; }
 
 const std::vector<std::string>& Path::Owners() { return kOwners; }
+const std::vector<std::string>& Rectangle::Owners() { return kRectangleOwners; }
 
 Size Path::MeasureOverride(Size) {
     // The constraint is not consulted. Under Stretch="None" the geometry is

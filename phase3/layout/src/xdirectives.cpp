@@ -38,12 +38,21 @@ XDirectives TakeXDirectives(std::map<std::string, std::string>& attributes) {
         // Names an element for a code-behind to reach. There is no code-behind
         // here and no namescope; the corpus reads its results out of the
         // measured tree by path, so a name has never moved an element.
-        if (name == "x:Name") continue;
+        if (name == "x:Name") {
+            if (value.empty()) throw MarkupError("x:Name cannot be empty");
+            directives.name = value;
+            continue;
+        }
 
         if (name == "x:Uid") {
             if (value.empty()) throw MarkupError("x:Uid names no resource");
             directives.uid = value;
             directives.has_uid = true;
+            continue;
+        }
+        if (name == "x:DataType") {
+            if (value.empty()) throw MarkupError("x:DataType names no type");
+            directives.data_type = value;
             continue;
         }
         // The two spellings of the same instruction. An element carrying both
@@ -63,7 +72,7 @@ XDirectives TakeXDirectives(std::map<std::string, std::string>& attributes) {
             continue;
         }
 
-        // x:Class, x:Bind, x:DataType, x:Key outside a dictionary, x:FieldModifier.
+        // x:Class, x:Key outside a dictionary, x:FieldModifier.
         // Each one is a real dependency on something a standalone load does not
         // have, and is refused by name so that the inventory of what is missing
         // stays accurate.

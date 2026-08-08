@@ -236,9 +236,69 @@ Factory<StackPanelObject>& StackPanelFactory() {
     static Factory<StackPanelObject> factory(L"Windows.UI.Xaml.Controls.StackPanel");
     return factory;
 }
+Factory<CanvasObject>& CanvasFactory() {
+    static Factory<CanvasObject> factory(L"Windows.UI.Xaml.Controls.Canvas"); return factory;
+}
+Factory<ContentPresenterObject>& ContentPresenterFactory() {
+    static Factory<ContentPresenterObject> factory(L"Windows.UI.Xaml.Controls.ContentPresenter"); return factory;
+}
+Factory<ImageObject>& ImageFactory() {
+    static Factory<ImageObject> factory(L"Windows.UI.Xaml.Controls.Image"); return factory;
+}
+Factory<PathObject>& PathFactory() {
+    static Factory<PathObject> factory(L"Windows.UI.Xaml.Shapes.Path"); return factory;
+}
+Factory<PathIconObject>& PathIconFactory() {
+    static Factory<PathIconObject> factory(L"Windows.UI.Xaml.Controls.PathIcon"); return factory;
+}
 Factory<TextBlockObject>& TextBlockFactory() {
     static Factory<TextBlockObject> factory(L"Windows.UI.Xaml.Controls.TextBlock");
     return factory;
+}
+Factory<ContentControlObject>& ContentControlFactory() {
+    static Factory<ContentControlObject> factory(L"Windows.UI.Xaml.Controls.ContentControl");
+    return factory;
+}
+Factory<PageObject>& PageFactory() {
+    static Factory<PageObject> factory(L"Windows.UI.Xaml.Controls.Page");
+    return factory;
+}
+Factory<FrameObject>& FrameFactory() {
+    static Factory<FrameObject> factory(L"Windows.UI.Xaml.Controls.Frame");
+    return factory;
+}
+Factory<ItemsControlObject>& ItemsControlFactory() {
+    static Factory<ItemsControlObject> factory(L"Windows.UI.Xaml.Controls.ItemsControl");
+    return factory;
+}
+Factory<ListViewObject>& ListViewFactory() {
+    static Factory<ListViewObject> factory(L"Windows.UI.Xaml.Controls.ListView");
+    return factory;
+}
+Factory<PopupObject>& PopupFactory() {
+    static Factory<PopupObject> factory(L"Windows.UI.Xaml.Controls.Primitives.Popup");
+    return factory;
+}
+Factory<ButtonObject>& ButtonFactory() {
+    static Factory<ButtonObject> factory(L"Windows.UI.Xaml.Controls.Button"); return factory;
+}
+Factory<TextBoxObject>& TextBoxFactory() {
+    static Factory<TextBoxObject> factory(L"Windows.UI.Xaml.Controls.TextBox"); return factory;
+}
+Factory<ToolTipObject>& ToolTipFactory() {
+    static Factory<ToolTipObject> factory(L"Windows.UI.Xaml.Controls.ToolTip"); return factory;
+}
+Factory<ThumbObject>& ThumbFactory() {
+    static Factory<ThumbObject> factory(L"Windows.UI.Xaml.Controls.Primitives.Thumb"); return factory;
+}
+Factory<ScrollViewerObject>& ScrollViewerFactory() {
+    static Factory<ScrollViewerObject> factory(L"Windows.UI.Xaml.Controls.ScrollViewer"); return factory;
+}
+Factory<FontIconObject>& FontIconFactory() {
+    static Factory<FontIconObject> factory(L"Windows.UI.Xaml.Controls.FontIcon"); return factory;
+}
+Factory<RectangleObject>& RectangleFactory() {
+    static Factory<RectangleObject> factory(L"Windows.UI.Xaml.Shapes.Rectangle"); return factory;
 }
 
 FontFamilyFactory& TheFontFamilyFactory() {
@@ -289,8 +349,33 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &TheGridFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.StackPanel") == 0)
         return &StackPanelFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.Canvas") == 0) return &CanvasFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.ContentPresenter") == 0)
+        return &ContentPresenterFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.Image") == 0) return &ImageFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Shapes.Path") == 0) return &PathFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.PathIcon") == 0) return &PathIconFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.TextBlock") == 0)
         return &TextBlockFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.ContentControl") == 0)
+        return &ContentControlFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.Page") == 0)
+        return &PageFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.Frame") == 0)
+        return &FrameFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.ItemsControl") == 0)
+        return &ItemsControlFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.ListView") == 0)
+        return &ListViewFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.Primitives.Popup") == 0)
+        return &PopupFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.Button") == 0) return &ButtonFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.TextBox") == 0) return &TextBoxFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.ToolTip") == 0) return &ToolTipFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.Primitives.Thumb") == 0) return &ThumbFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.ScrollViewer") == 0) return &ScrollViewerFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.FontIcon") == 0) return &FontIconFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Shapes.Rectangle") == 0) return &RectangleFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Media.FontFamily") == 0)
         return &TheFontFamilyFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.ColumnDefinition") == 0)

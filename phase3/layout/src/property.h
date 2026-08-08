@@ -10,14 +10,15 @@
 // Ported in shape from dotnet/wpf's DependencyObject and its property store
 // (MIT, 2ca037562c207924e53cfcc99286e523d3694de3), reduced to the sources the
 // corpus can currently see. WPF's chain has a dozen entries -- coercion,
-// animation, triggers, styles, template parents -- and every one of them that
-// is missing here is a level of the corpus that has not been reached yet.
+// animation, triggers, styles, template parents. Every source beyond the four
+// below is still a level of the corpus that has not been reached yet.
 //
-// Three of them are here now, in this order, highest first:
+// Four of them are here now, in this order, highest first:
 //
+//   animation active storyboards and VisualState setters
 //   local     what the markup wrote on the element itself
 //   style     what the element's Style says, BasedOn already merged
-//   inherited the nearest ancestor's local-or-style value
+//   inherited the nearest ancestor's effective value
 //   default   what the property was registered with
 //
 // That order is WPF's `BaseValueSourceInternal`, where Local outranks Style and
@@ -27,14 +28,15 @@
 // says and not at 22. Inheritance reads the ancestor's *effective* value, so a
 // FontSize a style set does flow down to elements that have neither.
 //
-// The whole chain is looked up in one place, so the next source -- a trigger,
-// an animation -- slots in beside these rather than being threaded through
+// The whole chain is looked up in one place, so the next source -- a trigger
+// or coercion -- slots in beside these rather than being threaded through
 // callers.
 
 #ifndef OPENXAML_PROPERTY_H
 #define OPENXAML_PROPERTY_H
 
 #include <map>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -149,6 +151,10 @@ const DependencyProperty* PropertyByIndex(size_t index);
 // folded into Element.
 class DependencyObject {
 public:
+    using PropertyChangedHandler =
+        std::function<void(DependencyObject&, const DependencyProperty&, const PropertyValue&)>;
+    using PropertyChangedToken = size_t;
+
     virtual ~DependencyObject() = default;
 
     // The property owners this object answers to, most derived first --
@@ -184,6 +190,20 @@ public:
     void ClearStyleValues();
 
     bool HasStyleValue(const DependencyProperty& property) const;
+
+    // Active animations sit above local values in the WinUI precedence
+    // chain. VisualState setters use the same slot: leaving a state removes
+    // its value and reveals the local/style/inherited value underneath.
+    void SetAnimatedValue(const DependencyProperty& property, PropertyValue value);
+    void ClearAnimatedValue(const DependencyProperty& property);
+    void ClearAnimatedValues();
+    bool HasAnimatedValue(const DependencyProperty& property) const;
+
+    // Binding expressions and the ABI event layer observe effective changes,
+    // not writes. A write shadowed by an animation therefore raises nothing;
+    // clearing that animation raises the newly exposed value once.
+    PropertyChangedToken AddPropertyChangedHandler(PropertyChangedHandler handler);
+    void RemovePropertyChangedHandler(PropertyChangedToken token);
 
     // Typed reads. They throw if the property does not hold that type, which
     // is a registration mistake rather than anything a case can cause.
@@ -234,6 +254,9 @@ private:
     // than a tagged one: the two are read in a fixed order and never merged,
     // and keeping them apart is what makes clearing one of them possible.
     std::map<size_t, PropertyValue> style_;
+    std::map<size_t, PropertyValue> animated_;
+    std::map<PropertyChangedToken, PropertyChangedHandler> property_changed_handlers_;
+    PropertyChangedToken next_property_changed_token_ = 1;
     DependencyObject* inheritance_parent_ = nullptr;
 };
 

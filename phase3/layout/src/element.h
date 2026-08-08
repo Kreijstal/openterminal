@@ -20,6 +20,8 @@
 
 #include "layout.h"
 #include "property.h"
+#include "binding.h"
+#include "visual_state.h"
 
 namespace openxaml {
 
@@ -76,6 +78,17 @@ public:
     // check. It is here because the invalidation it records is the observable
     // half of an inherited value changing under an element.
     bool needs_measure() const { return needs_measure_; }
+
+    void KeepBinding(std::unique_ptr<BindingExpression> binding) {
+        bindings_.push_back(std::move(binding));
+    }
+    size_t binding_count() const { return bindings_.size(); }
+    void KeepVisualStateManager(std::shared_ptr<NameScope> names,
+                                std::unique_ptr<VisualStateManager> manager) {
+        namescope_ = std::move(names);
+        visual_states_ = std::move(manager);
+    }
+    VisualStateManager* visual_state_manager() const { return visual_states_.get(); }
 
     // FrameworkElement properties. Width and Height are NaN when unset, which
     // is what Auto means: no explicit size, take what the content needs.
@@ -146,6 +159,7 @@ public:
     static const DependencyProperty& UseLayoutRoundingProperty();
     static const DependencyProperty& OpacityProperty();
     static const DependencyProperty& VisibilityProperty();
+    static const DependencyProperty& RenderTransformOriginProperty();
 
 protected:
     virtual Size MeasureOverride(Size available) = 0;
@@ -168,6 +182,9 @@ private:
     Size unclipped_desired_size_;
     Rect layout_slot_;
     bool needs_measure_ = true;
+    std::vector<std::unique_ptr<BindingExpression>> bindings_;
+    std::shared_ptr<NameScope> namescope_;
+    std::unique_ptr<VisualStateManager> visual_states_;
 };
 
 // Everything with a Children collection. Border is deliberately not a Panel --

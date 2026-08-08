@@ -48,6 +48,7 @@ class FontLibrary {
 public:
     void Add(std::string family, FontMetrics metrics);
     const FontMetrics* Find(const std::string& family) const;
+    const FontMetrics* FindForText(const std::string& family, const std::string& text) const;
     bool empty() const { return fonts_.empty(); }
 
     // Process-wide, because the markup builder and the WinRT activation

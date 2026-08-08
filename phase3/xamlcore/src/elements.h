@@ -23,6 +23,14 @@
 #include "openxaml_abi_stubs.h"
 #include "stack_panel.h"
 #include "text.h"
+#include "advanced_controls.h"
+#include "basic_controls.h"
+#include "canvas.h"
+#include "content_presenter.h"
+#include "icon.h"
+#include "image.h"
+#include "scroll_viewer.h"
+#include "shape.h"
 
 namespace openxaml::winrt {
 
@@ -30,6 +38,8 @@ namespace wf = ABI::Windows::Foundation;
 namespace wux = ABI::Windows::UI::Xaml;
 namespace wuxc = ABI::Windows::UI::Xaml::Controls;
 namespace wuxm = ABI::Windows::UI::Xaml::Media;
+namespace wuxcp = ABI::Windows::UI::Xaml::Controls::Primitives;
+namespace wuxs = ABI::Windows::UI::Xaml::Shapes;
 
 // --- strings ------------------------------------------------------------------
 //
@@ -172,6 +182,7 @@ public:
 using AbiBorder = ChildSourced<openxaml::Border>;
 using AbiGrid = ChildSourced<openxaml::Grid>;
 using AbiStackPanel = ChildSourced<openxaml::StackPanel>;
+using AbiCanvas = ChildSourced<openxaml::Canvas>;
 
 // --- the element base ---------------------------------------------------------
 
@@ -454,6 +465,109 @@ public:
     }
 };
 
+class CanvasObject final : public PanelObject<AbiCanvas>, public abi::NotImpl_ICanvas {
+public:
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.Canvas"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_ICanvas, wuxc::ICanvas)
+        return QueryPanelInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+};
+
+class ContentPresenterObject final : public XamlElement,
+                                     public abi::NotImpl_IContentPresenter {
+public:
+    using PrimaryInterface = wuxc::IContentPresenter;
+    ContentPresenterObject() { layout_.source = &content_; }
+    openxaml::Element* Layout() override { return &layout_; }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.ContentPresenter";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IContentPresenter,
+                        wuxc::IContentPresenter)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Content(IInspectable** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (!content_.Count()) return S_OK;
+        wux::IUIElement* child = nullptr;
+        HRESULT hr = content_.GetAt(0, &child);
+        if (FAILED(hr)) return hr;
+        hr = child->QueryInterface(::openxaml::iid::IInspectable,
+                                   reinterpret_cast<void**>(value));
+        child->Release();
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE put_Content(IInspectable* value) override {
+        HRESULT hr = content_.Clear();
+        if (FAILED(hr) || !value) return hr;
+        wux::IUIElement* child = nullptr;
+        hr = value->QueryInterface(::openxaml::iid::Windows_UI_Xaml_IUIElement,
+                                   reinterpret_cast<void**>(&child));
+        if (FAILED(hr)) return E_INVALIDARG;
+        hr = content_.Append(child);
+        child->Release();
+        return hr;
+    }
+private:
+    ChildSourced<openxaml::ContentPresenter> layout_;
+    ChildCollection content_{{::openxaml::iid::PIID_FIVector_1_Windows__CUI__CXaml__CUIElement,
+                              ::openxaml::iid::PIID_FIIterable_1_Windows__CUI__CXaml__CUIElement,
+                              ::openxaml::iid::PIID_FIIterator_1_Windows__CUI__CXaml__CUIElement},
+                             L"Windows.UI.Xaml.Controls.ContentPresenterContent", this};
+};
+
+class ImageObject final : public XamlElement, public abi::NotImpl_IImage {
+public:
+    using PrimaryInterface = wuxc::IImage;
+    openxaml::Element* Layout() override { return &layout_; }
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.Image"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IImage, wuxc::IImage)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+private:
+    openxaml::Image layout_;
+};
+
+class PathObject final : public XamlElement, public abi::NotImpl_IPath {
+public:
+    using PrimaryInterface = wuxs::IPath;
+    openxaml::Element* Layout() override { return &layout_; }
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Shapes.Path"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Shapes_IPath, wuxs::IPath)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+private:
+    openxaml::Path layout_;
+};
+
+class PathIconObject final : public XamlElement, public abi::NotImpl_IPathIcon {
+public:
+    using PrimaryInterface = wuxc::IPathIcon;
+    openxaml::Element* Layout() override { return &layout_; }
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.PathIcon"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IPathIcon, wuxc::IPathIcon)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+private:
+    openxaml::PathIcon layout_;
+};
+
 // --- Grid definitions ---------------------------------------------------------
 
 // One implementation for rows and columns. They differ only in which
@@ -635,6 +749,496 @@ private:
         L"Windows.UI.Xaml.Controls.RowDefinitionCollection", this};
 };
 
+// --- Wave-4 controls ----------------------------------------------------------
+
+template <class LayoutType>
+class ContentControlObjectBase : public XamlElement,
+                                 public abi::NotImpl_IControl,
+                                 public abi::NotImpl_IContentControl {
+public:
+    using PrimaryInterface = wuxc::IContentControl;
+
+    ContentControlObjectBase() { layout_.source = &content_; }
+    openxaml::Element* Layout() override { return &layout_; }
+
+    HRESULT STDMETHODCALLTYPE get_Content(IInspectable** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (!content_.Count()) return S_OK;
+        wux::IUIElement* child = nullptr;
+        HRESULT hr = content_.GetAt(0, &child);
+        if (FAILED(hr)) return hr;
+        hr = child->QueryInterface(::openxaml::iid::IInspectable,
+                                   reinterpret_cast<void**>(value));
+        child->Release();
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE put_Content(IInspectable* value) override {
+        HRESULT hr = content_.Clear();
+        if (FAILED(hr) || !value) return hr;
+        wux::IUIElement* child = nullptr;
+        hr = value->QueryInterface(::openxaml::iid::Windows_UI_Xaml_IUIElement,
+                                   reinterpret_cast<void**>(&child));
+        if (FAILED(hr)) return E_INVALIDARG;
+        hr = content_.Append(child);
+        child->Release();
+        return hr;
+    }
+
+    HRESULT STDMETHODCALLTYPE get_FontSize(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.font_size();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_FontSize(DOUBLE value) override {
+        layout_.set_font_size(value);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_FontFamily(wuxm::IFontFamily** value) override;
+    HRESULT STDMETHODCALLTYPE put_FontFamily(wuxm::IFontFamily* value) override;
+    HRESULT STDMETHODCALLTYPE get_Padding(wux::Thickness* value) override {
+        if (!value) return E_POINTER;
+        const openxaml::Thickness& padding = layout_.padding();
+        *value = {padding.left, padding.top, padding.right, padding.bottom};
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Padding(wux::Thickness value) override {
+        layout_.set_padding({value.Left, value.Top, value.Right, value.Bottom});
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE ApplyTemplate(boolean* result) override {
+        if (!result) return E_POINTER;
+        *result = layout_.ApplyTemplate() ? 1 : 0;
+        return S_OK;
+    }
+
+protected:
+    HRESULT QueryControlInterface(REFIID iid, void** object) {
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IContentControl,
+                        wuxc::IContentControl)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IControl, wuxc::IControl)
+        return QueryElementInterface(iid, object);
+    }
+
+    ChildSourced<LayoutType> layout_;
+    ChildCollection content_{
+        {::openxaml::iid::PIID_FIVector_1_Windows__CUI__CXaml__CUIElement,
+         ::openxaml::iid::PIID_FIIterable_1_Windows__CUI__CXaml__CUIElement,
+         ::openxaml::iid::PIID_FIIterator_1_Windows__CUI__CXaml__CUIElement},
+        L"Windows.UI.Xaml.Controls.ContentControlContent", this};
+};
+
+class ContentControlObject final : public ContentControlObjectBase<openxaml::ContentControl> {
+public:
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.ContentControl";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+};
+
+class PageObject final : public ContentControlObjectBase<openxaml::Page>,
+                         public abi::NotImpl_IPage {
+public:
+    using PrimaryInterface = wuxc::IPage;
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.Page"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IPage, wuxc::IPage)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+};
+
+class FrameObject final : public ContentControlObjectBase<openxaml::Frame>,
+                          public abi::NotImpl_IFrame {
+public:
+    using PrimaryInterface = wuxc::IFrame;
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.Frame"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IFrame, wuxc::IFrame)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_CanGoBack(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.CanGoBack() ? 1 : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_CanGoForward(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.CanGoForward() ? 1 : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_BackStackDepth(INT32* value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<INT32>(layout_.BackStackDepth());
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GoBack() override {
+        return layout_.GoBack() ? S_OK : E_BOUNDS;
+    }
+    HRESULT STDMETHODCALLTYPE GoForward() override {
+        return layout_.GoForward() ? S_OK : E_BOUNDS;
+    }
+};
+
+struct NoAdditionalInterface {};
+
+template <class LayoutType, class InterfaceType, class StubType>
+class ItemsControlObjectBase : public XamlElement,
+                               public abi::NotImpl_IControl,
+                               public abi::NotImpl_IItemsControl,
+                               public StubType {
+public:
+    using PrimaryInterface = InterfaceType;
+    openxaml::Element* Layout() override { return &layout_; }
+
+protected:
+    HRESULT QueryItemsInterface(REFIID iid, void** object, const GUID& own_iid) {
+        OPENXAML_QI_ARM(own_iid, InterfaceType)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IItemsControl,
+                        wuxc::IItemsControl)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IControl, wuxc::IControl)
+        return QueryElementInterface(iid, object);
+    }
+    LayoutType layout_;
+};
+
+class ItemsControlObject final
+    : public ItemsControlObjectBase<openxaml::ItemsControl, wuxc::IItemsControl,
+                                    NoAdditionalInterface> {
+public:
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.ItemsControl";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        return QueryItemsInterface(iid, object,
+            ::openxaml::iid::Windows_UI_Xaml_Controls_IItemsControl);
+    }
+    OPENXAML_COM_BOILERPLATE()
+};
+
+class ListViewObject final
+    : public ItemsControlObjectBase<openxaml::ListView, wuxc::IListView,
+                                    abi::NotImpl_IListView>,
+      public abi::NotImpl_IListViewBase {
+public:
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.ListView"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IListViewBase,
+                        wuxc::IListViewBase)
+        return QueryItemsInterface(iid, object,
+            ::openxaml::iid::Windows_UI_Xaml_Controls_IListView);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_SelectionMode(wuxc::ListViewSelectionMode* value) override {
+        if (!value) return E_POINTER;
+        switch (layout_.selection_mode()) {
+            case openxaml::SelectionMode::None: *value = wuxc::ListViewSelectionMode_None; break;
+            case openxaml::SelectionMode::Multiple: *value = wuxc::ListViewSelectionMode_Multiple; break;
+            case openxaml::SelectionMode::Extended: *value = wuxc::ListViewSelectionMode_Extended; break;
+            default: *value = wuxc::ListViewSelectionMode_Single; break;
+        }
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_SelectionMode(wuxc::ListViewSelectionMode value) override {
+        switch (value) {
+            case wuxc::ListViewSelectionMode_None:
+                layout_.set_selection_mode(openxaml::SelectionMode::None); break;
+            case wuxc::ListViewSelectionMode_Single:
+                layout_.set_selection_mode(openxaml::SelectionMode::Single); break;
+            case wuxc::ListViewSelectionMode_Multiple:
+                layout_.set_selection_mode(openxaml::SelectionMode::Multiple); break;
+            case wuxc::ListViewSelectionMode_Extended:
+                layout_.set_selection_mode(openxaml::SelectionMode::Extended); break;
+            default: return E_INVALIDARG;
+        }
+        return S_OK;
+    }
+};
+
+class PopupObject final : public XamlElement, public abi::NotImpl_IPopup {
+public:
+    using PrimaryInterface = wuxcp::IPopup;
+    PopupObject() { layout_.source = &child_; }
+    openxaml::Element* Layout() override { return &layout_; }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.Primitives.Popup";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_Primitives_IPopup,
+                        wuxcp::IPopup)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_Child(wux::IUIElement** value) override {
+        if (!value) return E_POINTER;
+        if (!child_.Count()) { *value = nullptr; return S_OK; }
+        return child_.GetAt(0, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Child(wux::IUIElement* value) override {
+        HRESULT hr = child_.Clear();
+        if (FAILED(hr) || !value) return hr;
+        return child_.Append(value);
+    }
+    HRESULT STDMETHODCALLTYPE get_IsOpen(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.is_open() ? 1 : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_IsOpen(boolean value) override {
+        layout_.set_is_open(value != 0);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_HorizontalOffset(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = horizontal_offset_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_HorizontalOffset(DOUBLE value) override {
+        horizontal_offset_ = value; return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_VerticalOffset(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = vertical_offset_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_VerticalOffset(DOUBLE value) override {
+        vertical_offset_ = value; return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_IsLightDismissEnabled(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.is_light_dismiss_enabled() ? 1 : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_IsLightDismissEnabled(boolean value) override {
+        layout_.set_is_light_dismiss_enabled(value != 0);
+        return S_OK;
+    }
+
+private:
+    ChildSourced<openxaml::Popup> layout_;
+    ChildCollection child_{
+        {::openxaml::iid::PIID_FIVector_1_Windows__CUI__CXaml__CUIElement,
+         ::openxaml::iid::PIID_FIIterable_1_Windows__CUI__CXaml__CUIElement,
+         ::openxaml::iid::PIID_FIIterator_1_Windows__CUI__CXaml__CUIElement},
+        L"Windows.UI.Xaml.Controls.Primitives.PopupChild", this};
+    double horizontal_offset_ = 0.0;
+    double vertical_offset_ = 0.0;
+};
+
+// --- remaining Terminal-facing Windows.UI.Xaml controls ----------------------
+
+class ButtonObject final : public ContentControlObjectBase<openxaml::Button>,
+                           public abi::NotImpl_IButton {
+public:
+    using PrimaryInterface = wuxc::IButton;
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.Button"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IButton, wuxc::IButton)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+};
+
+class ToolTipObject final : public ContentControlObjectBase<openxaml::ToolTip>,
+                            public abi::NotImpl_IToolTip {
+public:
+    using PrimaryInterface = wuxc::IToolTip;
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.ToolTip"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IToolTip, wuxc::IToolTip)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+};
+
+class ScrollViewerObject final
+    : public ContentControlObjectBase<openxaml::ScrollViewer>,
+      public abi::NotImpl_IScrollViewer {
+public:
+    using PrimaryInterface = wuxc::IScrollViewer;
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.ScrollViewer"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IScrollViewer, wuxc::IScrollViewer)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_HorizontalScrollBarVisibility(wuxc::ScrollBarVisibility* value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<wuxc::ScrollBarVisibility>(layout_.horizontal_scroll_bar_visibility());
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_HorizontalScrollBarVisibility(wuxc::ScrollBarVisibility value) override {
+        if (value < wuxc::ScrollBarVisibility_Disabled || value > wuxc::ScrollBarVisibility_Visible)
+            return E_INVALIDARG;
+        layout_.set_horizontal_scroll_bar_visibility(static_cast<openxaml::ScrollBarVisibility>(value));
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_VerticalScrollBarVisibility(wuxc::ScrollBarVisibility* value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<wuxc::ScrollBarVisibility>(layout_.vertical_scroll_bar_visibility());
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_VerticalScrollBarVisibility(wuxc::ScrollBarVisibility value) override {
+        if (value < wuxc::ScrollBarVisibility_Disabled || value > wuxc::ScrollBarVisibility_Visible)
+            return E_INVALIDARG;
+        layout_.set_vertical_scroll_bar_visibility(static_cast<openxaml::ScrollBarVisibility>(value));
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_HorizontalOffset(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.horizontal_offset();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_VerticalOffset(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.vertical_offset();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_ViewportWidth(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.viewport().width;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_ViewportHeight(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.viewport().height;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_ExtentWidth(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.extent().width;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_ExtentHeight(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.extent().height;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE ScrollToHorizontalOffset(DOUBLE value) override {
+        layout_.ScrollTo(value, layout_.vertical_offset()); return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE ScrollToVerticalOffset(DOUBLE value) override {
+        layout_.ScrollTo(layout_.horizontal_offset(), value); return S_OK;
+    }
+};
+
+class TextBoxObject final : public XamlElement, public abi::NotImpl_IControl,
+                            public abi::NotImpl_ITextBox {
+public:
+    using PrimaryInterface = wuxc::ITextBox;
+    openxaml::Element* Layout() override { return &layout_; }
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.TextBox"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_ITextBox, wuxc::ITextBox)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IControl, wuxc::IControl)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Text(HSTRING* value) override { return HStringFromUtf8(layout_.text(), value); }
+    HRESULT STDMETHODCALLTYPE put_Text(HSTRING value) override { layout_.set_text(Utf8FromHString(value)); return S_OK; }
+    HRESULT STDMETHODCALLTYPE ApplyTemplate(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.ApplyTemplate() ? 1 : 0;
+        return S_OK;
+    }
+private:
+    openxaml::TextBox layout_;
+};
+
+class ThumbObject final : public XamlElement, public abi::NotImpl_IControl,
+                          public abi::NotImpl_IThumb {
+public:
+    using PrimaryInterface = wuxcp::IThumb;
+    openxaml::Element* Layout() override { return &layout_; }
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.Primitives.Thumb"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_Primitives_IThumb, wuxcp::IThumb)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IControl, wuxc::IControl)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE ApplyTemplate(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.ApplyTemplate() ? 1 : 0;
+        return S_OK;
+    }
+private:
+    openxaml::Thumb layout_;
+};
+
+class FontIconObject final : public XamlElement, public abi::NotImpl_IFontIcon {
+public:
+    using PrimaryInterface = wuxc::IFontIcon;
+    openxaml::Element* Layout() override { return &layout_; }
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.FontIcon"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IFontIcon, wuxc::IFontIcon)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Glyph(HSTRING* value) override { return HStringFromUtf8(layout_.glyph(), value); }
+    HRESULT STDMETHODCALLTYPE put_Glyph(HSTRING value) override { layout_.set_glyph(Utf8FromHString(value)); return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_FontSize(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.font_size();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_FontSize(DOUBLE value) override { layout_.set_font_size(value); return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_FontFamily(wuxm::IFontFamily** value) override;
+    HRESULT STDMETHODCALLTYPE put_FontFamily(wuxm::IFontFamily* value) override;
+private:
+    openxaml::FontIcon layout_;
+};
+
+class RectangleObject final : public XamlElement, public abi::NotImpl_IRectangle {
+public:
+    using PrimaryInterface = wuxs::IRectangle;
+    openxaml::Element* Layout() override { return &layout_; }
+    const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Shapes.Rectangle"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Shapes_IRectangle, wuxs::IRectangle)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_RadiusX(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = radius_x_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_RadiusX(DOUBLE value) override { radius_x_ = value; return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_RadiusY(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = radius_y_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_RadiusY(DOUBLE value) override { radius_y_ = value; return S_OK; }
+private:
+    openxaml::Rectangle layout_;
+    double radius_x_ = 0;
+    double radius_y_ = 0;
+};
+
 // --- FontFamily ---------------------------------------------------------------
 //
 // A name, and nothing else. It exists because ITextBlock::put_FontFamily takes
@@ -664,6 +1268,46 @@ public:
 
     std::string source;
 };
+
+template <class LayoutType>
+HRESULT ContentControlObjectBase<LayoutType>::get_FontFamily(wuxm::IFontFamily** value) {
+    if (!value) return E_POINTER;
+    auto* family = new FontFamilyObject();
+    family->source = layout_.font_family();
+    family->AddRef();
+    *value = family;
+    return S_OK;
+}
+
+template <class LayoutType>
+HRESULT ContentControlObjectBase<LayoutType>::put_FontFamily(wuxm::IFontFamily* value) {
+    if (!value) return E_INVALIDARG;
+    HSTRING source = nullptr;
+    const HRESULT hr = value->get_Source(&source);
+    if (FAILED(hr)) return hr;
+    layout_.set_font_family(Utf8FromHString(source));
+    WindowsDeleteString(source);
+    return S_OK;
+}
+
+inline HRESULT FontIconObject::get_FontFamily(wuxm::IFontFamily** value) {
+    if (!value) return E_POINTER;
+    auto* family = new FontFamilyObject();
+    family->source = layout_.font_family();
+    family->AddRef();
+    *value = family;
+    return S_OK;
+}
+
+inline HRESULT FontIconObject::put_FontFamily(wuxm::IFontFamily* value) {
+    if (!value) return E_INVALIDARG;
+    HSTRING source = nullptr;
+    const HRESULT hr = value->get_Source(&source);
+    if (FAILED(hr)) return hr;
+    layout_.set_font_family(Utf8FromHString(source));
+    WindowsDeleteString(source);
+    return S_OK;
+}
 
 // --- TextBlock ----------------------------------------------------------------
 

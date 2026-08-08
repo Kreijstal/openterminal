@@ -10,6 +10,38 @@ against a JSON file. The loop is seconds long and runs on a Linux laptop.
 
 ## Where it stands
 
+### Wave 3 and Wave 4 runtime surface
+
+The native runtime now contains the Wave 3 behavior needed above the measured
+layout layers:
+
+- `{Binding}` and `{x:Bind}` parsing with one-time, one-way, two-way and
+  one-way-to-source expressions, fallback values, converters, effective-value
+  notifications, and an `INotifyPropertyChanged`-shaped source adapter;
+- an animation value source above local/style/inherited values, namescopes,
+  visual-state groups and setters, and endpoint/intermediate sampling for
+  double, thickness and discrete storyboards;
+- live `{TemplateBinding}` expressions, `ControlTemplate` construction, and a
+  default-style registry intended to receive reconstructed `generic.xaml`
+  entries; and
+- markup realization for bindings, named storyboard targets, visual-state
+  setters and `DoubleAnimation` timelines. Loading does not invent an initial
+  state; the caller enters one through the element's `VisualStateManager`, as
+  the real runtime does through `GoToState`.
+
+Wave 4 adds virtualized `ItemsControl`/`ListView` realization and recycling,
+selection, `Page`/`Frame` journals, `Popup`/`Flyout` lifetime and light-dismiss
+state, and native content-control surfaces for the muxc types Terminal uses
+(`NavigationView`, `TabView`, `TeachingTip`, `TreeView`, `NumberBox`,
+`InfoBar`, and their smaller peers). The text-markup loader constructs these
+framework and muxc types rather than rejecting them by name.
+
+These are implementation claims backed by the focused `wave3` and `wave4`
+tests. They are not oracle claims: the repository still has no recorded L6
+measurements, and Terminal's full open `generic.xaml` templates and the muxc
+WinRT ABI remain inputs to harvest and diff before the roadmap's Wave 3/4 exit
+criteria can be marked measured.
+
 Against build `10.0.26100.33158`:
 
 | level | subject | measured | matching |
@@ -52,10 +84,11 @@ summary tends to lose.
 
 L1–L3 is every measured case that does not need text measurement or a control
 set — `Border`, `Grid`, `StackPanel`, and the `FrameworkElement` semantics
-under all of them. Of the 36 L7 measurements that are still red, thirty fail as
-`the type 'ScrollViewer' is not implemented` and the like, rather than as wrong
-numbers, and the other six are the recordings whose case the dictionary absorbed
-— which is the distinction worth keeping: nothing here is quietly approximate.
+under all of them. The recorded L7 snapshot predates the completion pass below,
+so its 33/69 is now a stale gate rather than a current implementation count.
+Running the current core over the pinned corpus produces no missing-type errors.
+On a bare checkout, 21 L7 subcases remain unmeasurable only because the
+committed derived font contains neither Cascadia Mono nor the icon glyphs.
 
 A further 562 generated cases — `L1-shape`, `L2-content`, `L3-canvas`,
 `L3-scroll`, `L4-icon`, `L4-source` and all of `L5` — have no recorded
@@ -63,53 +96,26 @@ measurement yet and so are neither passing nor failing.
 `Canvas`, `ContentPresenter`, `Path`, `PathIcon` and `Image` are implemented and
 every case that measures one is in that set; the two `PathIcon` subtrees
 Terminal's own markup supplies are the only witnesses any of them has today.
-`ScrollViewer` and `FontIcon` are the other kind: 235 of those cases measure a
-type this code refuses outright, and they were authored to make implementing it
-possible. They are listed under [what is still
-open](#what-is-still-open).
+`ScrollViewer` and `FontIcon` are now implemented, as are the Terminal blockers
+that sat behind them: `Rectangle`, `TextBox`, `Button`, `ToolTip`/`Run`, and an
+inline `Thumb.Template`.
 
-### What the 36 red L7 cases are waiting for
+### L7 completion pass
 
-Ranked by how many they are, since that is the order they are worth doing in:
+`ScrollViewer` has a single-content viewport, the visibility/mode cross-product,
+interacting Auto bars, 16-DIP reservations, extent/viewport state and clamped
+offsets. `FontIcon` measures its Unicode glyph through the harvested text
+metric pipeline and understands comma-separated font fallback. Shape and
+control support now includes `Rectangle`, control padding, `Button`, `TextBox`,
+`ToolTip` with folded `Run` inlines, and `Thumb` with an inline
+`ControlTemplate` root.
 
-| blocked on | cases | why it is not done |
-|---|---:|---|
-| `FontIcon` | 15 | its size is a glyph measured in Segoe MDL2 Assets or Segoe Fluent Icons — the harvest now reads both, and `L4-icon` asks what the size is made of, but neither has been measured yet. Their *recorded* numbers are worse than missing: the probe was dropping non-ASCII out of a case file, so all fifteen measured an empty `Glyph`. Fixed, and the next run's L7 digest moves because of it |
-| `ScrollViewer` | 9 | see below |
-| a measurement whose case was absorbed | 6 | [see above](#why-l7-went-from-36-to-33); the next oracle run retires them |
-| `ToolTip`, `Run` | 3 | a templated control whose content is an inline |
-| `Thumb`, `ControlTemplate`, `Rectangle` | 3 | applying a control template is not implemented |
-
-The `TextBox` row that used to be here is gone for the same reason the six
-appeared: its three cases were one of the two absorbed subtrees.
-
-Three more were waiting on a `TextBlock` in Segoe UI, and are not any longer:
-the two numbers the corpus solves for itself are enough for them, so they match
-on a bare checkout along with the rest of L4's derivable half.
-
-`ScrollViewer` is the one that is understood and still not done. Its layout is
-its template's — a content presenter and two scroll bars in a grid — and the
-three recorded cases do not agree with each other under any single reading of
-it. Two of them give the viewer exactly its content's desired size plus its own
-padding, with the content then stretched to the viewport, which is what a
-viewer with both scroll directions disabled does. The third asks for sixteen
-more pixels in each axis, exactly one scroll bar's worth per axis, and arranges
-its content at the content's own size rather than the viewport's — which is
-what a viewer with both directions *enabled* does. Neither case sets a
-scrollbar visibility, and no other property distinguishes them. Implementing
-one reading would make six cases pass and three produce wrong numbers, which is
-a worse result than nine cases that say what is missing.
-
-That is a question for the oracle rather than for a reader of the WinUI source,
-and [`L3-scroll`](../xaml-db/README.md#scrollviewer-sizes-itself-two-different-ways)
-is now 166 cases asking it: the full visibility cross product with the viewer
-sized and unsized, scroll mode against visibility, padding, the overflow
-boundary one axis at a time, and six Border-only replicas of the three recorded
-shapes. Once those are measured this type is implementable from evidence, and
-until they are it stays refused. The cases land in L3, which CI gates on, so the
-next measured run turns that gate red on 166 cases that all say
-`the type 'ScrollViewer' is not implemented` — the cost of asking, and the
-reason to do the implementing straight after.
+The next Windows oracle run remains authoritative. In particular,
+[`L3-scroll`](../xaml-db/README.md#scrollviewer-sizes-itself-two-different-ways)
+and `L4-icon` were authored because the old three-case ScrollViewer evidence
+was contradictory and the old FontIcon glyphs were corrupted by an ASCII-only
+probe path. Until those measurements are recorded, this is an implemented and
+focused-tested surface, not a numeric parity claim.
 
 L4 is implemented and is the one level whose result depends on a font. Two of
 the numbers inside that font can be solved from the recorded measurements
@@ -136,6 +142,7 @@ whether it affects measure, and an effective value is chosen from
 
 | slot | what writes it |
 |---|---|
+| animation | active storyboards and visual-state setters |
 | local | the markup on the element itself |
 | style | the element's `Style`, `BasedOn` already merged |
 | inherited | the nearest ancestor with a local or style value |
@@ -143,8 +150,9 @@ whether it affects measure, and an effective value is chosen from
 
 in that order. It is ported in shape from
 [dotnet/wpf](https://github.com/dotnet/wpf)'s `DependencyObject`; the slots the
-references have and this does not are triggers, animation, coercion and a
-control's built-in `generic.xaml` style, which are the levels above this one.
+references have and this does not are triggers, coercion and a distinct
+built-in-style slot. Default styles currently enter the style slot before an
+explicit style replaces them.
 
 That order is the core's own — *"1. Local value 2. Style 3. Built-in style
 4. Default value"*, in `CDependencyObject::EvaluateBaseValue` — and WPF's
@@ -493,26 +501,12 @@ does not do, so that a passing run is not read as more than it is:
   shaping, no kerning, no ligatures, no fallback for a character the metrics do
   not cover. It stays quarantined at L4 for that reason — text-measurement
   error would otherwise contaminate every panel that contains it.
-- **No `RelativePanel`, and no control templates.** `ContentPresenter` is here
-  because it is a layout type; `Button`, `TextBox`, `ToolTip` and `Thumb` are
-  not, because their size is their template's and applying one is not
-  implemented. `ContentControl` is the exception, and it is not a real one — it
-  is where L0 sets an inherited `FontSize`, and it has no template, so the
-  `ContentPresenter` that would carry its `Padding` and content alignment is
-  absent rather than modelled. Every measured case that uses it has an empty
-  `TextBlock` at the origin, which is where `Left`/`Top` and `Stretch` both land
-  it, so none of them can tell the guess from the truth.
-  `L0-props-content-stretch` can, and has no measurement yet.
-- **No `FontIcon`.** It is the largest single L7 blocker at fifteen cases, and
-  every one of them is blocked on icon-font glyph metrics rather than on
-  layout. `PathIcon` is implemented because its size comes from a geometry.
-  Two things that were missing are not any more: CI harvests both icon fonts
-  for the codepoints Terminal names, and `L4-icon` asks what a `FontIcon`'s size
-  is actually made of instead of leaving it to be assumed. Neither has been
-  measured yet, and implementing this before they have would be inventing the
-  rule and the metrics in the same commit.
-- **No `ScrollViewer`.** See [the table above](#what-the-33-red-l7-cases-are-waiting-for).
-  `L3-scroll` is the evidence being gathered; nothing here reads it yet.
+- **No `RelativePanel`; incomplete stock templates.** Control-template
+  construction, application and template binding are implemented, including
+  Terminal's inline `Thumb.Template`. The complete open `generic.xaml` stock
+  style set has not yet been reconstructed and oracle-diffed, so controls
+  without an explicit template retain focused native layout contracts rather
+  than claiming pixel parity with the stock theme.
 - **No stroked shapes, and no `Stretch` but `None`.** A stroked shape grows by
   half its thickness on every side and a stretched one is scaled into its
   constraint; no case in the corpus has either, so markup asking for one is
@@ -522,11 +516,10 @@ does not do, so that a passing run is not read as more than it is:
   one.
 - **No `LayoutTransform`.** WPF measures a transformed element by fitting a
   maximal rectangle in local space; none of that is here.
-- **The property store has three sources**, local, style and inherited.
-  Triggers, animation, coercion and a control's built-in `generic.xaml` style
-  are levels above this one; the lookup is written so they slot in beside the
-  three rather than being threaded through callers. There is no built-in-style
-  layer because nothing here has a control template to carry one.
+- **The property store has four sources**, animation, local, style and
+  inherited. Triggers, coercion and a distinct built-in-style slot are still
+  absent; the lookup is written so they slot in beside the four rather than
+  being threaded through callers.
 - **`Grid` star resolution follows WPF's pre-4.7 algorithm**, not the
   `MaxDiscrepancy` rework. The corpus does not distinguish them: it has no
   definition-level `MinWidth`/`MaxWidth`, which is the only thing they disagree
@@ -543,15 +536,14 @@ does not do, so that a passing run is not read as more than it is:
   SystemControlForegroundBaseHighBrush}` is one of the 28 and still fails here.
   Merged dictionaries inside a page are not implemented either. A lookup that
   needed either fails by name; it never falls back on something plausible.
-- **No `{Binding}`, no `{x:Bind}`, no `{TemplateBinding}`.**
-  `{StaticResource}` and `{ThemeResource}` are the only markup extensions that
-  resolve. Every other one is a named refusal, including on properties where
-  the difference would not show in the numbers.
-- **No control templates, and no triggers.** `Style`, `Setter` and `BasedOn`
-  are implemented; `Style.Triggers`, `Setter.Target`, `ControlTemplate`,
-  `VisualState` setters and a control's built-in `generic.xaml` style are not.
-  A `<Setter>` naming a `Target` is refused by name rather than treated as a
-  `Property`.
+- **Bindings and visual states are implemented, but the L6 oracle is absent.**
+  Their focused tests pin notification, precedence, teardown and endpoint
+  behavior locally. No result table calls those tests oracle parity.
+- **The template engine is present; the full built-in style database is not.**
+  `ControlTemplate`, live template bindings and a default-style registry are
+  implemented. Reconstructing every open `generic.xaml` entry and diffing it
+  against the runtime is still a separate pinned harvest. Style triggers and
+  transition selection remain named omissions.
 - **A style is not re-applied after the tree is built.** The runtime resolves
   an implicit style at `CreationComplete` and again on entering a live tree,
   and re-resolves when a `Resources` dictionary is replaced. Here it is

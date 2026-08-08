@@ -3,6 +3,7 @@
 #include "markup_tree.h"
 
 #include <cctype>
+#include <algorithm>
 #include <cstdlib>
 #include <map>
 #include <vector>
@@ -21,6 +22,10 @@
 #include "stack_panel.h"
 #include "style.h"
 #include "xdirectives.h"
+#include "advanced_controls.h"
+#include "basic_controls.h"
+#include "default_styles.h"
+#include "scroll_viewer.h"
 
 namespace openxaml {
 namespace {
@@ -313,8 +318,33 @@ const std::vector<std::string>& OwnersFor(const std::string& type) {
     if (type == "Image") return Image::Owners();
     if (type == "Path") return Path::Owners();
     if (type == "PathIcon") return PathIcon::Owners();
+    if (type == "FontIcon") return FontIcon::Owners();
+    if (type == "Rectangle") return Rectangle::Owners();
+    if (type == "ScrollViewer") return ScrollViewer::Owners();
+    if (type == "Button") return Button::Owners();
+    if (type == "TextBox") return TextBox::Owners();
+    if (type == "ToolTip") return ToolTip::Owners();
+    if (type == "Thumb") return Thumb::Owners();
+    // Run is an inline, not a FrameworkElement. It is folded into its owning
+    // TextBlock before realization, so the TextBlock text-property surface is
+    // exactly the useful portion of its markup surface here.
+    if (type == "Run") return TextBlock::Owners();
     if (type == "StackPanel") return StackPanel::Owners();
     if (type == "TextBlock") return TextBlock::Owners();
+    if (type == "Page") return Page::Owners();
+    if (type == "Frame") return Frame::Owners();
+    if (type == "ItemsControl") return ItemsControl::Owners();
+    if (type == "ListView") return ListView::Owners();
+    if (type == "Popup") return Popup::Owners();
+    // All muxc controls currently share the ContentControl property surface;
+    // their generic.xaml templates distinguish them after load.
+    static const std::vector<std::string> kMuxOwners = {
+        "ContentControl", "Control", kTextPropertyOwner, "FrameworkElement", "UIElement"};
+    static const std::vector<std::string> kMuxTypes = {
+        "BreadcrumbBar", "ColorPicker", "DropDownButton", "Expander", "InfoBadge", "InfoBar",
+        "NavigationView", "NavigationViewItem", "NumberBox", "ProgressRing", "SplitButton",
+        "TabView", "TeachingTip", "TreeView"};
+    if (std::find(kMuxTypes.begin(), kMuxTypes.end(), type) != kMuxTypes.end()) return kMuxOwners;
     throw MarkupError("the type '" + type + "' is not implemented");
 }
 
@@ -350,6 +380,8 @@ void ApplyProperty(MarkupNode& node, const DependencyProperty& property,
     if (name == "UseLayoutRounding")
         return assign(node.use_layout_rounding = ParseBool(value, name));
     if (name == "Opacity") return assign(node.opacity = ParseDouble(value, name));
+    if (name == "RenderTransformOrigin") return assign(value);
+    if (name == "Control.IsTemplateFocusTarget") return assign(ParseBool(value, name));
     if (name == "Grid.Column") return assign(node.grid_column = ParseInt(value, name));
     if (name == "Grid.Row") return assign(node.grid_row = ParseInt(value, name));
     if (name == "Grid.ColumnSpan") return assign(node.grid_column_span = ParseInt(value, name));
@@ -370,6 +402,11 @@ void ApplyProperty(MarkupNode& node, const DependencyProperty& property,
         ValidateColor(value, name);
         return assign(node.background = "SolidColorBrush");
     }
+    if (name == "Fill") {
+        ValidateColor(value, name);
+        return assign(std::string("SolidColorBrush"));
+    }
+    if (name == "RadiusX" || name == "RadiusY") return assign(ParseDouble(value, name));
     if (name == "Orientation") {
         node.orientation = ParseEnum(value, kOrientations, name);
         return assign(static_cast<int>(node.orientation));
@@ -397,6 +434,27 @@ void ApplyProperty(MarkupNode& node, const DependencyProperty& property,
     }
     if (name == "FontSize") return assign(node.font_size = ParseDouble(value, name));
     if (name == "FontFamily") return assign(node.font_family = value);
+    if (name == "Glyph") return assign(node.glyph = value);
+    if (name == "HorizontalScrollBarVisibility" || name == "VerticalScrollBarVisibility") {
+        static const std::map<std::string, ScrollBarVisibility> names = {
+            {"Disabled", ScrollBarVisibility::Disabled}, {"Auto", ScrollBarVisibility::Auto},
+            {"Hidden", ScrollBarVisibility::Hidden}, {"Visible", ScrollBarVisibility::Visible}};
+        return assign(static_cast<int>(ParseEnum(value, names, name)));
+    }
+    if (name == "HorizontalScrollMode" || name == "VerticalScrollMode") {
+        static const std::map<std::string, ScrollMode> names = {
+            {"Disabled", ScrollMode::Disabled}, {"Enabled", ScrollMode::Enabled},
+            {"Auto", ScrollMode::Auto}};
+        return assign(static_cast<int>(ParseEnum(value, names, name)));
+    }
+    if (name == "BringIntoViewOnFocusChange" ||
+        name == "IsVerticalScrollChainingEnabled" || name == "AcceptsReturn" ||
+        name == "IsReadOnly" || name == "IsSpellCheckEnabled" ||
+        name == "MirroredWhenRightToLeft")
+        return assign(ParseBool(value, name));
+    if (name == "MaxLength") return assign(ParseInt(value, name));
+    if (name == "PlaceholderText" || name == "FontWeight" || name == "Placement")
+        return assign(value);
     // A brush, carried as the text that spells it. Nothing here paints, so the
     // value is stored and never interpreted -- which is honest about what it
     // is: enough to show the property system carried it, and not a colour.
@@ -447,6 +505,45 @@ void ApplyAttributes(MarkupNode& node, const std::map<std::string, std::string>&
                               FullTypeName(node.type) + "'");
         }
         ApplyProperty(node, *property, value);
+    }
+}
+
+void ApplyNodeAttributes(MarkupNode& node,
+                         const std::map<std::string, std::string>& attributes,
+                         const ResourceScope& scope) {
+    for (const auto& [name, raw] : attributes) {
+        if (name == "Name") {
+            if (raw.empty()) throw MarkupError("Name cannot be empty");
+            node.name = raw;
+            continue;
+        }
+        MarkupExtension extension;
+        if (TryParseMarkupExtension(raw, extension) &&
+            (extension.name == "Binding" || extension.name == "x:Bind")) {
+            const DependencyProperty* property = FindProperty(OwnersFor(node.type), name);
+            if (!property) {
+                throw MarkupError("the property '" + name + "' was not found in type '" +
+                                  FullTypeName(node.type) + "'");
+            }
+            try {
+                Binding binding = ParseBindingMarkup(extension.name, extension.argument);
+                if (binding.fallback_value) {
+                    if (const std::string* literal =
+                            std::get_if<std::string>(&*binding.fallback_value)) {
+                        MarkupNode fallback;
+                        ApplyProperty(fallback, *property, *literal);
+                        if (fallback.properties.size() != 1)
+                            throw BindingError("FallbackValue cannot supply '" + name + "'");
+                        binding.fallback_value = fallback.properties.front().value;
+                    }
+                }
+                node.bindings.push_back({property, std::move(binding)});
+            } catch (const BindingError& error) {
+                throw MarkupError(error.what());
+            }
+            continue;
+        }
+        ApplyAttributes(node, {{name, ResolveAttributeValue(scope, name, raw)}});
     }
 }
 
@@ -590,62 +687,134 @@ std::string ParseBrushPropertyElement(Scanner& scanner, const std::string& prope
     throw MarkupError("<" + property_element + "> was not closed");
 }
 
-// Reads a <VisualStateManager.VisualStateGroups> and checks that it changes
-// nothing.
-//
-// A visual state is a set of setters and a storyboard, applied when the state
-// is entered. At the moment the probe measures, no state has been entered, so
-// a group of *empty* states is genuinely inert and can be skipped. A state
-// that carries anything is a different matter -- Terminal's pages use them to
-// change sizes -- and the element inside it is named rather than skipped, so
-// that a case cannot pass by having its styling silently ignored.
-void ParseVisualStateGroups(Scanner& scanner) {
+std::string RequiredName(const Tag& tag) {
+    auto found = tag.attributes.find("x:Name");
+    if (found == tag.attributes.end()) found = tag.attributes.find("Name");
+    if (found == tag.attributes.end() || found->second.empty())
+        throw MarkupError("<" + tag.name + "> needs x:Name");
+    return found->second;
+}
+
+std::string NormalizeTargetProperty(std::string property) {
+    if (property.size() >= 2 && property.front() == '(' && property.back() == ')')
+        property = property.substr(1, property.size() - 2);
+    const size_t dot = property.find_last_of('.');
+    return dot == std::string::npos ? property : property.substr(dot + 1);
+}
+
+double ParseDurationSeconds(const std::string& text) {
+    if (text.empty() || text == "0") return 0.0;
+    const std::vector<std::string> fields = Split(text, ':');
+    if (fields.size() == 1) return ParseDouble(fields[0], "Duration");
+    if (fields.size() != 3) throw MarkupError("cannot read \"" + text + "\" as a Duration");
+    return ParseDouble(fields[0], "Duration") * 3600.0 +
+           ParseDouble(fields[1], "Duration") * 60.0 +
+           ParseDouble(fields[2], "Duration");
+}
+
+// Reads setters and endpoint-sampled DoubleAnimations. State entry is explicit
+// through Element::visual_state_manager(), exactly as VisualStateManager.GoToState
+// is in WinUI; loading markup alone does not guess an initial state.
+void ParseVisualStateGroups(Scanner& scanner, MarkupNode& owner) {
     const std::string property_element = "VisualStateManager.VisualStateGroups";
-    std::vector<std::string> open;
+    MarkupVisualStateGroup* group = nullptr;
+    MarkupVisualState* state = nullptr;
+    bool setters_open = false;
+    bool storyboard_open = false;
     Tag tag;
     while (scanner.Next(tag)) {
         if (tag.text_before.find_first_not_of(" \t\r\n") != std::string::npos)
             throw MarkupError("unexpected text content in <" + property_element + ">");
         if (tag.closing) {
-            if (open.empty()) {
-                if (tag.name != property_element)
-                    throw MarkupError("</" + tag.name + "> closes <" + property_element + ">");
+            if (tag.name == "VisualState.Setters" && setters_open) {
+                setters_open = false;
+            } else if (tag.name == "Storyboard" && storyboard_open) {
+                storyboard_open = false;
+            } else if (tag.name == "VisualState" && state && !setters_open && !storyboard_open) {
+                state = nullptr;
+            } else if (tag.name == "VisualStateGroup" && group && !state) {
+                group = nullptr;
+            } else if (tag.name == property_element && !group && !state &&
+                       !setters_open && !storyboard_open) {
                 return;
+            } else {
+                throw MarkupError("</" + tag.name + "> does not close the open visual-state element");
             }
-            if (tag.name != open.back())
-                throw MarkupError("</" + tag.name + "> does not close the open element");
-            open.pop_back();
             continue;
         }
-        const std::string expected = open.empty() ? "VisualStateGroup" : "VisualState";
-        if (open.size() >= 2 || tag.name != expected)
-            throw MarkupError("the visual state element '" + tag.name + "' is not implemented");
-        for (const auto& [name, value] : tag.attributes) {
-            (void)value;
-            if (name != "x:Name" && name != "Name")
-                throw MarkupError("the property '" + name + "' was not found in type '" +
-                                  "Windows.UI.Xaml." + tag.name + "'");
+
+        if (!group && tag.name == "VisualStateGroup") {
+            owner.visual_state_groups.push_back({RequiredName(tag), {}});
+            group = &owner.visual_state_groups.back();
+            if (tag.self_closing) group = nullptr;
+            continue;
         }
-        if (!tag.self_closing) open.push_back(tag.name);
+        if (group && !state && tag.name == "VisualState") {
+            group->states.push_back({RequiredName(tag), {}, {}});
+            state = &group->states.back();
+            if (tag.self_closing) state = nullptr;
+            continue;
+        }
+        if (state && tag.name == "VisualState.Setters" && !setters_open && !storyboard_open) {
+            setters_open = !tag.self_closing;
+            continue;
+        }
+        if (state && tag.name == "Storyboard" && !setters_open && !storyboard_open) {
+            storyboard_open = !tag.self_closing;
+            continue;
+        }
+        if (state && setters_open && tag.name == "Setter") {
+            if (!tag.self_closing) throw MarkupError("a VisualState Setter must be empty");
+            std::string target;
+            std::string property;
+            std::string value;
+            for (const auto& [name, raw] : tag.attributes) {
+                if (name == "Target") {
+                    const size_t dot = raw.find_last_of('.');
+                    if (dot == std::string::npos)
+                        throw MarkupError("a VisualState Setter Target needs a target and property");
+                    target = raw.substr(0, dot);
+                    property = NormalizeTargetProperty(raw.substr(dot + 1));
+                } else if (name == "Property") {
+                    property = NormalizeTargetProperty(raw);
+                } else if (name == "Value") {
+                    value = raw;
+                } else {
+                    throw MarkupError("a VisualState Setter does not take '" + name + "'");
+                }
+            }
+            if (property.empty() || value.empty())
+                throw MarkupError("a VisualState Setter needs a property and value");
+            state->setters.push_back({target, property, value});
+            continue;
+        }
+        if (state && storyboard_open && tag.name == "DoubleAnimation") {
+            if (!tag.self_closing) throw MarkupError("a DoubleAnimation must be empty here");
+            MarkupTimeline timeline;
+            for (const auto& [name, raw] : tag.attributes) {
+                if (name == "Storyboard.TargetName") timeline.target_name = raw;
+                else if (name == "Storyboard.TargetProperty")
+                    timeline.property = NormalizeTargetProperty(raw);
+                else if (name == "From") { timeline.from = raw; timeline.has_from = true; }
+                else if (name == "To") timeline.to = raw;
+                else if (name == "Duration") timeline.duration_seconds = ParseDurationSeconds(raw);
+                else if (name == "EnableDependentAnimation") {
+                    (void)ParseBool(raw, name);
+                } else {
+                    throw MarkupError("a DoubleAnimation does not take '" + name + "'");
+                }
+            }
+            if (timeline.property.empty() || timeline.to.empty())
+                throw MarkupError("a DoubleAnimation needs TargetProperty and To");
+            state->timelines.push_back(std::move(timeline));
+            continue;
+        }
+        throw MarkupError("the visual state element '" + tag.name + "' is not implemented");
     }
     throw MarkupError("<" + property_element + "> was not closed");
 }
 
 // --- resources ----------------------------------------------------------------
-
-// Attribute values with every {StaticResource} already replaced by the literal
-// the resource holds.
-//
-// Resolution happens here, once, ahead of the property parsers rather than
-// inside them: whatever a property does with its text, it does the same thing
-// to a resolved resource as to an inlined literal, and cannot do otherwise.
-std::map<std::string, std::string> ResolveAttributes(
-    const std::map<std::string, std::string>& attributes, const ResourceScope& scope) {
-    std::map<std::string, std::string> resolved;
-    for (const auto& [name, value] : attributes)
-        resolved.emplace(name, ResolveAttributeValue(scope, name, value));
-    return resolved;
-}
 
 // --- x:Uid --------------------------------------------------------------------
 
@@ -738,6 +907,21 @@ void AddResourceEntry(MarkupNode& owner, const Tag& tag, Scanner& scanner,
     dictionary.Add(key, MakeResource(tag.name, content));
 }
 
+void SkipPropertySubtree(Scanner& scanner, const std::string& property) {
+    int depth = 1;
+    Tag nested;
+    while (depth && scanner.Next(nested)) {
+        if (nested.closing) {
+            --depth;
+            if (depth == 0 && nested.name != property)
+                throw MarkupError("</" + nested.name + "> closes <" + property + ">");
+        } else if (!nested.self_closing) {
+            ++depth;
+        }
+    }
+    if (depth) throw MarkupError("<" + property + "> was not closed");
+}
+
 MarkupDefinition MakeDefinition(const Tag& tag, bool is_column, const ResourceScope& scope) {
     MarkupDefinition definition;
     const std::string size_property = is_column ? "Width" : "Height";
@@ -764,13 +948,28 @@ MarkupDefinition MakeDefinition(const Tag& tag, bool is_column, const ResourceSc
 
 // Attaches a finished node to whatever is currently open above it.
 void AttachChild(MarkupNode& parent, MarkupNode child) {
+    if (parent.type == "TextBlock" && child.type == "Run") {
+        parent.text += child.text;
+        return;
+    }
     if ((parent.type == "Border" || parent.type == "ContentPresenter") &&
         !parent.children.empty()) {
         throw MarkupError("a " + parent.type + " takes a single child");
     }
-    if (parent.type == "ContentControl" && !parent.children.empty())
-        throw MarkupError("a ContentControl takes a single piece of content");
-    if (parent.type == "Path" || parent.type == "Image" || parent.type == "PathIcon")
+    if ((parent.type == "ContentControl" || parent.type == "Page" || parent.type == "Frame" ||
+         parent.type == "Button" || parent.type == "ToolTip" || parent.type == "ScrollViewer" ||
+         parent.type == "Popup" || parent.type == "BreadcrumbBar" ||
+         parent.type == "ColorPicker" || parent.type == "DropDownButton" ||
+         parent.type == "Expander" || parent.type == "InfoBadge" || parent.type == "InfoBar" ||
+         parent.type == "NavigationView" || parent.type == "NavigationViewItem" ||
+         parent.type == "NumberBox" || parent.type == "ProgressRing" ||
+         parent.type == "SplitButton" || parent.type == "TabView" ||
+         parent.type == "TeachingTip" || parent.type == "TreeView") &&
+        !parent.children.empty())
+        throw MarkupError("a " + parent.type + " takes a single piece of content");
+    if (parent.type == "Path" || parent.type == "Image" || parent.type == "PathIcon" ||
+        parent.type == "FontIcon" || parent.type == "Rectangle" || parent.type == "TextBox" ||
+        parent.type == "Run")
         throw MarkupError("a " + parent.type + " takes no child elements");
     parent.children.push_back(std::move(child));
 }
@@ -785,15 +984,16 @@ Definition ToDefinition(const MarkupDefinition& source) {
     return definition;
 }
 
-std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
+std::unique_ptr<Element> BuildElement(const MarkupNode& node, ObservableObject* binding_source,
+                                      const std::shared_ptr<NameScope>& namescope) {
     std::unique_ptr<Element> element;
     if (node.type == "Border") {
         auto border = std::make_unique<Border>();
-        if (!node.children.empty()) border->SetChild(BuildElement(node.children.front()));
+        if (!node.children.empty()) border->SetChild(BuildElement(node.children.front(), binding_source, namescope));
         element = std::move(border);
     } else if (node.type == "ContentControl") {
         auto control = std::make_unique<ContentControl>();
-        if (!node.children.empty()) control->SetContent(BuildElement(node.children.front()));
+        if (!node.children.empty()) control->SetContent(BuildElement(node.children.front(), binding_source, namescope));
         element = std::move(control);
     } else if (node.type == "Grid") {
         auto grid = std::make_unique<Grid>();
@@ -801,19 +1001,19 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
             grid->column_definitions.push_back(ToDefinition(definition));
         for (const MarkupDefinition& definition : node.row_definitions)
             grid->row_definitions.push_back(ToDefinition(definition));
-        for (const MarkupNode& child : node.children) grid->AddChild(BuildElement(child));
+        for (const MarkupNode& child : node.children) grid->AddChild(BuildElement(child, binding_source, namescope));
         element = std::move(grid);
     } else if (node.type == "StackPanel") {
         auto stack = std::make_unique<StackPanel>();
-        for (const MarkupNode& child : node.children) stack->AddChild(BuildElement(child));
+        for (const MarkupNode& child : node.children) stack->AddChild(BuildElement(child, binding_source, namescope));
         element = std::move(stack);
     } else if (node.type == "Canvas") {
         auto canvas = std::make_unique<Canvas>();
-        for (const MarkupNode& child : node.children) canvas->AddChild(BuildElement(child));
+        for (const MarkupNode& child : node.children) canvas->AddChild(BuildElement(child, binding_source, namescope));
         element = std::move(canvas);
     } else if (node.type == "ContentPresenter") {
         auto presenter = std::make_unique<ContentPresenter>();
-        if (!node.children.empty()) presenter->SetContent(BuildElement(node.children.front()));
+        if (!node.children.empty()) presenter->SetContent(BuildElement(node.children.front(), binding_source, namescope));
         element = std::move(presenter);
     } else if (node.type == "Image") {
         element = std::make_unique<Image>();
@@ -825,14 +1025,109 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
         auto icon = std::make_unique<PathIcon>();
         icon->data = node.data;
         element = std::move(icon);
+    } else if (node.type == "FontIcon") {
+        auto icon = std::make_unique<FontIcon>();
+        icon->set_glyph(node.glyph);
+        element = std::move(icon);
+    } else if (node.type == "Rectangle") {
+        element = std::make_unique<Rectangle>();
     } else if (node.type == "TextBlock") {
         auto text = std::make_unique<TextBlock>();
         if (!node.children.empty())
             throw MarkupError("a TextBlock takes text, not child elements");
         if (!node.text.empty()) text->set_text(node.text);
         element = std::move(text);
+    } else if (node.type == "Page") {
+        auto page = std::make_unique<Page>();
+        if (!node.children.empty()) page->SetContent(BuildElement(node.children.front(), binding_source, namescope));
+        element = std::move(page);
+    } else if (node.type == "Frame") {
+        auto frame = std::make_unique<Frame>();
+        if (!node.children.empty()) frame->SetContent(BuildElement(node.children.front(), binding_source, namescope));
+        element = std::move(frame);
+    } else if (node.type == "ItemsControl" || node.type == "ListView") {
+        std::unique_ptr<ItemsControl> items = node.type == "ListView"
+            ? std::unique_ptr<ItemsControl>(std::make_unique<ListView>())
+            : std::make_unique<ItemsControl>();
+        const std::vector<MarkupNode> children = node.children;
+        items->SetItems(children.size(), [children, binding_source, namescope](size_t index) {
+            return BuildElement(children.at(index), binding_source, namescope);
+        });
+        element = std::move(items);
+    } else if (node.type == "Popup") {
+        auto popup = std::make_unique<Popup>();
+        if (!node.children.empty()) popup->SetContent(BuildElement(node.children.front(), binding_source, namescope));
+        element = std::move(popup);
+    } else if (node.type == "ScrollViewer") {
+        auto viewer = std::make_unique<ScrollViewer>();
+        if (!node.children.empty())
+            viewer->SetContent(BuildElement(node.children.front(), binding_source, namescope));
+        element = std::move(viewer);
+    } else if (node.type == "Button") {
+        auto button = std::make_unique<Button>();
+        if (!node.children.empty()) {
+            button->SetContent(BuildElement(node.children.front(), binding_source, namescope));
+        } else if (!node.text.empty()) {
+            auto label = std::make_unique<TextBlock>();
+            label->set_text(node.text);
+            button->SetContent(std::move(label));
+        }
+        element = std::move(button);
+    } else if (node.type == "TextBox") {
+        auto box = std::make_unique<TextBox>();
+        box->set_text(node.text);
+        element = std::move(box);
+    } else if (node.type == "ToolTip") {
+        auto tip = std::make_unique<ToolTip>();
+        if (!node.children.empty())
+            tip->SetContent(BuildElement(node.children.front(), binding_source, namescope));
+        element = std::move(tip);
+    } else if (node.type == "Thumb") {
+        auto thumb = std::make_unique<Thumb>();
+        if (!node.children.empty()) {
+            const MarkupNode template_root = node.children.front();
+            thumb->SetTemplate(std::make_shared<ControlTemplate>("Thumb",
+                [template_root, binding_source, namescope](Control&) {
+                    return BuildElement(template_root, binding_source, namescope);
+                }));
+            thumb->ApplyTemplate();
+        }
+        element = std::move(thumb);
+    } else if (node.type == "BreadcrumbBar") {
+        element = std::make_unique<BreadcrumbBar>();
+    } else if (node.type == "ColorPicker") {
+        element = std::make_unique<ColorPicker>();
+    } else if (node.type == "DropDownButton") {
+        element = std::make_unique<DropDownButton>();
+    } else if (node.type == "Expander") {
+        element = std::make_unique<Expander>();
+    } else if (node.type == "InfoBadge") {
+        element = std::make_unique<InfoBadge>();
+    } else if (node.type == "InfoBar") {
+        element = std::make_unique<InfoBar>();
+    } else if (node.type == "NavigationView") {
+        element = std::make_unique<NavigationView>();
+    } else if (node.type == "NavigationViewItem") {
+        element = std::make_unique<NavigationViewItem>();
+    } else if (node.type == "NumberBox") {
+        element = std::make_unique<NumberBox>();
+    } else if (node.type == "ProgressRing") {
+        element = std::make_unique<ProgressRing>();
+    } else if (node.type == "SplitButton") {
+        element = std::make_unique<SplitButton>();
+    } else if (node.type == "TabView") {
+        element = std::make_unique<TabView>();
+    } else if (node.type == "TeachingTip") {
+        element = std::make_unique<TeachingTip>();
+    } else if (node.type == "TreeView") {
+        element = std::make_unique<TreeView>();
     } else {
         throw MarkupError("the type '" + node.type + "' is not implemented");
+    }
+
+    if (!node.children.empty()) {
+        if (auto* mux = dynamic_cast<MuxContentControl*>(element.get()))
+            mux->SetContent(BuildElement(node.children.front(), binding_source, namescope));
     }
 
     // The style first, then the local values. Not because the order decides
@@ -853,6 +1148,84 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node) {
     // every TextBlock a local FontSize of 14 and nothing would ever inherit.
     for (const MarkupProperty& assignment : node.properties)
         element->SetValue(*assignment.property, assignment.value);
+    for (const MarkupBinding& assignment : node.bindings) {
+        if (!binding_source) {
+            throw MarkupError("the binding path '" + assignment.binding.path +
+                              "' has no data source");
+        }
+        try {
+            element->KeepBinding(std::make_unique<BindingExpression>(
+                *element, *assignment.property, *binding_source, assignment.binding));
+        } catch (const BindingError& error) {
+            throw MarkupError(error.what());
+        }
+    }
+
+    if (!node.name.empty()) namescope->Register(node.name, *element);
+    if (!node.visual_state_groups.empty()) {
+        auto manager = std::make_unique<VisualStateManager>(*element, *namescope);
+        for (const MarkupVisualStateGroup& described_group : node.visual_state_groups) {
+            VisualStateGroup group(described_group.name);
+            for (const MarkupVisualState& described_state : described_group.states) {
+                VisualState state;
+                state.name = described_state.name;
+                for (const MarkupVisualSetter& described : described_state.setters) {
+                    DependencyObject* target = described.target_name.empty()
+                        ? static_cast<DependencyObject*>(element.get())
+                        : namescope->Find(described.target_name);
+                    if (!target)
+                        throw MarkupError("the visual-state target '" + described.target_name +
+                                          "' was not found");
+                    const DependencyProperty* property =
+                        FindProperty(target->PropertyOwners(), described.property);
+                    if (!property)
+                        throw MarkupError("the visual-state property '" + described.property +
+                                          "' was not found on its target");
+                    MarkupNode scratch;
+                    ApplyProperty(scratch, *property, described.value);
+                    if (scratch.properties.size() != 1)
+                        throw MarkupError("the visual-state property '" + described.property +
+                                          "' cannot be animated by this runtime");
+                    state.setters.push_back({described.target_name, property,
+                                             scratch.properties.front().value});
+                }
+                for (const MarkupTimeline& described : described_state.timelines) {
+                    DependencyObject* target = described.target_name.empty()
+                        ? static_cast<DependencyObject*>(element.get())
+                        : namescope->Find(described.target_name);
+                    if (!target)
+                        throw MarkupError("the storyboard target '" + described.target_name +
+                                          "' was not found");
+                    const DependencyProperty* property =
+                        FindProperty(target->PropertyOwners(), described.property);
+                    if (!property)
+                        throw MarkupError("the storyboard property '" + described.property +
+                                          "' was not found on its target");
+                    Timeline timeline;
+                    timeline.target_name = described.target_name;
+                    timeline.target_property = property;
+                    timeline.duration_seconds = described.duration_seconds;
+                    MarkupNode to;
+                    ApplyProperty(to, *property, described.to);
+                    if (to.properties.size() != 1)
+                        throw MarkupError("the storyboard property '" + described.property +
+                                          "' cannot be animated by this runtime");
+                    timeline.to = to.properties.front().value;
+                    if (described.has_from) {
+                        MarkupNode from;
+                        ApplyProperty(from, *property, described.from);
+                        if (from.properties.size() != 1)
+                            throw MarkupError("the storyboard From value cannot be converted");
+                        timeline.from = from.properties.front().value;
+                    }
+                    state.storyboard.timelines.push_back(std::move(timeline));
+                }
+                group.Add(std::move(state));
+            }
+            manager->AddGroup(std::move(group));
+        }
+        element->KeepVisualStateManager(namescope, std::move(manager));
+    }
     return element;
 }
 
@@ -871,8 +1244,35 @@ std::string FullTypeName(const std::string& short_name) {
         {"Image", "Windows.UI.Xaml.Controls.Image"},
         {"Path", "Windows.UI.Xaml.Shapes.Path"},
         {"PathIcon", "Windows.UI.Xaml.Controls.PathIcon"},
+        {"FontIcon", "Windows.UI.Xaml.Controls.FontIcon"},
+        {"Rectangle", "Windows.UI.Xaml.Shapes.Rectangle"},
+        {"ScrollViewer", "Windows.UI.Xaml.Controls.ScrollViewer"},
+        {"Button", "Windows.UI.Xaml.Controls.Button"},
+        {"TextBox", "Windows.UI.Xaml.Controls.TextBox"},
+        {"ToolTip", "Windows.UI.Xaml.Controls.ToolTip"},
+        {"Thumb", "Windows.UI.Xaml.Controls.Primitives.Thumb"},
+        {"Run", "Windows.UI.Xaml.Documents.Run"},
         {"StackPanel", "Windows.UI.Xaml.Controls.StackPanel"},
         {"TextBlock", "Windows.UI.Xaml.Controls.TextBlock"},
+        {"Page", "Windows.UI.Xaml.Controls.Page"},
+        {"Frame", "Windows.UI.Xaml.Controls.Frame"},
+        {"ItemsControl", "Windows.UI.Xaml.Controls.ItemsControl"},
+        {"ListView", "Windows.UI.Xaml.Controls.ListView"},
+        {"Popup", "Windows.UI.Xaml.Controls.Primitives.Popup"},
+        {"BreadcrumbBar", "Microsoft.UI.Xaml.Controls.BreadcrumbBar"},
+        {"ColorPicker", "Microsoft.UI.Xaml.Controls.ColorPicker"},
+        {"DropDownButton", "Microsoft.UI.Xaml.Controls.DropDownButton"},
+        {"Expander", "Microsoft.UI.Xaml.Controls.Expander"},
+        {"InfoBadge", "Microsoft.UI.Xaml.Controls.InfoBadge"},
+        {"InfoBar", "Microsoft.UI.Xaml.Controls.InfoBar"},
+        {"NavigationView", "Microsoft.UI.Xaml.Controls.NavigationView"},
+        {"NavigationViewItem", "Microsoft.UI.Xaml.Controls.NavigationViewItem"},
+        {"NumberBox", "Microsoft.UI.Xaml.Controls.NumberBox"},
+        {"ProgressRing", "Microsoft.UI.Xaml.Controls.ProgressRing"},
+        {"SplitButton", "Microsoft.UI.Xaml.Controls.SplitButton"},
+        {"TabView", "Microsoft.UI.Xaml.Controls.TabView"},
+        {"TeachingTip", "Microsoft.UI.Xaml.Controls.TeachingTip"},
+        {"TreeView", "Microsoft.UI.Xaml.Controls.TreeView"},
     };
     const auto found = kTypes.find(short_name);
     if (found == kTypes.end())
@@ -899,7 +1299,7 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
     // What that property element expects to be filled with. The three kinds
     // read their contents differently enough that the name alone is not enough
     // to dispatch on.
-    enum class Section { None, Definitions, Resources, Value };
+    enum class Section { None, Definitions, Resources, Value, Template };
     Section section = Section::None;
     // An explicit <ResourceDictionary> wrapper inside a Resources section. The
     // wrapper is optional in XAML and carries nothing this parser reads, so it
@@ -907,6 +1307,7 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
     bool dictionary_open = false;
     // Whether a <X.Property> element has already been given its one value.
     bool value_filled = false;
+    bool control_template_open = false;
 
     // The dictionaries a lookup walks: the element being filled, then each
     // ancestor, innermost first.
@@ -973,7 +1374,8 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
     // reject it rather than drop it silently.
     auto take_text = [&](const Tag& scanned) {
         if (scanned.text_before.empty()) return;
-        if (!open.empty() && open.back().type == "TextBlock") {
+        if (!open.empty() && (open.back().type == "TextBlock" || open.back().type == "Run" ||
+                              open.back().type == "Button")) {
             open.back().text += scanned.text_before;
             return;
         }
@@ -985,11 +1387,15 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
     while (scanner.Next(tag)) {
         take_text(tag);
         if (tag.closing) {
+            if (control_template_open && tag.name == "ControlTemplate") {
+                control_template_open = false;
+                continue;
+            }
             if (dictionary_open && tag.name == "ResourceDictionary") {
                 dictionary_open = false;
                 continue;
             }
-            if (!property_element.empty()) {
+            if (!control_template_open && !property_element.empty()) {
                 if (tag.name != property_element)
                     throw MarkupError("</" + tag.name + "> closes <" + property_element + ">");
                 if (section == Section::Value && !value_filled)
@@ -1037,7 +1443,7 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
             // does not apply to it.
             if (tag.name == "VisualStateManager.VisualStateGroups") {
                 if (tag.self_closing) continue;
-                ParseVisualStateGroups(scanner);
+                ParseVisualStateGroups(scanner, open.back());
                 continue;
             }
 
@@ -1055,6 +1461,11 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
                 section = Section::Definitions;
             } else if (member == "Resources") {
                 section = Section::Resources;
+            } else if (member == "ContentTransitions") {
+                if (!tag.self_closing) SkipPropertySubtree(scanner, tag.name);
+                continue;
+            } else if (member == "Template") {
+                section = Section::Template;
             } else if (member == "Background") {
                 // A brush written as a property element rather than as an
                 // attribute. Whether the type has the property is the
@@ -1104,6 +1515,19 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
                 continue;
             }
             AddResourceEntry(open.back(), tag, scanner, scope());
+            continue;
+        }
+
+        if (section == Section::Template && tag.name == "ControlTemplate") {
+            const auto target = tag.attributes.find("TargetType");
+            if (target != tag.attributes.end() && target->second != open.back().type)
+                throw MarkupError("the ControlTemplate target does not match <" +
+                                  open.back().type + ">");
+            if (tag.self_closing) {
+                value_filled = true;
+            } else {
+                control_template_open = true;
+            }
             continue;
         }
 
@@ -1194,6 +1618,7 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
         // ones that are implemented.
         std::map<std::string, std::string> attributes = tag.attributes;
         const XDirectives directives = TakeXDirectives(attributes);
+        node.name = directives.name;
         ApplyUid(attributes, directives, strings);
 
         // Style comes off next, before the rest: it is the one attribute whose
@@ -1204,7 +1629,7 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
             node.style = ResolveStyleReference(scope(), style_attribute->second);
             attributes.erase(style_attribute);
         }
-        ApplyAttributes(node, ResolveAttributes(attributes, scope()));
+        ApplyNodeAttributes(node, attributes, scope());
 
         // A deferred root would realise nothing at all, and a measurement of
         // nothing is not a measurement. Named here rather than left to produce
@@ -1237,11 +1662,20 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
 MarkupNode ParseMarkup(const std::string& markup) { return ParseMarkup(markup, NoStrings()); }
 
 std::unique_ptr<Element> LoadMarkup(const std::string& markup) {
-    return BuildElement(ParseMarkup(markup, NoStrings()));
+    return BuildElement(ParseMarkup(markup, NoStrings()), nullptr, std::make_shared<NameScope>());
 }
 
 std::unique_ptr<Element> LoadMarkup(const std::string& markup, const StringTable& strings) {
-    return BuildElement(ParseMarkup(markup, strings));
+    return BuildElement(ParseMarkup(markup, strings), nullptr, std::make_shared<NameScope>());
+}
+
+std::unique_ptr<Element> LoadMarkup(const std::string& markup, ObservableObject& source) {
+    return BuildElement(ParseMarkup(markup, NoStrings()), &source, std::make_shared<NameScope>());
+}
+
+std::unique_ptr<Element> LoadMarkup(const std::string& markup, const StringTable& strings,
+                                    ObservableObject& source) {
+    return BuildElement(ParseMarkup(markup, strings), &source, std::make_shared<NameScope>());
 }
 
 }  // namespace openxaml

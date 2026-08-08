@@ -23,6 +23,7 @@
 
 #include <windows.ui.xaml.h>
 #include <windows.ui.xaml.media.h>
+#include <windows.ui.xaml.shapes.h>
 #include <windows.ui.xaml.controls.h>
 #include <windows.ui.xaml.controls.primitives.h>
 

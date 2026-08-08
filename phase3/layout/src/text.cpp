@@ -219,7 +219,57 @@ void FontLibrary::Add(std::string family, FontMetrics metrics) {
 
 const FontMetrics* FontLibrary::Find(const std::string& family) const {
     const auto found = fonts_.find(family);
-    return found == fonts_.end() ? nullptr : &found->second;
+    if (found != fonts_.end()) return &found->second;
+    // XAML accepts a comma-separated fallback list. Use the first harvested
+    // family in that list, matching the deterministic subset this core can
+    // shape rather than treating the whole list as one family name.
+    size_t start = 0;
+    while (start < family.size()) {
+        size_t end = family.find(',', start);
+        std::string candidate = family.substr(start, end == std::string::npos ? end : end - start);
+        const size_t first = candidate.find_first_not_of(" \t");
+        const size_t last = candidate.find_last_not_of(" \t");
+        if (first != std::string::npos) {
+            candidate = candidate.substr(first, last - first + 1);
+            const auto fallback = fonts_.find(candidate);
+            if (fallback != fonts_.end()) return &fallback->second;
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return nullptr;
+}
+
+const FontMetrics* FontLibrary::FindForText(const std::string& family,
+                                            const std::string& text) const {
+    if (family.find(',') == std::string::npos) return Find(family);
+    const std::vector<char32_t> codes = DecodeUtf8(text);
+    const FontMetrics* first_available = nullptr;
+    size_t start = 0;
+    while (start < family.size()) {
+        const size_t end = family.find(',', start);
+        std::string candidate = family.substr(start, end == std::string::npos ? end : end - start);
+        const size_t first = candidate.find_first_not_of(" \t");
+        const size_t last = candidate.find_last_not_of(" \t");
+        if (first != std::string::npos) {
+            candidate = candidate.substr(first, last - first + 1);
+            const auto found = fonts_.find(candidate);
+            if (found != fonts_.end()) {
+                if (!first_available) first_available = &found->second;
+                bool covers = true;
+                for (char32_t code : codes) {
+                    if (!found->second.advances.count(code)) {
+                        covers = false;
+                        break;
+                    }
+                }
+                if (covers) return &found->second;
+            }
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return first_available;
 }
 
 FontLibrary& FontLibrary::Default() {
@@ -251,8 +301,9 @@ const std::vector<std::string>& TextBlock::Owners() { return kOwners; }
 Size TextBlock::LayoutText(double limit) const {
     const std::string& family = font_family();
     const double size = font_size();
+    const std::string& content = text();
 
-    const FontMetrics* font = FontLibrary::Default().Find(family);
+    const FontMetrics* font = FontLibrary::Default().FindForText(family, content);
     if (!font) {
         throw TextError("no harvested metrics for the font family \"" + family +
                         "\"; see phase3/xaml-db/fonts");
@@ -264,7 +315,6 @@ Size TextBlock::LayoutText(double limit) const {
     // An empty TextBlock still occupies a line, and that line keeps the
     // unsnapped height. This is the one place the two differ, and the corpus
     // records both: 15.9609 empty against 15.96 with text, at size 12.
-    const std::string& content = text();
     if (content.empty()) return {0.0, AsFloat(spacing)};
 
     const std::vector<Glyph> glyphs = Shape(content, *font, size);

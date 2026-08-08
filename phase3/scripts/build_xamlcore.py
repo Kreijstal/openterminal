@@ -53,7 +53,10 @@ LAYOUT_SOURCES = ["property.cpp", "element.cpp", "border.cpp", "control.cpp",
                   "stack_panel.cpp", "grid.cpp", "chrome.cpp", "canvas.cpp",
                   "content_presenter.cpp", "geometry.cpp", "image.cpp", "shape.cpp",
                   "icon.cpp", "brush.cpp", "text.cpp", "fonts.cpp", "json.cpp",
+                  "scroll_viewer.cpp", "basic_controls.cpp",
                   "resources.cpp", "style.cpp", "xdirectives.cpp", "resw_strings.cpp"]
+LAYOUT_SOURCES += ["binding.cpp", "visual_state.cpp", "default_styles.cpp",
+                   "advanced_controls.cpp"]
 
 # The classes the DLL claims. Registering a class it does not implement would
 # route a caller to us and then fail at DllGetActivationFactory, which is worse
@@ -62,10 +65,28 @@ RUNTIME_CLASSES = [
     "Windows.UI.Xaml.Controls.Border",
     "Windows.UI.Xaml.Controls.Grid",
     "Windows.UI.Xaml.Controls.StackPanel",
+    "Windows.UI.Xaml.Controls.Canvas",
+    "Windows.UI.Xaml.Controls.ContentPresenter",
+    "Windows.UI.Xaml.Controls.Image",
+    "Windows.UI.Xaml.Controls.PathIcon",
+    "Windows.UI.Xaml.Shapes.Path",
     "Windows.UI.Xaml.Controls.TextBlock",
     "Windows.UI.Xaml.Controls.ColumnDefinition",
     "Windows.UI.Xaml.Controls.RowDefinition",
     "Windows.UI.Xaml.Controls.Primitives.LayoutInformation",
+    "Windows.UI.Xaml.Controls.ContentControl",
+    "Windows.UI.Xaml.Controls.Page",
+    "Windows.UI.Xaml.Controls.Frame",
+    "Windows.UI.Xaml.Controls.ItemsControl",
+    "Windows.UI.Xaml.Controls.ListView",
+    "Windows.UI.Xaml.Controls.Primitives.Popup",
+    "Windows.UI.Xaml.Controls.Button",
+    "Windows.UI.Xaml.Controls.TextBox",
+    "Windows.UI.Xaml.Controls.ToolTip",
+    "Windows.UI.Xaml.Controls.Primitives.Thumb",
+    "Windows.UI.Xaml.Controls.ScrollViewer",
+    "Windows.UI.Xaml.Controls.FontIcon",
+    "Windows.UI.Xaml.Shapes.Rectangle",
     # Not a control: a TextBlock's FontFamily is an object, so the ABI needs a
     # class to make one with.
     "Windows.UI.Xaml.Media.FontFamily",
@@ -200,6 +221,11 @@ def main() -> None:
         + [str(layout_src / name) for name in LAYOUT_SOURCES]
         + includes + libraries)
 
+    wave34_smoke = root / "wave34_smoke.exe"
+    run(common + ["-o", str(wave34_smoke),
+                  str(PHASE3_DIR / "xamlcore" / "client" / "wave34_smoke.cpp")]
+        + includes + libraries)
+
     environment = os.environ.copy()
     environment["WINEPREFIX"] = str(prefix)
     environment["WINEDEBUG"] = environment.get("WINEDEBUG", "-all")
@@ -216,6 +242,7 @@ def main() -> None:
     registry_file = root / "openxaml.reg"
     registry_file.write_text(registration(dll), encoding="utf-8")
     run(["wine", "regedit", str(registry_file)], env=environment)
+    run(["wine", str(wave34_smoke)], env=environment)
 
     if args.skip_run:
         print(f"built and registered {dll}")
