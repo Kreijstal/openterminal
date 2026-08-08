@@ -608,8 +608,11 @@ jobs:
       # L4 holds three groups now and they are held to different rules, so the
       # check splits on the case id rather than on the level:
       #
-      #  * L4-text and L4-source are the TextBlock cases. The rule above is
-      #    theirs and is unchanged: match, or name the advance you have not got.
+      #  * L4-text, L4-source and L4-kern are the TextBlock cases. The rule
+      #    above is theirs and is unchanged: match, or name the advance you
+      #    have not got. The kern cases mostly name one: their texts pair
+      #    letters the corpus never measures alone, so on the derived file
+      #    they refuse rather than reach the committed kerning at all.
       #  * L4-icon is FontIcon. Six of those measure an icon in Segoe UI, whose
       #    advance the corpus already knows, and they match here -- which is
       #    what they were authored for: the sizing rule is pinned before any
@@ -636,9 +639,9 @@ jobs:
           def group(prefix):
               return [m for m in report["mismatches"]
                       if m["case_id"].startswith(prefix)]
-          text = group("L4-text-") + group("L4-source-")
+          text = group("L4-text-") + group("L4-source-") + group("L4-kern-")
           icons = group("L4-icon-")
-          known = {"L4-text-", "L4-source-", "L4-icon-"}
+          known = {"L4-text-", "L4-source-", "L4-icon-", "L4-kern-"}
           other = [m for m in report["mismatches"]
                    if not any(m["case_id"].startswith(p) for p in known)]
           print(f"L4 on the derived metrics alone: {level['passed']} of "
