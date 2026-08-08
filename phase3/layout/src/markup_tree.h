@@ -136,8 +136,8 @@ struct MarkupNode {
     GeometryBounds data;
 
     // ContentPresenter.
-    HorizontalAlignment horizontal_content_alignment = HorizontalAlignment::Left;
-    VerticalAlignment vertical_content_alignment = VerticalAlignment::Top;
+    HorizontalAlignment horizontal_content_alignment = HorizontalAlignment::Stretch;
+    VerticalAlignment vertical_content_alignment = VerticalAlignment::Stretch;
 
     // Text, and the inherited text properties a Control carries as well. The
     // defaults are XAML's.

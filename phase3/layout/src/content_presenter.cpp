@@ -7,12 +7,18 @@ namespace {
 
 // Content alignment moves the content inside the presenter without changing
 // what the presenter asked for, so neither affects measure.
+//
+// Both default to Stretch, which is FrameworkElement.HorizontalAlignment's
+// default rather than Control.HorizontalContentAlignment's -- that one is
+// Center. A ContentPresenter with nothing said about alignment therefore hands
+// its whole inner rect to the content, and content with no explicit size of
+// its own fills it.
 const DependencyProperty* const kHorizontalContentAlignment =
     RegisterProperty("ContentPresenter", "HorizontalContentAlignment",
-                     {static_cast<int>(HorizontalAlignment::Left), false, false});
+                     {static_cast<int>(HorizontalAlignment::Stretch), false, false});
 const DependencyProperty* const kVerticalContentAlignment =
     RegisterProperty("ContentPresenter", "VerticalContentAlignment",
-                     {static_cast<int>(VerticalAlignment::Top), false, false});
+                     {static_cast<int>(VerticalAlignment::Stretch), false, false});
 
 // Its own rather than Panel's: a ContentPresenter derives straight from
 // FrameworkElement. Nothing reads it -- see brush.h -- but the registry has to
