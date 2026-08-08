@@ -13,6 +13,16 @@ the same layout by construction, so any difference between them is the resource
 system resolving to something other than what it was handed -- the whole failure
 mode of a lookup, caught without an oracle.
 
+"By construction" is the corpus author's claim, and the oracle is entitled to
+refute it. Thirteen of the fifty-eight pairs it has now measured are refuted:
+`L5-styles-implicit-target-type` declares an implicit Style and writes two
+Borders under it, its twin writes the sizes inline, and the runtime records the
+first pair of Borders unstyled -- so the two halves are not the same layout and
+never were. `--expected` is where those recordings go. A pair the oracle records
+as different is not a self-consistency check any more and is reported apart
+from the ones that are, because holding an implementation to a premise the
+runtime has already denied would be holding it to the wrong answer.
+
 What this is not:
 
 - It is **not** a check that the layout is right. Both halves of a pair can be
@@ -26,7 +36,8 @@ Pairs where both halves failed to load are counted separately for the same
 reason: two identical failures agree about nothing.
 
     python3 phase3/scripts/check_twins.py --cases phase3/xaml-db/cases \\
-        --results /tmp/layout-results
+        --results /tmp/layout-results \\
+        --expected phase3/xaml-db/measurements/<build>
 """
 
 from __future__ import annotations
@@ -82,12 +93,26 @@ def compare(subject: dict[str, Any], twin: dict[str, Any], tolerance: float) -> 
     return problems
 
 
-def check(cases: Path, results: Path, tolerance: float) -> dict[str, Any]:
+def refuted_by(expected: dict[str, dict[str, Any]], case_id: str, twin_id: str,
+               tolerance: float) -> list[str]:
+    """How the oracle says the two halves differ. Empty means it agrees they pair."""
+    subject, twin = expected.get(case_id), expected.get(twin_id)
+    if subject is None or twin is None:
+        return []
+    if subject.get("error") or twin.get("error"):
+        return []
+    return compare(subject, twin, tolerance)
+
+
+def check(cases: Path, results: Path, tolerance: float,
+          expected: Path | None = None) -> dict[str, Any]:
     by_id = load_cases(cases)
     measured = load_results(results)
+    recorded = load_results(expected) if expected else {}
 
     matched: list[str] = []
     unverified: list[dict[str, str]] = []
+    refuted: list[dict[str, str]] = []
     mismatches: list[dict[str, str]] = []
 
     for case_id, case in sorted(by_id.items()):
@@ -97,6 +122,13 @@ def check(cases: Path, results: Path, tolerance: float) -> dict[str, Any]:
 
         def problem(detail: str) -> dict[str, str]:
             return {"id": case_id, "twin": twin_id, "detail": detail}
+
+        # Asked before anything about the implementation, because it decides
+        # whether there is a question to put to it at all.
+        denied = refuted_by(recorded, case_id, twin_id, tolerance)
+        if denied:
+            refuted.append(problem(denied[0]))
+            continue
 
         if twin_id not in by_id:
             mismatches.append(problem(f"names a twin {twin_id} that is not in the corpus"))
@@ -136,11 +168,14 @@ def check(cases: Path, results: Path, tolerance: float) -> dict[str, Any]:
         "tolerance": tolerance,
         "matched": matched,
         "unverified": unverified,
+        "refuted": refuted,
         "mismatches": mismatches,
         "totals": {
-            "pairs": len(matched) + len(unverified) + len({m["id"] for m in mismatches}),
+            "pairs": (len(matched) + len(unverified) + len(refuted)
+                      + len({m["id"] for m in mismatches})),
             "matched": len(matched),
             "unverified": len(unverified),
+            "refuted": len(refuted),
             "mismatched": len({m["id"] for m in mismatches}),
         },
     }
@@ -149,14 +184,22 @@ def check(cases: Path, results: Path, tolerance: float) -> dict[str, Any]:
 def summarise(result: dict[str, Any], limit: int = 25) -> str:
     totals = result["totals"]
     lines = [
-        "| twin pairs | agree | not verified here | disagree |",
-        "|---:|---:|---:|---:|",
+        "| twin pairs | agree | not verified here | refuted by the oracle | disagree |",
+        "|---:|---:|---:|---:|---:|",
         f"| {totals['pairs']} | {totals['matched']} | {totals['unverified']} "
-        f"| {totals['mismatched']} |",
+        f"| {totals.get('refuted', 0)} | {totals['mismatched']} |",
         "",
         "Self-consistency only: a pair that agrees says the value reached the "
         "property, not that the layout is right. The oracle says that.",
     ]
+    if result.get("refuted"):
+        lines += ["", f"### Refuted by the oracle ({len(result['refuted'])})", "",
+                  "The recorded measurement has the two halves differing, so they "
+                  "are not the same layout and the pair asks nothing. "
+                  "`check_layout.py` holds both halves to the recording instead.",
+                  ""]
+        for item in result["refuted"][:limit]:
+            lines.append(f"- `{item['id']}` vs `{item['twin']}` — {item['detail']}")
     if result["unverified"]:
         lines += ["", f"### Not verified here ({len(result['unverified'])})", "",
                   "Both halves failed to load, identically, so the pair proves "
@@ -177,12 +220,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cases", type=Path, required=True)
     parser.add_argument("--results", type=Path, required=True,
                         help="results from the implementation under test")
+    parser.add_argument("--expected", type=Path,
+                        help="recorded measurements; a pair the oracle records as "
+                             "differing is reported apart rather than demanded of "
+                             "the implementation")
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE)
     parser.add_argument("--output", type=Path, help="write the full result as JSON")
     parser.add_argument("--summary", type=Path, help="where to append the markdown summary")
     args = parser.parse_args(argv)
 
-    result = check(args.cases, args.results, args.tolerance)
+    result = check(args.cases, args.results, args.tolerance, args.expected)
     text = summarise(result)
 
     if args.output:
