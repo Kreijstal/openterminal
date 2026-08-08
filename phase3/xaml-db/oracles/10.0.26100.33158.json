@@ -1,6 +1,6 @@
 {
  "digest": {
-  "cases": 1138,
+  "cases": 1177,
   "levels": {
    "L0": {
     "cases": 18,
@@ -19,8 +19,8 @@
     "sha256": "50384d1c761237ac1d87059e812b4a09d0384729cc91da374bff4daa2e2e7bb9"
    },
    "L4": {
-    "cases": 147,
-    "sha256": "aff412205c5060b1323e98213d01f5e473740e08642bebc1a333e18044c8b84f"
+    "cases": 186,
+    "sha256": "d773ed7baf651f7e7f5e2dd351c567e7ac008bfb92a6b0420b659b7b7fcb1627"
    },
    "L5": {
     "cases": 126,
@@ -31,7 +31,7 @@
     "sha256": "e673d8dbe7e1e478778fecb4a01b00b8583bd7121866d82a5037b8fef5d17e0b"
    }
   },
-  "sha256": "ee488388a62f710e9eec83301c2e7af0d858cb2790a414cc03489a33e582e9d2"
+  "sha256": "7a8e138758ec63ea4a7b707d12f52ad963f9c3124e38cd1065474fa3e40caaf9"
  },
  "font_segoeui": "8134DBCD09E7B123C9A7F229D49CFFBCB01352CC72EA5E1076B65D0DCA9F73CD",
  "os_build": "10.0.26100.33158",
