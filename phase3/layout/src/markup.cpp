@@ -331,6 +331,13 @@ const std::vector<std::string>& OwnersFor(const std::string& type) {
     if (type == "Run") return TextBlock::Owners();
     if (type == "StackPanel") return StackPanel::Owners();
     if (type == "TextBlock") return TextBlock::Owners();
+    // A type identity a Style may target and no element tag can name. It is
+    // here and not in FullTypeName's table because the two answer different
+    // questions: this is the property registry, which a <Setter Property="..."/>
+    // is resolved against, and that is the set of elements this parser builds.
+    static const std::vector<std::string> kControlOwners = {"Control", kTextPropertyOwner,
+                                                            "FrameworkElement", "UIElement"};
+    if (type == "Control") return kControlOwners;
     if (type == "Page") return Page::Owners();
     if (type == "Frame") return Frame::Owners();
     if (type == "ItemsControl") return ItemsControl::Owners();
@@ -588,7 +595,14 @@ public:
     void ValidateTargetType(const std::string& type) override {
         // Both, because they answer different questions: FullTypeName says the
         // corpus knows the type, OwnersFor says the property registry does.
-        FullTypeName(type);
+        //
+        // An abstract base has only the second answer, and needs only the
+        // second: `L5-styles-explicit-derived-target` records a
+        // TargetType="Control" style applied to a ContentControl, so the type
+        // is a legal target even though no <Control> can be built. Asking the
+        // element registry about it would refuse the style for a fact about
+        // tags rather than about types.
+        if (type != "Control") FullTypeName(type);
         OwnersFor(type);
     }
 
@@ -974,6 +988,36 @@ void AttachChild(MarkupNode& parent, MarkupNode child) {
     parent.children.push_back(std::move(child));
 }
 
+// Gives `node` and everything already below it the implicit style its type
+// resolves to. `outer` is the tables in scope above `node`, innermost first.
+//
+// This runs when a <X.Resources> is attached and nowhere else, which is what
+// decides how far an implicit style reaches. The recorded answers are what say
+// so: `L5-styles-implicit-target-type` declares one on a StackPanel and writes
+// two Borders under it, and both are recorded unstyled, while
+// `L5-styles-implicit-forward-dictionary` writes the Border first and the
+// dictionary below it, and that Border *is* styled. So the reach is not "the
+// subtree below the dictionary" -- it is whatever is in the tree at the moment
+// the dictionary arrives, which for a XAML parse is the owner plus everything
+// written above the <X.Resources>. `L5-styles-implicit-own-dictionary` pins the
+// owner half: the Border holding the dictionary is styled by it and the Border
+// written below it is not.
+//
+// In the runtime this is `CFrameworkElement`'s resources-changed notification
+// invalidating the implicit style of the subtree it is set on. Nothing runs it
+// again afterwards -- there is no live tree here to enter, and the recorded
+// zeroes say no second pass happened.
+//
+// A node that already has a style keeps it. An explicit Style= takes the slot
+// whole, and an implicit style that got there first came from a nearer
+// dictionary: a nested <X.Resources> is always attached before the enclosing
+// one, so first-writer-wins is innermost-wins.
+void ApplyImplicitStyles(MarkupNode& node, ImplicitStyleScope outer) {
+    if (!node.implicit_styles.empty()) outer.insert(outer.begin(), &node.implicit_styles);
+    if (!node.style) node.style = FindImplicitStyle(outer, node.type);
+    for (MarkupNode& child : node.children) ApplyImplicitStyles(child, outer);
+}
+
 // --- realising the description ------------------------------------------------
 
 Definition ToDefinition(const MarkupDefinition& source) {
@@ -1329,39 +1373,15 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
         return chain;
     };
 
-    // The same walk again, for implicit styles. Same order, same shape, and a
-    // separate table because an implicit key is a type rather than a string --
-    // see style.h.
-    //
-    // `self` is the element being finished, whose *own* dictionary is in scope
-    // for it: `ResolveImplicitStyleKeyImpl` starts its walk at the element and
-    // only then goes to the parent, so a Border whose dictionary holds an
-    // implicit Border style is styled by it. That is the one place the
-    // implicit route is wider than {StaticResource}'s, which cannot see a
-    // dictionary declared below the attribute that reads it.
-    auto implicit_scope = [&open](const MarkupNode& self) {
+    // The tables above the element whose dictionary has just been attached.
+    // `open.back()` is that owner and supplies its own table in
+    // ApplyImplicitStyles, so the chain here starts one level up.
+    auto ancestor_implicit_scope = [&open]() {
         ImplicitStyleScope chain;
-        if (!self.implicit_styles.empty()) chain.push_back(&self.implicit_styles);
-        for (auto it = open.rbegin(); it != open.rend(); ++it) {
+        for (auto it = open.rbegin() + 1; it != open.rend(); ++it) {
             if (!it->implicit_styles.empty()) chain.push_back(&it->implicit_styles);
         }
         return chain;
-    };
-
-    // Called once an element has been read whole. An implicit style is looked
-    // up here rather than when the start tag was scanned, because the
-    // element's own dictionary is a child of it and does not exist yet at that
-    // point -- and because an explicit Style= wins outright, so there is
-    // nothing to look up when one was written.
-    //
-    // The runtime does this later still: `CFrameworkElement::ApplyStyle` runs
-    // at CreationComplete and again on entering a live tree, which is after
-    // the whole document is parsed. The difference shows only for a dictionary
-    // written *below* the elements it targets, which is
-    // `L5-styles-implicit-forward-dictionary` and is a question rather than a
-    // decision.
-    auto finish_node = [&](MarkupNode& node) {
-        if (!node.style) node.style = FindImplicitStyle(implicit_scope(node), node.type);
     };
 
     // Character data belongs to the element it sits inside, and only a
@@ -1395,6 +1415,10 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
                     throw MarkupError("</" + tag.name + "> closes <" + property_element + ">");
                 if (section == Section::Value && !value_filled)
                     throw MarkupError("<" + property_element + "> was given no value");
+                // Attaching the dictionary is what applies its implicit styles;
+                // see ApplyImplicitStyles.
+                if (section == Section::Resources)
+                    ApplyImplicitStyles(open.back(), ancestor_implicit_scope());
                 property_element.clear();
                 section = Section::None;
                 continue;
@@ -1404,7 +1428,6 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
             open.pop_back();
             if (tag.name != finished.type)
                 throw MarkupError("</" + tag.name + "> does not close the open element");
-            finish_node(finished);
             if (open.empty()) {
                 root = std::move(finished);
                 have_root = true;
@@ -1620,7 +1643,6 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
         ApplyNodeAttributes(node, attributes, scope());
 
         if (tag.self_closing) {
-            finish_node(node);
             if (open.empty()) {
                 root = std::move(node);
                 have_root = true;

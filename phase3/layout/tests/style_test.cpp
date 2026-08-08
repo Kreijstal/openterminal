@@ -130,16 +130,19 @@ void TargetTypes() {
                          "<Border Style=\"{StaticResource S}\"/>"),
             "the type 'Nonsense' is not implemented");
 
-    // The abstract bases are not markup types here, and a style that names one
-    // has to say so rather than matching nothing quietly. This is also what
-    // L5-styles-implicit-derived-type records as the reason it cannot answer
-    // its own question locally.
-    Rejects("a TargetType that is a base class this parser does not model",
-            Document("Grid", "",
-                     Resources("Grid", "<Style TargetType=\"Control\">"
-                                       "<Setter Property=\"FontSize\" Value=\"24\"/></Style>") +
-                         "<ContentControl/>"),
-            "the type 'Control' is not implemented");
+    // A TargetType names a type identity, and an identity may be one no element
+    // tag can name: `L5-styles-explicit-derived-target` records the runtime
+    // applying a TargetType="Control" style to a ContentControl, which is the
+    // is-a rule ApplyStyle already has. So the abstract base is a legal target
+    // even though <Control/> stays unbuildable.
+    Loads("a TargetType that is an abstract base of the styled element",
+          Document("Grid", "",
+                   Resources("Grid", "<Style x:Key=\"Big\" TargetType=\"Control\">"
+                                     "<Setter Property=\"FontSize\" Value=\"24\"/></Style>") +
+                       "<ContentControl Style=\"{StaticResource Big}\"/>"));
+
+    Rejects("that same base written as an element",
+            Document("Grid", "", "<Control/>"), "the type 'Control' is not implemented");
 
     Rejects("a Style with no TargetType at all",
             Document("Grid", "",
@@ -621,17 +624,100 @@ void ImplicitAndExplicitDoNotMerge() {
 
     // An element with a Style= is not also given the implicit style for its
     // type: the two occupy one slot and the explicit one takes it whole.
+    //
+    // The implicit style is the element's *own* dictionary, which is the one
+    // arrangement that puts both routes in reach at once. An implicit style in
+    // the Grid's dictionary could not reach a Border written below it -- see
+    // ImplicitStylesReachOnlyWhatIsAlreadyThere -- so a test written that way
+    // would pass without the precedence rule existing at all.
+    const std::string implicit = "<Style TargetType=\"Border\">"
+                                 "<Setter Property=\"Width\" Value=\"60\"/>"
+                                 "<Setter Property=\"Height\" Value=\"30\"/></Style>";
     std::unique_ptr<Element> root = LoadMarkup(Document(
         "Grid", "",
-        Resources("Grid", "<Style TargetType=\"Border\">"
-                          "<Setter Property=\"Width\" Value=\"60\"/>"
-                          "<Setter Property=\"Height\" Value=\"30\"/></Style>"
-                          "<Style x:Key=\"Slim\" TargetType=\"Border\">"
+        Resources("Grid", "<Style x:Key=\"Slim\" TargetType=\"Border\">"
                           "<Setter Property=\"Width\" Value=\"20\"/></Style>") +
-            "<Border Style=\"{StaticResource Slim}\"/>"));
+            "<Border Style=\"{StaticResource Slim}\">" + Resources("Border", implicit) +
+            "</Border>"));
     Element* border = Innermost(root.get());
     CheckDouble(border->width(), 20.0, "the explicit style applies");
     Check(IsAuto(border->height()), "and the implicit style's other setter does not");
+}
+
+// --- how far an implicit style reaches ----------------------------------------
+//
+// Not "the subtree below the dictionary", which is what this parser assumed and
+// what the corpus was authored expecting. The recorded answers say an implicit
+// style reaches exactly what is already in the tree when the dictionary is
+// attached: `L5-styles-implicit-target-type` declares one and then writes two
+// Borders under it, and both are recorded unstyled, while
+// `L5-styles-implicit-forward-dictionary` writes the Border first and the
+// dictionary below it, and that Border *is* styled.
+//
+// The corpus can only say that about the shapes it has. These are the same rule
+// stated where a measurement cannot reach: which slot the width came from, and
+// what happens with no measurable size involved at all.
+void ImplicitStylesReachOnlyWhatIsAlreadyThere() {
+    using namespace openxaml;
+
+    const std::string boxes = "<Style TargetType=\"Border\">"
+                              "<Setter Property=\"Width\" Value=\"60\"/>"
+                              "<Setter Property=\"Height\" Value=\"30\"/></Style>";
+
+    // Declared first: the Border below it never sees it.
+    std::unique_ptr<Element> root =
+        LoadMarkup(Document("Grid", "", Resources("Grid", boxes) + "<Border/>"));
+    Check(IsAuto(Innermost(root.get())->width()),
+          "a dictionary does not reach an element written below it");
+
+    // Declared last: the Border above it is restyled when the dictionary
+    // arrives.
+    root = LoadMarkup(Document("Grid", "", "<Border/>" + Resources("Grid", boxes)));
+    CheckDouble(Innermost(root.get())->width(), 60.0,
+                "a dictionary does reach an element written above it");
+
+    // The owner is in its own dictionary's reach, because attaching the
+    // dictionary is what triggers the walk and the owner is already there.
+    root = LoadMarkup(Document("Grid", "", "<Border>" + Resources("Border", boxes) + "</Border>"));
+    CheckDouble(root->Children().front()->width(), 60.0,
+                "an element's own dictionary styles the element itself");
+
+    // ... and its child, written below the dictionary, is not.
+    root = LoadMarkup(
+        Document("Grid", "", "<Border>" + Resources("Border", boxes) + "<Border/></Border>"));
+    Check(IsAuto(Innermost(root.get())->width()),
+          "and does not reach a child written below it");
+
+    // The walk goes down from the dictionary's owner and no further: a sibling
+    // of the panel that declares one is outside it in both directions.
+    root = LoadMarkup(Document("Grid", "",
+                               "<StackPanel><Border/>" + Resources("StackPanel", boxes) +
+                                   "</StackPanel><Border/>"));
+    CheckDouble(root->Children().front()->Children().front()->width(), 60.0,
+                "the walk covers the owner's own subtree");
+    Check(IsAuto(root->Children().back()->width()),
+          "and not a sibling of the owner");
+
+    // An abstract TargetType is an exact key on the implicit route, whatever
+    // the is-a rule lets the explicit route do: `L5-styles-implicit-derived-type`
+    // records a TargetType="Control" style leaving its ContentControl alone.
+    root = LoadMarkup(Document("Grid", "",
+                               "<ContentControl/>" +
+                                   Resources("Grid", "<Style TargetType=\"Control\">"
+                                                     "<Setter Property=\"FontSize\" Value=\"24\"/>"
+                                                     "</Style>")));
+    CheckDouble(Innermost(root.get())->GetDouble(FontSizeProperty()), 14.0,
+                "an implicit style is filed under the exact type it targets");
+
+    // The explicit route takes the same style and does apply it, which is the
+    // half of the pair `L5-styles-explicit-derived-target` records.
+    root = LoadMarkup(Document(
+        "Grid", "",
+        Resources("Grid", "<Style x:Key=\"Big\" TargetType=\"Control\">"
+                          "<Setter Property=\"FontSize\" Value=\"24\"/></Style>") +
+            "<ContentControl Style=\"{StaticResource Big}\"/>"));
+    CheckDouble(Innermost(root.get())->GetDouble(FontSizeProperty()), 24.0,
+                "the same style assigned explicitly applies to a derived type");
 }
 
 }  // namespace
@@ -655,6 +741,7 @@ int main() {
 
     BasedOnMerges();
     ImplicitAndExplicitDoNotMerge();
+    ImplicitStylesReachOnlyWhatIsAlreadyThere();
 
     std::printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;

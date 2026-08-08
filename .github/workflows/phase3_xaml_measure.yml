@@ -498,19 +498,24 @@ jobs:
             --output layout-report.json \
             >> "$GITHUB_STEP_SUMMARY" || true
 
-      # L5 has no recorded measurements yet -- the resource and style cases
-      # were both authored after the last oracle run. Until it has them, a
-      # resolved {StaticResource} and an applied Style are each held to the
+      # A resolved {StaticResource} and an applied Style are each held to the
       # twin case that writes the same values inline. That is self-consistency
       # and not coverage, and the report says so itself; it is here because it
       # fails loudly on the one thing a resource system gets wrong, which is
       # resolving to the wrong value, and on the one thing a style system gets
       # wrong, which is applying a setter at the wrong precedence.
+      #
+      # The recording goes in too, because the pairing is the corpus author's
+      # claim and the oracle has refuted thirteen of them: an implicit Style
+      # does not reach an element written below its dictionary, so half the
+      # implicit-style pairs are two different layouts. A pair the recording
+      # has differing is reported apart instead of demanded.
       - name: Resolved resources and applied styles match their inlined twins
         run: |
           python3 -B phase3/scripts/check_twins.py \
             --cases phase3/xaml-db/cases \
             --results "$RUNNER_TEMP/run1" \
+            --expected "measurements/${{ needs.measure.outputs.os_build }}" \
             --output twin-report.json \
             --summary "$GITHUB_STEP_SUMMARY"
 

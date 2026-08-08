@@ -356,11 +356,27 @@ The lookups differ, deliberately: the implicit key is an *exact* type match
 (`ResolveImplicitStyleKeyImpl` hands the element's own class name to a
 dictionary probe, and WPF's `FindImplicitStyleResource` passes `this.GetType()`),
 while an explicit `Style=` is validated with an is-a check
-(`CFrameworkElement::ValidateTargetType` asks `OfTypeByIndex`). Neither of those
-is observable in this corpus, because every markup type here is concrete and no
-two of them derive from one another — `L5-styles-implicit-derived-type` and
-`L5-styles-explicit-derived-target` are the pair that asks the runtime, and this
-implementation refuses both by name because it has no abstract `Control` type.
+(`CFrameworkElement::ValidateTargetType` asks `OfTypeByIndex`). The runtime has
+now answered the pair that separates them: `L5-styles-explicit-derived-target`
+applies a `TargetType="Control"` style to a `ContentControl` and
+`L5-styles-implicit-derived-type` leaves the same style unapplied. So `Control`
+is a legal `TargetType` here even though `<Control>` is not a legal tag — a
+`TargetType` names a type identity, not an element the parser can build, and
+the two registries answer separately.
+
+**An implicit style reaches what is already in the tree when its dictionary
+arrives — and nothing else.** Not "the subtree below the dictionary", which is
+what this parser assumed. `L5-styles-implicit-target-type` declares one on a
+`StackPanel` and writes two `Border`s under it, and the runtime records both
+unstyled; `L5-styles-implicit-forward-dictionary` writes the `Border` first and
+the dictionary below it, and that `Border` *is* styled;
+`L5-styles-implicit-own-dictionary` records both halves at once, the `Border`
+holding the dictionary styled by it and the `Border` written below it not. So
+what applies the style is the resources-changed notification the runtime raises
+when a `Resources` dictionary is attached, walking the owner and its current
+subtree, and nothing runs it a second time — there is no live tree to enter
+here and the recorded zeroes say no later pass happened. Ten of the thirteen
+`L5-styles` cases that were failing turn on this one rule.
 
 The same split holds for the other half: what the corpus can see is checked by
 50 `L5-styles` cases, 22 of them twinned; what it cannot is checked by
@@ -567,6 +583,16 @@ does not do, so that a passing run is not read as more than it is:
   shaping, no kerning, no ligatures, no fallback for a character the metrics do
   not cover. It stays quarantined at L4 for that reason — text-measurement
   error would otherwise contaminate every panel that contains it.
+
+  The kerning is now measured rather than merely absent. `Terminal` in Segoe UI
+  measures 200 design units narrower than the sum of its advances, at 12, 14
+  and 24 alike — a design-unit constant, so it is a pair adjustment and not a
+  wrong advance, and every letter in it appears in the pangram case whose sum
+  *is* right. `{StaticResource NotAKey}` loses 153 the same way, which is the
+  whole of what `L5-resources-brace-escape` and its twin fail by. Fixing it
+  needs the font's `kern`/`GPOS` pairs, and the harvest carries only advances;
+  guessing which pair holds the 153 would be inventing the answer, so both
+  cases stay red and named here instead.
 - **No `RelativePanel`; incomplete stock templates.** Control-template
   construction, application and template binding are implemented, including
   Terminal's inline `Thumb.Template`. The complete open `generic.xaml` stock
@@ -610,13 +636,15 @@ does not do, so that a passing run is not read as more than it is:
   implemented. Reconstructing every open `generic.xaml` entry and diffing it
   against the runtime is still a separate pinned harvest. Style triggers and
   transition selection remain named omissions.
-- **A style is not re-applied after the tree is built.** The runtime resolves
-  an implicit style at `CreationComplete` and again on entering a live tree,
-  and re-resolves when a `Resources` dictionary is replaced. Here it is
-  resolved once, when the element's markup closes, and never again — nothing
-  in this corpus moves an element or replaces a dictionary after the load.
-  `ClearStyleValues` exists and is tested, because replacing a style is what
-  makes the separate slot necessary, but no markup path calls it.
+- **A style is not re-applied after the tree is built.** An implicit style is
+  resolved when a `Resources` dictionary is attached, over the owner and the
+  subtree already under it, and never again — which is what the recordings
+  show, and it is why an element written below a dictionary is not styled by
+  it. Nothing in this corpus moves an element or replaces a dictionary after
+  the load, so the second and third occasions the runtime has for re-resolving
+  are not modelled. `ClearStyleValues` exists and is tested, because replacing
+  a style is what makes the separate slot necessary, but no markup path calls
+  it.
 - **`Setter.Value` is resolved eagerly.** The runtime defers a setter's
   `{StaticResource}` until the value is first needed. Here it is resolved when
   the style is parsed, against the dictionaries in scope where the style is
@@ -663,18 +691,21 @@ of this table entirely.
 The six `L5-styles` cases that carry `oracle_decides` are the ones neither
 reference settles for a `XamlReader.Load` with no `Application`:
 
-| case | this implementation's answer | why it might be wrong |
+| case | what the runtime answered | what this implementation had guessed |
 |---|---|---|
-| `implicit-own-dictionary` | applies — the outer `Border` is styled by its own dictionary | the core's walk starts at the element, but `{StaticResource}` in this same parser cannot see a dictionary declared below the attribute reading it |
-| `implicit-forward-dictionary` | does not apply | the runtime applies styles after the parse, so it may well find a dictionary written below |
-| `setter-value-resource-scope` | resolved where the style is written, so `60` | the runtime defers the lookup; a deferred one might pick up the styled element's scope instead, giving `100` |
-| `duplicate-setter` | last setter wins, so `100` | the core's lookup says so, but its parser may reject the duplicate first |
-| `implicit-derived-type` | refused: no abstract `Control` type | the runtime loads it and should not apply it, by exact-type match |
-| `explicit-derived-target` | refused, same reason | the runtime loads it and *should* apply it, by is-a match |
+| `implicit-own-dictionary` | applies — the outer `Border` *is* styled by its own dictionary, and the inner one, written below it, is not | applied to both |
+| `implicit-forward-dictionary` | applies — a dictionary written below the element it targets still reaches it | did not apply |
+| `implicit-derived-type` | loads, and does not apply: the implicit key is an exact type match | refused, for want of an abstract `Control` type |
+| `explicit-derived-target` | loads, and *does* apply: the explicit route is an is-a match | refused, same reason |
+| `setter-value-resource-scope` | resolved where the style is written, so `60` | the same; the guess held |
+| `duplicate-setter` | last setter wins, so `100` | the same; the guess held |
 
-The last two are a deliberate pair: the interesting finding is the runtime
-answering them differently, and a run that answered both the same way would mean
-one of the two documented rules is not what the source says.
+The middle pair was the deliberate one, and the interesting finding is exactly
+what it was authored for: the runtime answers them differently, so the two
+documented lookup rules are both real. The first pair was the surprise — taken
+together they say an implicit style reaches what already exists when its
+dictionary is attached rather than the subtree written below it, which is the
+opposite of the direction the corpus notes assumed.
 
 The `L1-shape` answers have two witnesses each already, from Terminal's two
 `PathIcon` cases, but both of those geometries start near the origin and

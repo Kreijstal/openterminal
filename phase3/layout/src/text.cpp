@@ -46,17 +46,19 @@ double AsFloat(double value) {
     return static_cast<double>(static_cast<float>(value));
 }
 
-// The desired *width* is ceiled, and only the width.
+// A measured extent, ceiled.
 //
 // The corpus has a TextBlock whose text measures 89.2167 and which reports a
-// desired width of 90, which rounding cannot produce. The height does the
-// opposite: an empty TextBlock at size 22 measures 29.2617 and reports 29,
-// which ceiling cannot produce. Nothing in L4 distinguishes the two -- every
-// text height there has a fractional part above a half, where ceiling and
-// rounding agree -- so the asymmetry only shows up once L0 measures a font
-// size L4 does not use. The 29 is not a second rounding rule either: heights
-// are left alone here and the framework's ordinary layout rounding, which
-// every element's desired size goes through, produces it.
+// desired width of 90, which rounding cannot produce. The height looked like
+// the opposite: an empty TextBlock at size 22 measures 29.2617 and reports 29,
+// which ceiling cannot produce. It is not the opposite, it is a second case --
+// `L5-styles-style-beats-inherited` measures the same 29.2617 with an "M" in
+// it and reports 30. Across the whole corpus the split is exact: all seven
+// fractional heights that round down are on a TextBlock whose recorded width
+// is zero, and both that ceil are on one with text. So the height is ceiled
+// when there is text; when there is none it is left alone and the framework's
+// ordinary layout rounding, which every element's desired size goes through,
+// produces the 29. See tests/text_measure_test.cpp.
 double CeilLayout(double value, double dpi_scale) {
     const double scaled = value * dpi_scale;
     const double nearest = std::nearbyint(scaled);
@@ -333,7 +335,9 @@ Size TextBlock::LayoutText(double limit) const {
 
 Size TextBlock::MeasureOverride(Size available) {
     const Size text_size = LayoutText(available.width);
-    return {CeilLayout(text_size.width, dpi_scale_x), text_size.height};
+    if (text().empty()) return text_size;
+    return {CeilLayout(text_size.width, dpi_scale_x),
+            CeilLayout(text_size.height, dpi_scale_y)};
 }
 
 Size TextBlock::ArrangeOverride(Size final_size) {

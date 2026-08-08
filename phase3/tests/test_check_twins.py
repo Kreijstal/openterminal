@@ -24,8 +24,10 @@ class TwinTest(unittest.TestCase):
         root = Path(self.directory.name)
         self.cases = root / "cases"
         self.results = root / "results"
+        self.expected = root / "expected"
         self.cases.mkdir()
         self.results.mkdir()
+        self.expected.mkdir()
 
     def add_case(self, case_id: str, twin: str | None = None) -> None:
         payload: dict[str, object] = {"id": case_id, "level": 5, "markup": "<Border/>"}
@@ -42,6 +44,15 @@ class TwinTest(unittest.TestCase):
             payload["tree"] = tree if tree is not None else TREE
         (self.results / f"{case_id}.json").write_text(json.dumps(payload), encoding="utf-8")
 
+    def add_expected(self, case_id: str, tree: list | None = None,
+                     error: str | None = None) -> None:
+        payload: dict[str, object] = {"case_id": case_id}
+        if error:
+            payload["error"] = error
+        else:
+            payload["tree"] = tree if tree is not None else TREE
+        (self.expected / f"{case_id}.json").write_text(json.dumps(payload), encoding="utf-8")
+
     def pair(self, **kwargs: object) -> dict:
         self.add_case("a", twin="b")
         self.add_case("b")
@@ -52,8 +63,8 @@ class TwinTest(unittest.TestCase):
         self.add_result("a")
         self.add_result("b")
         result = check(self.cases, self.results, 0.01)
-        self.assertEqual(result["totals"], {"pairs": 1, "matched": 1,
-                                            "unverified": 0, "mismatched": 0})
+        self.assertEqual(result["totals"], {"pairs": 1, "matched": 1, "unverified": 0,
+                                            "refuted": 0, "mismatched": 0})
 
     def test_a_different_number_disagrees(self) -> None:
         self.pair()
@@ -108,6 +119,50 @@ class TwinTest(unittest.TestCase):
         self.add_result("solo")
         result = check(self.cases, self.results, 0.01)
         self.assertEqual(result["totals"]["pairs"], 0)
+
+    def test_a_pair_the_oracle_records_as_different_is_not_demanded(self) -> None:
+        # The corpus claims the two halves describe one layout. The runtime is
+        # entitled to deny it -- thirteen of the fifty-eight pairs it has
+        # measured differ -- and an implementation that reproduces the recorded
+        # difference must not be failed for it.
+        self.pair()
+        self.add_result("a", tree=[dict(TREE[0], desired=[0.0, 0.0])])
+        self.add_result("b")
+        self.add_expected("a", tree=[dict(TREE[0], desired=[0.0, 0.0])])
+        self.add_expected("b")
+        result = check(self.cases, self.results, 0.01, self.expected)
+        self.assertEqual(result["totals"], {"pairs": 1, "matched": 0, "unverified": 0,
+                                            "refuted": 1, "mismatched": 0})
+        self.assertIn("Refuted by the oracle", summarise(result))
+
+    def test_a_pair_the_oracle_records_as_equal_is_still_demanded(self) -> None:
+        self.pair()
+        self.add_result("a", tree=[dict(TREE[0], desired=[0.0, 0.0])])
+        self.add_result("b")
+        self.add_expected("a")
+        self.add_expected("b")
+        result = check(self.cases, self.results, 0.01, self.expected)
+        self.assertEqual(result["totals"]["mismatched"], 1)
+
+    def test_an_oracle_that_failed_one_half_refutes_nothing(self) -> None:
+        # Two errors, or one, say nothing about whether the halves describe the
+        # same layout, so the pair goes back to being an ordinary twin check.
+        self.pair()
+        self.add_result("a")
+        self.add_result("b")
+        self.add_expected("a", error="the type 'Nonsense' is not implemented")
+        self.add_expected("b")
+        result = check(self.cases, self.results, 0.01, self.expected)
+        self.assertEqual(result["totals"]["matched"], 1)
+        self.assertEqual(result["totals"]["refuted"], 0)
+
+    def test_without_a_recording_nothing_is_refuted(self) -> None:
+        self.pair()
+        self.add_result("a", tree=[dict(TREE[0], desired=[0.0, 0.0])])
+        self.add_result("b")
+        result = check(self.cases, self.results, 0.01)
+        self.assertEqual(result["totals"]["refuted"], 0)
+        self.assertEqual(result["totals"]["mismatched"], 1)
 
     def test_the_summary_says_what_it_is_not(self) -> None:
         # The number is easy to read as coverage. It is not, and the text that
