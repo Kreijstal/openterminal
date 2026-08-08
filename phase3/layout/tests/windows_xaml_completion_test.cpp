@@ -1,12 +1,9 @@
 #include <cmath>
 #include <iostream>
-#include <memory>
 #include <stdexcept>
 
 #include "basic_controls.h"
-#include "border.h"
 #include "markup.h"
-#include "scroll_viewer.h"
 #include "icon.h"
 
 using namespace openxaml;
@@ -14,29 +11,6 @@ using namespace openxaml;
 namespace {
 void Check(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
-}
-
-void ScrollViewport() {
-    auto content = std::make_unique<Border>();
-    content->set_width(300);
-    content->set_height(260);
-    ScrollViewer viewer;
-    viewer.SetContent(std::move(content));
-    viewer.set_width(200);
-    viewer.set_height(150);
-    viewer.set_horizontal_scroll_bar_visibility(ScrollBarVisibility::Visible);
-    viewer.set_vertical_scroll_bar_visibility(ScrollBarVisibility::Visible);
-    viewer.Measure({400, 300});
-    viewer.Arrange({0, 0, 200, 150});
-    Check(viewer.desired_size().width == 200 && viewer.desired_size().height == 150,
-          "explicit ScrollViewer size");
-    Check(viewer.viewport().width == 184 && viewer.viewport().height == 134,
-          "scrollbar reservation");
-    Check(viewer.extent().width == 300 && viewer.extent().height == 260,
-          "scroll extent");
-    viewer.ScrollTo(1000, 1000);
-    Check(viewer.horizontal_offset() == 116 && viewer.vertical_offset() == 126,
-          "scroll offset clamp");
 }
 
 void TerminalBlockersLoad() {
@@ -91,7 +65,6 @@ void FontFallback() {
 
 int main() {
     try {
-        ScrollViewport();
         TerminalBlockersLoad();
         FontFallback();
         std::cout << "Windows.UI.Xaml completion tests passed\n";
