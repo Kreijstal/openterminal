@@ -102,9 +102,11 @@ inline `Thumb.Template`.
 
 ### L7 completion pass
 
-`ScrollViewer` has a single-content viewport, the visibility/mode cross-product,
-interacting Auto bars, 16-DIP reservations, extent/viewport state and clamped
-offsets. `FontIcon` measures its Unicode glyph through the harvested text
+`ScrollViewer` has a single-content viewport, the visibility/mode
+cross-product, overlaid scroll bars, extent/viewport state and clamped
+offsets — see [what the 166 recorded answers
+say](#what-a-scrollviewer-does-with-its-scroll-bars) for the four rules that
+took the group from 110 to 166. `FontIcon` measures its Unicode glyph through the harvested text
 metric pipeline and understands comma-separated font fallback. Shape and
 control support now includes `Rectangle`, control padding, `Button`, `TextBox`,
 `ToolTip` with folded `Run` inlines, and `Thumb` with an inline
@@ -114,8 +116,42 @@ The next Windows oracle run remains authoritative. In particular,
 [`L3-scroll`](../xaml-db/README.md#scrollviewer-sizes-itself-two-different-ways)
 and `L4-icon` were authored because the old three-case ScrollViewer evidence
 was contradictory and the old FontIcon glyphs were corrupted by an ASCII-only
-probe path. Until those measurements are recorded, this is an implemented and
-focused-tested surface, not a numeric parity claim.
+probe path. `L3-scroll` has since been recorded and answered; `L4-icon` has
+not, so that half is still an implemented and focused-tested surface rather
+than a numeric parity claim.
+
+### What a `ScrollViewer` does with its scroll bars
+
+The recorded group settles the question the three Terminal subtrees could not:
+the bars are *overlaid* on the content, not reserved out of it. Four rules,
+each with the case that pins it:
+
+- **The content is measured unbounded in every axis whose
+  `ScrollBarVisibility` is not `Disabled`, and against the padded client size
+  in the axes where it is.** `ScrollMode` does not enter into it:
+  `L3-scroll-mode-*` pairs cases differing only in
+  `HorizontalScrollMode`/`VerticalScrollMode` and records the same 300×260
+  content for both.
+- **The content is arranged against the whole padded client too — no bar is
+  subtracted.** `L3-scroll-shape-padded-stretch` stretches its child to
+  394×294 inside a 400×300 viewer that has `Padding="3"` and a vertical bar.
+- **The viewer's desired size per axis is the larger of what the padded
+  content asked for and what the bars need side by side: the crossing bar's
+  16 thickness plus this bar's 32 minimum length.** A visible bar holds open
+  the auto track it sits in while the content spans both tracks, which is why
+  a forced bar usually costs nothing and occasionally costs a little:
+  60×40 content under a forced pair is recorded as 60×48, and a 0×16 child
+  under a bare viewer as 16×32.
+- **`VerticalScrollBarVisibility` defaults to `Visible`.** That same 16×32 is
+  the proof: an `Auto` bar would be hidden around a child that fits, and the
+  viewer would have asked for 0×16.
+
+One number in there is not pinned by the corpus: the *horizontal* bar's 32
+minimum width. No recorded case forces a horizontal bar next to content
+narrower than 44, so every case passes with any value up to that. It is
+written as the mirror of the vertical bar's minimum length, which the corpus
+does pin, and it is the only constant in this file that a future case could
+move without any existing case noticing.
 
 L4 is implemented and is the one level whose result depends on a font. Two of
 the numbers inside that font can be solved from the recorded measurements
@@ -574,7 +610,6 @@ neither passing nor failing:
 
 | group | cases | the question |
 |---|---:|---|
-| `L3-scroll` | 166 | when does a `ScrollViewer` reserve sixteen pixels for a scroll bar, and when does it stretch its content to the viewport? |
 | `L2-content` | 72 | what does `ContentPresenter`'s content alignment default to? |
 | `L4-icon` | 69 | does a `FontIcon` measure its glyph or report a `FontSize` square? |
 | `L3-canvas` | 63 | does a `Canvas` report its slot or nothing? |
@@ -588,12 +623,13 @@ neither passing nor failing:
 | `L4-source` | 6 | is `Text="x"` the same thing as `<TextBlock>x</TextBlock>`? |
 | `L5-xdirectives` | 6 | does a runtime load honour `x:Load` at all, and does it tolerate an `x:Uid` with no resource map? |
 
-`L3-scroll` and `L4-icon` are a different kind of open from the rest.
-`L3-canvas`, `L1-shape`, `L2-content`, `L0-props`, `L4-source` and all five L5
-groups check answers this code already gives; those two measure types
-it refuses to give one for at all, so they cannot fail on a number — only on
-the refusal — and they exist so that the next version of this file can move
-them out of this table entirely.
+`L4-icon` is a different kind of open from the rest. `L3-canvas`, `L1-shape`,
+`L2-content`, `L0-props`, `L4-source` and all five L5 groups check answers this
+code already gives; that one measures a type it refuses to give one for at all,
+so it cannot fail on a number — only on the refusal — and it exists so that the
+next version of this file can move it out of this table entirely. `L3-scroll`
+left the table that way: its 166 cases are recorded and all 166 pass, and what
+they settled is written up [above](#what-a-scrollviewer-does-with-its-scroll-bars).
 
 The six `L5-styles` cases that carry `oracle_decides` are the ones neither
 reference settles for a `XamlReader.Load` with no `Application`:
