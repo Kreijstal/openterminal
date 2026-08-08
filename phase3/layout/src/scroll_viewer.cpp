@@ -6,15 +6,26 @@
 namespace openxaml {
 namespace {
 
+// A scrollbar is 16 across its track and never shorter than 32 along it, the
+// length of the two line buttons it is built from. Both numbers are recorded:
+// L3-scroll-shape-zero-width-child asks for 16x32 around a 0x16 child, which
+// is the vertical bar alone, and L3-scroll-free-visible-visible asks for 60x48
+// around 60x40, which is that 32 minimum plus the horizontal bar's thickness.
+// The horizontal bar's 32 minimum width is the mirror of the vertical bar's
+// and is the one number here the corpus does not pin: no recorded case forces
+// a horizontal bar next to content narrower than 44.
 constexpr double kScrollBarExtent = 16.0;
+constexpr double kScrollBarMinLength = 32.0;
 const DependencyProperty* const kPadding =
     RegisterProperty("ScrollViewer", "Padding", {Thickness{}, false, true});
 const DependencyProperty* const kHorizontalVisibility = RegisterProperty(
     "ScrollViewer", "HorizontalScrollBarVisibility",
     {static_cast<int>(ScrollBarVisibility::Disabled), false, true});
+// Visible, not Auto: a bare viewer around a 0x16 child is recorded asking for
+// 16x32, which only a bar that is already there can explain.
 const DependencyProperty* const kVerticalVisibility = RegisterProperty(
     "ScrollViewer", "VerticalScrollBarVisibility",
-    {static_cast<int>(ScrollBarVisibility::Auto), false, true});
+    {static_cast<int>(ScrollBarVisibility::Visible), false, true});
 const DependencyProperty* const kHorizontalMode = RegisterProperty(
     "ScrollViewer", "HorizontalScrollMode", {static_cast<int>(ScrollMode::Auto), false, true});
 const DependencyProperty* const kVerticalMode = RegisterProperty(
@@ -37,6 +48,15 @@ bool Automatic(ScrollBarVisibility visibility) {
     return visibility == ScrollBarVisibility::Auto;
 }
 
+// What unbounds an axis at measure is the scrollbar visibility alone.
+// ScrollMode moves no recorded number: L3-scroll-mode-* pairs cases that
+// differ only in HorizontalScrollMode/VerticalScrollMode and records the same
+// content size for both, so the mode governs whether an offset may move, not
+// what the content was offered.
+bool Unbounded(ScrollBarVisibility visibility) {
+    return visibility != ScrollBarVisibility::Disabled;
+}
+
 }  // namespace
 
 const std::vector<std::string>& ScrollViewer::Owners() { return kOwners; }
@@ -53,46 +73,42 @@ void ScrollViewer::SetContent(std::unique_ptr<Element> content) {
     content_ = std::move(content);
 }
 
-bool ScrollViewer::AxisCanScroll(ScrollBarVisibility visibility, ScrollMode mode) const {
-    return visibility != ScrollBarVisibility::Disabled && mode != ScrollMode::Disabled;
-}
-
 Size ScrollViewer::MeasureOverride(Size available) {
     const Thickness inset = padding();
     const Size client{std::max(0.0, available.width - inset.horizontal()),
                       std::max(0.0, available.height - inset.vertical())};
-    horizontal_bar_visible_ = Forced(horizontal_scroll_bar_visibility());
-    vertical_bar_visible_ = Forced(vertical_scroll_bar_visibility());
     const std::vector<Element*> children = Children();
     Element* content = children.empty() ? nullptr : children.front();
-    if (!content) return {inset.horizontal() + (vertical_bar_visible_ ? kScrollBarExtent : 0.0),
-                          inset.vertical() + (horizontal_bar_visible_ ? kScrollBarExtent : 0.0)};
-
-    const bool can_h = AxisCanScroll(horizontal_scroll_bar_visibility(), horizontal_scroll_mode());
-    const bool can_v = AxisCanScroll(vertical_scroll_bar_visibility(), vertical_scroll_mode());
-    content->Measure({can_h ? kInfinity : client.width,
-                      can_v ? kInfinity : client.height});
-    extent_ = content->desired_size();
-
-    // Auto bars interact: reserving one can make the other axis overflow.
-    // Two passes reach the stable pair without baking ordering into the result.
-    for (int pass = 0; pass < 2; ++pass) {
-        const double viewport_width = std::max(0.0, client.width -
-            (vertical_bar_visible_ ? kScrollBarExtent : 0.0));
-        const double viewport_height = std::max(0.0, client.height -
-            (horizontal_bar_visible_ ? kScrollBarExtent : 0.0));
-        if (Automatic(horizontal_scroll_bar_visibility()) && can_h &&
-            std::isfinite(viewport_width) && GreaterThan(extent_.width, viewport_width))
-            horizontal_bar_visible_ = true;
-        if (Automatic(vertical_scroll_bar_visibility()) && can_v &&
-            std::isfinite(viewport_height) && GreaterThan(extent_.height, viewport_height))
-            vertical_bar_visible_ = true;
+    extent_ = Size{};
+    if (content) {
+        const Size offered{Unbounded(horizontal_scroll_bar_visibility()) ? kInfinity : client.width,
+                           Unbounded(vertical_scroll_bar_visibility()) ? kInfinity : client.height};
+        content->Measure(offered);
+        extent_ = content->desired_size();
     }
 
-    const double bars_width = vertical_bar_visible_ ? kScrollBarExtent : 0.0;
-    const double bars_height = horizontal_bar_visible_ ? kScrollBarExtent : 0.0;
-    Size desired{extent_.width + inset.horizontal() + bars_width,
-                 extent_.height + inset.vertical() + bars_height};
+    // The bars are overlaid on the content rather than subtracted from it --
+    // the whole padded client stays the viewport either way -- so an automatic
+    // bar decides against the client size and the two axes do not interact.
+    horizontal_bar_visible_ =
+        Forced(horizontal_scroll_bar_visibility()) ||
+        (Automatic(horizontal_scroll_bar_visibility()) && std::isfinite(client.width) &&
+         GreaterThan(extent_.width, client.width));
+    vertical_bar_visible_ =
+        Forced(vertical_scroll_bar_visibility()) ||
+        (Automatic(vertical_scroll_bar_visibility()) && std::isfinite(client.height) &&
+         GreaterThan(extent_.height, client.height));
+
+    // A visible bar holds open the auto row or column it sits in, and the
+    // content spans across both tracks, so each axis is the larger of what the
+    // padded content asked for and what the two bars need side by side: the
+    // crossing bar's thickness plus this bar's own minimum length.
+    const double vertical_track = vertical_bar_visible_ ? kScrollBarExtent : 0.0;
+    const double horizontal_track = horizontal_bar_visible_ ? kScrollBarExtent : 0.0;
+    Size desired{std::max(extent_.width + inset.horizontal(),
+                          vertical_track + (horizontal_bar_visible_ ? kScrollBarMinLength : 0.0)),
+                 std::max(extent_.height + inset.vertical(),
+                          horizontal_track + (vertical_bar_visible_ ? kScrollBarMinLength : 0.0))};
     if (std::isfinite(available.width)) desired.width = std::min(desired.width, available.width);
     if (std::isfinite(available.height)) desired.height = std::min(desired.height, available.height);
     return desired;
@@ -100,22 +116,18 @@ Size ScrollViewer::MeasureOverride(Size available) {
 
 Size ScrollViewer::ArrangeOverride(Size final_size) {
     const Thickness inset = padding();
-    viewport_ = {
-        std::max(0.0, final_size.width - inset.horizontal() -
-                          (vertical_bar_visible_ ? kScrollBarExtent : 0.0)),
-        std::max(0.0, final_size.height - inset.vertical() -
-                          (horizontal_bar_visible_ ? kScrollBarExtent : 0.0))};
+    viewport_ = {std::max(0.0, final_size.width - inset.horizontal()),
+                 std::max(0.0, final_size.height - inset.vertical())};
     ScrollTo(horizontal_offset_, vertical_offset_);
     const std::vector<Element*> children = Children();
     Element* content = children.empty() ? nullptr : children.front();
     if (content) {
-        const double width = AxisCanScroll(horizontal_scroll_bar_visibility(), horizontal_scroll_mode())
-                                 ? std::max(extent_.width, viewport_.width)
-                                 : viewport_.width;
-        const double height = AxisCanScroll(vertical_scroll_bar_visibility(), vertical_scroll_mode())
-                                  ? std::max(extent_.height, viewport_.height)
-                                  : viewport_.height;
-        content->Arrange({inset.left - horizontal_offset_, inset.top - vertical_offset_, width, height});
+        // The padding is the presenter's margin, so it moves the presenter and
+        // not the content within it: every recorded content slot under a padded
+        // viewer sits at the origin.
+        content->Arrange({-horizontal_offset_, -vertical_offset_,
+                          std::max(extent_.width, viewport_.width),
+                          std::max(extent_.height, viewport_.height)});
     }
     return final_size;
 }

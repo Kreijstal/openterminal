@@ -75,7 +75,6 @@ protected:
     Size ArrangeOverride(Size final_size) override;
 
 private:
-    bool AxisCanScroll(ScrollBarVisibility visibility, ScrollMode mode) const;
     std::unique_ptr<Element> content_;
     Size extent_;
     Size viewport_;

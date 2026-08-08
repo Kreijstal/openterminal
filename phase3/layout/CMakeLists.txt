@@ -127,6 +127,17 @@ add_executable(wave4_tests tests/wave4_test.cpp src/markup.cpp)
 target_link_libraries(wave4_tests PRIVATE openxaml_layout)
 add_test(NAME wave4 COMMAND wave4_tests)
 
+# Which of the two scrollbars a viewer's desired size grew for, and where the
+# padding went. A recorded tree reports the viewer's answer and its content's,
+# with nothing in between: the presenter the padding moves and the bars that
+# hold their track open are template parts the oracle never names.
+add_executable(scroll_viewer_tests
+    tests/scroll_viewer_test.cpp
+    src/markup.cpp
+)
+target_link_libraries(scroll_viewer_tests PRIVATE openxaml_layout)
+add_test(NAME scroll_viewer COMMAND scroll_viewer_tests)
+
 add_executable(windows_xaml_completion_tests
     tests/windows_xaml_completion_test.cpp
     src/markup.cpp
@@ -145,6 +156,7 @@ if(MSVC)
     target_compile_options(xdirective_tests PRIVATE /W4)
     target_compile_options(wave3_tests PRIVATE /W4)
     target_compile_options(wave4_tests PRIVATE /W4)
+    target_compile_options(scroll_viewer_tests PRIVATE /W4)
     target_compile_options(windows_xaml_completion_tests PRIVATE /W4)
 else()
     target_compile_options(openxaml_layout PRIVATE -Wall -Wextra)
@@ -157,5 +169,6 @@ else()
     target_compile_options(xdirective_tests PRIVATE -Wall -Wextra)
     target_compile_options(wave3_tests PRIVATE -Wall -Wextra)
     target_compile_options(wave4_tests PRIVATE -Wall -Wextra)
+    target_compile_options(scroll_viewer_tests PRIVATE -Wall -Wextra)
     target_compile_options(windows_xaml_completion_tests PRIVATE -Wall -Wextra)
 endif()
