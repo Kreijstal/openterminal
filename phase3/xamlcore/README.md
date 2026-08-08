@@ -54,6 +54,53 @@ implemented layout, content, journal, selection and popup state still return
 a string: there is no way to say "Segoe UI" through this ABI without a class to
 say it with. It holds a name and nothing else.
 
+## The boot surface
+
+Two more classes are here for a different reason: they are what the real
+`WindowsTerminal.exe` asks for, in that order, before it draws anything. They
+are gated by [the boot frontier](../../phase4/), not by the corpus.
+
+| class | interfaces | why it is here |
+|---|---|---|
+| `Windows.UI.Xaml.DurationHelper` | `IDurationHelperStatics` | a file-scope `Duration` in `Pane.cpp` — the first activation the host performs, during CRT static initialization |
+| `Windows.UI.Xaml.Application` | `IApplication`, `IApplication2`, `IApplication3`, `IApplicationFactory` + `IApplicationStatics` on the factory | `runtimeclass App : Windows.UI.Xaml.Application` |
+
+`DurationHelper` is complete. A `Duration` is Automatic, a TimeSpan or
+Forever, and every operation is a case analysis over those three; the
+semantics come from `dxaml/xcp/dxaml/lib/Duration_Partial.cpp` in the
+published core rather than from a guess.
+
+`Application` is the first *composable* class in the DLL, and the mechanism
+matters more than the object. Terminal never activates an Application: a WinRT
+class derives from another by composing it, so C++/WinRT's `Application` base
+calls `IApplicationFactory::CreateInstance`, hands in itself as the
+controlling outer, and takes back a non-delegating inner. The two are one COM
+identity afterwards. Getting that wrong does not produce a wrong number — it
+produces a reference count split in two, or a `QueryInterface` that recurses
+between outer and inner until the stack ends.
+
+The rules the implementation keeps, and why each one is not optional:
+
+- every interface the inner hands out forwards all six `IInspectable` methods
+  to the outer, so `app.as<IApplication3>()` and the derived object are the
+  same identity;
+- the outer is never `AddRef`'d — an inner holding a reference on its
+  aggregator is a cycle neither can break;
+- the inner resolves the composed interfaces itself instead of asking the
+  outer, because forwarding a `QueryInterface` back to the aggregator that
+  just forwarded it here is how an aggregation loops.
+
+`Application.Current` is real: one process-wide pointer set at construction,
+null with `S_OK` when no application was made, and a second application
+refused — all three as `FrameworkApplication_Partial.cpp` has them.
+`HighContrastAdjustment` round-trips from its `Auto` default. Everything else
+on `Application` is `E_NOTIMPL` and stays that way until there is something
+behind it: `Resources` has no application resource dictionary,
+`DebugSettings` and `Exit` have no process lifetime manager, and the
+suspend/resume events have nothing to raise them. `get_RequestedTheme` refuses
+until something has put a theme, because before that the honest answer is the
+*system's* theme, which this runtime cannot see.
+
 ## Where it stands
 
 Against build `10.0.26100.33158`, measured under Wine through the ABI:
@@ -170,6 +217,17 @@ The build also compiles and runs `wave34_smoke.exe` after registration. It
 activates all six new classes through Wine, independently queries their WinRT
 interfaces, places a Border in a ContentControl, checks Frame's initial
 journal, round-trips ListView selection mode, and opens a Popup.
+
+It also covers the boot surface, which the corpus cannot reach: the
+`DurationHelper` cases including the 200ms span `Pane.cpp` builds and the
+negative span it rejects, and — through a stand-in derived class that hands
+itself in as the controlling outer — that the composed `Application` is a
+single identity in both directions, that `CreateInstance` takes exactly one
+reference on the aggregate and gives it back, that `Application.Current` is
+null before, the application during, and null again after it dies, and that a
+second application is refused. None of that is observable from an activation
+call, which is why the smoke grew an outer object rather than another
+`Activate<>` line.
 
 ## Deliberate omissions
 
