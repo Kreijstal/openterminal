@@ -13,6 +13,10 @@ namespace wuxc = ABI::Windows::UI::Xaml::Controls;
 namespace wuxcp = ABI::Windows::UI::Xaml::Controls::Primitives;
 namespace wuxs = ABI::Windows::UI::Xaml::Shapes;
 namespace wux = ABI::Windows::UI::Xaml;
+namespace wuxmk = ABI::Windows::UI::Xaml::Markup;
+
+inline constexpr GUID weak_reference_source_iid = {
+    0x00000038, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 
 template <class Interface>
 Interface* Activate(const wchar_t* name, const GUID& iid) {
@@ -29,6 +33,18 @@ Interface* Activate(const wchar_t* name, const GUID& iid) {
     return SUCCEEDED(queried) ? result : nullptr;
 }
 
+template <class Interface>
+Interface* Statics(const wchar_t* name, const GUID& iid) {
+    HSTRING class_name = nullptr;
+    if (FAILED(WindowsCreateString(name, static_cast<UINT32>(::wcslen(name)), &class_name)))
+        return nullptr;
+    Interface* result = nullptr;
+    const HRESULT queried = RoGetActivationFactory(
+        class_name, iid, reinterpret_cast<void**>(&result));
+    WindowsDeleteString(class_name);
+    return SUCCEEDED(queried) ? result : nullptr;
+}
+
 int main() {
     if (FAILED(RoInitialize(RO_INIT_SINGLETHREADED))) return 1;
     int failures = 0;
@@ -38,6 +54,118 @@ int main() {
             ++failures;
         }
     };
+
+    auto* duration_helper = Statics<wux::IDurationHelperStatics>(
+        L"Windows.UI.Xaml.DurationHelper",
+        openxaml::iid::Windows_UI_Xaml_IDurationHelperStatics);
+    check(duration_helper != nullptr, "DurationHelper statics");
+    if (duration_helper) {
+        ABI::Windows::UI::Xaml::Duration duration{};
+        check(SUCCEEDED(duration_helper->FromTimeSpan({2000000}, &duration)) &&
+                  duration.Type == wux::DurationType_TimeSpan &&
+                  duration.TimeSpan.Duration == 2000000,
+              "DurationHelper FromTimeSpan");
+        duration_helper->Release();
+    }
+
+    auto* grid_length_helper = Statics<wux::IGridLengthHelperStatics>(
+        L"Windows.UI.Xaml.GridLengthHelper",
+        openxaml::iid::Windows_UI_Xaml_IGridLengthHelperStatics);
+    check(grid_length_helper != nullptr, "GridLengthHelper statics");
+    if (grid_length_helper) {
+        wux::GridLength automatic{};
+        check(SUCCEEDED(grid_length_helper->get_Auto(&automatic)) &&
+                  automatic.GridUnitType == wux::GridUnitType_Auto,
+              "GridLengthHelper Auto");
+        grid_length_helper->Release();
+    }
+
+    auto* grid_factory = Statics<wuxc::IGridFactory>(
+        L"Windows.UI.Xaml.Controls.Grid",
+        openxaml::iid::Windows_UI_Xaml_Controls_IGridFactory);
+    check(grid_factory != nullptr, "Grid composable factory");
+    if (grid_factory) {
+        IInspectable* inner = nullptr;
+        wuxc::IGrid* grid = nullptr;
+        check(SUCCEEDED(grid_factory->CreateInstance(nullptr, &inner, &grid)) &&
+                  inner != nullptr && grid != nullptr,
+              "Grid factory construction");
+        if (grid) grid->Release();
+        if (inner) inner->Release();
+        grid_factory->Release();
+    }
+
+    auto* panel_statics = Statics<wuxc::IPanelStatics>(
+        L"Windows.UI.Xaml.Controls.Panel",
+        openxaml::iid::Windows_UI_Xaml_Controls_IPanelStatics);
+    check(panel_statics != nullptr, "Panel statics");
+    if (panel_statics) {
+        wux::IDependencyProperty* background = reinterpret_cast<wux::IDependencyProperty*>(1);
+        check(SUCCEEDED(panel_statics->get_BackgroundProperty(&background)),
+              "Panel BackgroundProperty");
+        if (background && background != reinterpret_cast<wux::IDependencyProperty*>(1))
+            background->Release();
+        panel_statics->Release();
+    }
+
+    auto* application_factory = Statics<wux::IApplicationFactory>(
+        L"Windows.UI.Xaml.Application",
+        openxaml::iid::Windows_UI_Xaml_IApplicationFactory);
+    check(application_factory != nullptr, "Application factory");
+    if (application_factory) {
+        IInspectable* inner = nullptr;
+        wux::IApplication* application = nullptr;
+        check(SUCCEEDED(application_factory->CreateInstance(nullptr, &inner, &application)) &&
+                  inner != nullptr && application != nullptr,
+              "Application construction");
+        if (application) {
+            wux::IApplication3* application3 = nullptr;
+            check(SUCCEEDED(application->QueryInterface(
+                      openxaml::iid::Windows_UI_Xaml_IApplication3,
+                      reinterpret_cast<void**>(&application3))),
+                  "Application3 projection");
+            if (application3) {
+                check(SUCCEEDED(application3->put_HighContrastAdjustment(
+                          wux::ApplicationHighContrastAdjustment_None)),
+                      "Application high-contrast setter");
+                wux::ApplicationHighContrastAdjustment adjustment =
+                    wux::ApplicationHighContrastAdjustment_Auto;
+                check(SUCCEEDED(application3->get_HighContrastAdjustment(&adjustment)) &&
+                          adjustment == wux::ApplicationHighContrastAdjustment_None,
+                      "Application high-contrast round-trip");
+                application3->Release();
+            }
+        }
+
+        auto* application_statics = Statics<wux::IApplicationStatics>(
+            L"Windows.UI.Xaml.Application",
+            openxaml::iid::Windows_UI_Xaml_IApplicationStatics);
+        check(application_statics != nullptr, "Application statics");
+        if (application_statics) {
+            wux::IApplication* current = nullptr;
+            check(SUCCEEDED(application_statics->get_Current(&current)) && current != nullptr,
+                  "Application.Current");
+            if (current) current->Release();
+            application_statics->Release();
+        }
+        if (application) application->Release();
+        if (inner) inner->Release();
+        application_factory->Release();
+    }
+
+    auto* winui_metadata = Activate<wuxmk::IXamlMetadataProvider>(
+        L"Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider",
+        openxaml::iid::Windows_UI_Xaml_Markup_IXamlMetadataProvider);
+    check(winui_metadata != nullptr, "WinUI metadata-provider activation");
+    if (winui_metadata) {
+        UINT32 definitions_length = 1;
+        wuxmk::XmlnsDefinition* definitions = reinterpret_cast<wuxmk::XmlnsDefinition*>(1);
+        check(SUCCEEDED(winui_metadata->GetXmlnsDefinitions(
+                  &definitions_length, &definitions)) &&
+                  definitions_length == 0 && definitions == nullptr,
+              "WinUI metadata-provider empty namespace catalog");
+        winui_metadata->Release();
+    }
 
     auto* content = Activate<wuxc::IContentControl>(
         L"Windows.UI.Xaml.Controls.ContentControl",
@@ -61,10 +189,57 @@ int main() {
         content->Release();
     }
 
+    auto* weak_border = Activate<wux::IUIElement>(
+        L"Windows.UI.Xaml.Controls.Border", openxaml::iid::Windows_UI_Xaml_IUIElement);
+    check(weak_border != nullptr, "Border activation for weak reference");
+    if (weak_border) {
+        IWeakReferenceSource* source = nullptr;
+        check(SUCCEEDED(weak_border->QueryInterface(
+                  weak_reference_source_iid, reinterpret_cast<void**>(&source))) &&
+                  source != nullptr,
+              "UIElement weak-reference source");
+        IWeakReference* weak = nullptr;
+        if (source) {
+            check(SUCCEEDED(source->GetWeakReference(&weak)) && weak != nullptr,
+                  "UIElement GetWeakReference");
+            source->Release();
+        }
+        if (weak) {
+            IInspectable* resolved = nullptr;
+            check(SUCCEEDED(weak->Resolve(
+                      openxaml::iid::Windows_UI_Xaml_IFrameworkElement, &resolved)) &&
+                      resolved != nullptr,
+                  "live weak-reference resolution");
+            if (resolved) resolved->Release();
+            weak_border->Release();
+            weak_border = nullptr;
+            resolved = reinterpret_cast<IInspectable*>(1);
+            check(SUCCEEDED(weak->Resolve(
+                      openxaml::iid::Windows_UI_Xaml_IFrameworkElement, &resolved)) &&
+                      resolved == nullptr,
+                  "expired weak-reference resolution");
+            weak->Release();
+        }
+        if (weak_border) weak_border->Release();
+    }
+
     auto* page = Activate<wuxc::IPage>(L"Windows.UI.Xaml.Controls.Page",
                                        openxaml::iid::Windows_UI_Xaml_Controls_IPage);
     check(page != nullptr, "Page activation");
-    if (page) page->Release();
+    if (page) {
+        wux::IUIElement10* element10 = nullptr;
+        check(SUCCEEDED(page->QueryInterface(
+                  openxaml::iid::Windows_UI_Xaml_IUIElement10,
+                  reinterpret_cast<void**>(&element10))),
+              "Page IUIElement10 projection");
+        if (element10) {
+            wux::IXamlRoot* root = reinterpret_cast<wux::IXamlRoot*>(1);
+            check(SUCCEEDED(element10->get_XamlRoot(&root)) && root == nullptr,
+                  "detached Page XamlRoot");
+            element10->Release();
+        }
+        page->Release();
+    }
 
     auto* frame = Activate<wuxc::IFrame>(L"Windows.UI.Xaml.Controls.Frame",
                                          openxaml::iid::Windows_UI_Xaml_Controls_IFrame);
@@ -105,6 +280,63 @@ int main() {
         boolean open = 0;
         check(SUCCEEDED(popup->get_IsOpen(&open)) && open, "Popup open round-trip");
         popup->Release();
+    }
+
+    auto* sub_item = Activate<wuxc::IMenuFlyoutSubItem>(
+        L"Windows.UI.Xaml.Controls.MenuFlyoutSubItem",
+        openxaml::iid::Windows_UI_Xaml_Controls_IMenuFlyoutSubItem);
+    check(sub_item != nullptr, "MenuFlyoutSubItem activation");
+    if (sub_item) {
+        HSTRING text = nullptr;
+        WindowsCreateString(L"Profiles", 8, &text);
+        check(SUCCEEDED(sub_item->put_Text(text)),
+              "MenuFlyoutSubItem text setter");
+        WindowsDeleteString(text);
+        text = nullptr;
+        check(SUCCEEDED(sub_item->get_Text(&text)) &&
+                  WindowsGetStringLen(text) == 8,
+              "MenuFlyoutSubItem text round-trip");
+        WindowsDeleteString(text);
+        __FIVector_1_Windows__CUI__CXaml__CControls__CMenuFlyoutItemBase* children =
+            nullptr;
+        check(SUCCEEDED(sub_item->get_Items(&children)) && children != nullptr,
+              "MenuFlyoutSubItem Items");
+        if (children) {
+            UINT32 size = 1;
+            check(SUCCEEDED(children->get_Size(&size)) && size == 0,
+                  "MenuFlyoutSubItem initial Items size");
+            children->Release();
+        }
+        sub_item->Release();
+    }
+
+    auto* dialog = Activate<wuxc::IContentDialog>(
+        L"Windows.UI.Xaml.Controls.ContentDialog",
+        openxaml::iid::Windows_UI_Xaml_Controls_IContentDialog);
+    check(dialog != nullptr, "ContentDialog activation");
+    if (dialog) {
+        HSTRING primary = nullptr;
+        WindowsCreateString(L"OK", 2, &primary);
+        check(SUCCEEDED(dialog->put_PrimaryButtonText(primary)),
+              "ContentDialog primary text setter");
+        WindowsDeleteString(primary);
+        primary = nullptr;
+        check(SUCCEEDED(dialog->get_PrimaryButtonText(&primary)) &&
+                  WindowsGetStringLen(primary) == 2,
+              "ContentDialog primary text round-trip");
+        WindowsDeleteString(primary);
+        __FIAsyncOperation_1_Windows__CUI__CXaml__CControls__CContentDialogResult*
+            operation = nullptr;
+        check(SUCCEEDED(dialog->ShowAsync(&operation)) && operation != nullptr,
+              "ContentDialog completed ShowAsync");
+        if (operation) {
+            wuxc::ContentDialogResult result = wuxc::ContentDialogResult_Primary;
+            check(SUCCEEDED(operation->GetResults(&result)) &&
+                      result == wuxc::ContentDialogResult_None,
+                  "ContentDialog completed result");
+            operation->Release();
+        }
+        dialog->Release();
     }
 
     auto* viewer = Activate<wuxc::IScrollViewer>(
@@ -157,7 +389,9 @@ int main() {
             viewer_element->Arrange({0, 0, 200, 150});
             DOUBLE viewport_width = 0;
             DOUBLE extent_width = 0;
-            check(SUCCEEDED(viewer->get_ViewportWidth(&viewport_width)) && viewport_width == 184,
+            // Scrollbars overlay the content in the recorded Windows layout;
+            // they do not subtract their 16-pixel tracks from the viewport.
+            check(SUCCEEDED(viewer->get_ViewportWidth(&viewport_width)) && viewport_width == 200,
                   "ScrollViewer ABI viewport");
             check(SUCCEEDED(viewer->get_ExtentWidth(&extent_width)) && extent_width == 300,
                   "ScrollViewer ABI extent");
@@ -176,6 +410,11 @@ int main() {
         WindowsDeleteString(glyph);
         icon->Release();
     }
+    auto* mux_bitmap = Activate<IInspectable>(
+        L"Microsoft.UI.Xaml.Controls.BitmapIconSource",
+        openxaml::iid::IInspectable);
+    check(mux_bitmap != nullptr, "WinUI BitmapIconSource activation");
+    if (mux_bitmap) mux_bitmap->Release();
 
     auto* rectangle = Activate<wuxs::IRectangle>(L"Windows.UI.Xaml.Shapes.Rectangle",
         openxaml::iid::Windows_UI_Xaml_Shapes_IRectangle);
@@ -192,6 +431,19 @@ int main() {
                                                openxaml::iid::Windows_UI_Xaml_Controls_ITextBox);
     check(text_box != nullptr, "TextBox activation");
     if (text_box) text_box->Release();
+    auto* text_block = Activate<wuxc::ITextBlock>(
+        L"Windows.UI.Xaml.Controls.TextBlock",
+        openxaml::iid::Windows_UI_Xaml_Controls_ITextBlock);
+    check(text_block != nullptr, "TextBlock activation");
+    if (text_block) {
+        check(SUCCEEDED(text_block->put_TextAlignment(wux::TextAlignment_Center)),
+              "TextBlock alignment setter");
+        wux::TextAlignment alignment = wux::TextAlignment_Left;
+        check(SUCCEEDED(text_block->get_TextAlignment(&alignment)) &&
+                  alignment == wux::TextAlignment_Center,
+              "TextBlock alignment round-trip");
+        text_block->Release();
+    }
     auto* button = Activate<wuxc::IButton>(L"Windows.UI.Xaml.Controls.Button",
                                            openxaml::iid::Windows_UI_Xaml_Controls_IButton);
     check(button != nullptr, "Button activation");

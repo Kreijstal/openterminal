@@ -18,13 +18,24 @@
 #undef GetCurrentTime
 
 #include <activation.h>
+#include <asyncinfo.h>
 #include <inspectable.h>
+#include <weakreference.h>
 #include <winstring.h>
 
 #include <windows.ui.xaml.h>
 #include <windows.ui.xaml.media.h>
+#include <windows.ui.xaml.media.animation.h>
 #include <windows.ui.xaml.shapes.h>
 #include <windows.ui.xaml.controls.h>
 #include <windows.ui.xaml.controls.primitives.h>
+#include <windows.ui.xaml.automation.h>
+#include <windows.ui.text.h>
+#include <windows.ui.viewmanagement.h>
+#include <windows.ui.xaml.markup.h>
+#include <windows.ui.xaml.hosting.h>
+#include <windows.system.h>
+#include <windows.applicationmodel.resources.core.h>
+#include <windows.ui.xaml.hosting.desktopwindowxamlsource.h>
 
 #endif  // OPENXAML_SDK_H

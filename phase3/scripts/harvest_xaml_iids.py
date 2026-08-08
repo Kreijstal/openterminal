@@ -171,7 +171,22 @@ def main() -> None:
     args = parser.parse_args()
 
     idl_files = sorted(args.idl_dir.glob("windows.ui.xaml*.idl"))
+    colors_idl = args.idl_dir / "windows.ui.idl"
+    if colors_idl.is_file():
+        idl_files.append(colors_idl)
+    text_idl = args.idl_dir / "windows.ui.text.idl"
+    if text_idl.is_file():
+        idl_files.append(text_idl)
     idl_files += sorted(args.idl_dir.glob("windows.foundation*.idl"))
+    # The desktop-XAML bootstrap also probes DispatcherQueue before it creates
+    # WindowsXamlManager. Keep that adjacent platform contract pinned to the
+    # same SDK rather than transcribing its IID.
+    system_idl = args.idl_dir / "windows.system.idl"
+    if system_idl.is_file():
+        idl_files.append(system_idl)
+    resources_idl = args.idl_dir / "windows.applicationmodel.resources.core.idl"
+    if resources_idl.is_file():
+        idl_files.append(resources_idl)
     # The two interfaces every WinRT object implements. Their IIDs are fixed
     # and famous, which is exactly why they should be derived rather than
     # typed in from memory.

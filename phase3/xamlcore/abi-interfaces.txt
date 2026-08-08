@@ -9,16 +9,30 @@
 
 # The base chain every element carries.
 ABI::Windows::UI::Xaml::IDependencyObject
+ABI::Windows::UI::Xaml::IDependencyObject2
+ABI::Windows::UI::Xaml::IDependencyProperty
 ABI::Windows::UI::Xaml::IUIElement
+ABI::Windows::UI::Xaml::IUIElement4
+ABI::Windows::UI::Xaml::IUIElement5
 ABI::Windows::UI::Xaml::IFrameworkElement
+ABI::Windows::UI::Xaml::IFrameworkElement2
+ABI::Windows::UI::Xaml::Media::IBrush
+ABI::Windows::UI::Xaml::Media::IImageBrush
+ABI::Windows::UI::Xaml::Media::ISolidColorBrush
+ABI::Windows::UI::Xaml::Media::ISolidColorBrushFactory
 
 # Panels and the decorator.
 ABI::Windows::UI::Xaml::Controls::IPanel
+ABI::Windows::UI::Xaml::Controls::IPanelStatics
 ABI::Windows::UI::Xaml::Controls::IBorder
 ABI::Windows::UI::Xaml::Controls::IGrid
 ABI::Windows::UI::Xaml::Controls::IStackPanel
 ABI::Windows::UI::Xaml::Controls::ICanvas
 ABI::Windows::UI::Xaml::Controls::IContentPresenter
+ABI::Windows::UI::Xaml::Controls::IContentPresenter4
+ABI::Windows::UI::Xaml::Controls::ISwapChainPanel
+ABI::Windows::UI::Xaml::Controls::ISwapChainPanelFactory
+ABI::Windows::UI::Xaml::Controls::ISwapChainPanelStatics
 ABI::Windows::UI::Xaml::Controls::IImage
 ABI::Windows::UI::Xaml::Controls::IPathIcon
 ABI::Windows::UI::Xaml::Shapes::IPath
@@ -27,16 +41,40 @@ ABI::Windows::UI::Xaml::Shapes::IPath
 ABI::Windows::UI::Xaml::Controls::IControl
 ABI::Windows::UI::Xaml::Controls::IContentControl
 ABI::Windows::UI::Xaml::Controls::IPage
+ABI::Windows::UI::Xaml::Controls::IUserControl
 ABI::Windows::UI::Xaml::Controls::IFrame
 ABI::Windows::UI::Xaml::Controls::IItemsControl
 ABI::Windows::UI::Xaml::Controls::IListView
 ABI::Windows::UI::Xaml::Controls::IListViewBase
 ABI::Windows::UI::Xaml::Controls::Primitives::IPopup
+ABI::Windows::UI::Xaml::Controls::IMenuFlyout
+ABI::Windows::UI::Xaml::Controls::IMenuFlyoutItem
+ABI::Windows::UI::Xaml::Controls::IMenuFlyoutItem2
+ABI::Windows::UI::Xaml::Controls::IMenuFlyoutItem3
+ABI::Windows::UI::Xaml::Controls::IMenuFlyoutItemBase
+ABI::Windows::UI::Xaml::Controls::IMenuFlyoutSeparator
+ABI::Windows::UI::Xaml::Controls::IMenuFlyoutSubItem
+ABI::Windows::UI::Xaml::Controls::IMenuFlyoutSubItem2
+ABI::Windows::UI::Xaml::Controls::Primitives::IFlyoutBase
+ABI::Windows::UI::Xaml::Controls::Primitives::IFlyoutBaseStatics
+ABI::Windows::UI::Xaml::Controls::Primitives::IFlyoutBase2
+ABI::Windows::UI::Xaml::Controls::Primitives::IFlyoutBase3
+ABI::Windows::UI::Xaml::Controls::Primitives::IFlyoutBase4
+ABI::Windows::UI::Xaml::Controls::Primitives::IFlyoutBase5
+ABI::Windows::UI::Xaml::Controls::Primitives::IFlyoutBase6
 ABI::Windows::UI::Xaml::Controls::IFontIcon
+ABI::Windows::UI::Xaml::Controls::ISymbolIcon
+ABI::Windows::UI::Xaml::Controls::IIconElement
+ABI::Windows::UI::Xaml::Controls::IIconSource
+ABI::Windows::UI::Xaml::Controls::IBitmapIconSource
+ABI::Windows::UI::Xaml::Controls::IIconSourceElement
 ABI::Windows::UI::Xaml::Controls::IScrollViewer
 ABI::Windows::UI::Xaml::Controls::IButton
+ABI::Windows::UI::Xaml::Controls::IButtonWithFlyout
+ABI::Windows::UI::Xaml::Controls::Primitives::IButtonBase
 ABI::Windows::UI::Xaml::Controls::ITextBox
 ABI::Windows::UI::Xaml::Controls::IToolTip
+ABI::Windows::UI::Xaml::Controls::IToolTipServiceStatics
 ABI::Windows::UI::Xaml::Controls::Primitives::IThumb
 ABI::Windows::UI::Xaml::Shapes::IRectangle
 
@@ -44,6 +82,12 @@ ABI::Windows::UI::Xaml::Shapes::IRectangle
 # a TextBlock means implementing it too -- there is no way to say "Segoe UI"
 # through this ABI without an object to say it with.
 ABI::Windows::UI::Xaml::Controls::ITextBlock
+ABI::Windows::UI::Xaml::Documents::IRun
+ABI::Windows::UI::Xaml::Documents::ILineBreak
+ABI::Windows::UI::Xaml::Documents::IInline
+ABI::Windows::UI::Xaml::Documents::ITextElement
+ABI::Windows::UI::Xaml::Data::IPropertyChangedEventArgs
+ABI::Windows::UI::Xaml::Data::IPropertyChangedEventArgsFactory
 ABI::Windows::UI::Xaml::Media::IFontFamily
 ABI::Windows::UI::Xaml::Media::IFontFamilyFactory
 
@@ -57,3 +101,67 @@ ABI::Windows::UI::Xaml::Controls::IRowDefinition
 # arranged a child into, which is what the corpus records as the offset.
 ABI::Windows::UI::Xaml::Controls::IGridStatics
 ABI::Windows::UI::Xaml::Controls::Primitives::ILayoutInformationStatics
+ABI::Windows::UI::Xaml::Automation::IAutomationPropertiesStatics
+ABI::Windows::UI::Xaml::Automation::IAutomationPropertiesStatics2
+ABI::Windows::UI::Text::IFontWeightsStatics
+
+# Value-type helper used by generated Terminal animation code.
+ABI::Windows::UI::Xaml::IDurationHelper
+ABI::Windows::UI::Xaml::IDurationHelperStatics
+
+# Application composition used by TerminalApp::App.
+ABI::Windows::UI::Xaml::IApplication
+ABI::Windows::UI::Xaml::IApplication2
+ABI::Windows::UI::Xaml::IApplication3
+ABI::Windows::UI::Xaml::IUIElement7
+ABI::Windows::UI::Xaml::IUIElement10
+ABI::Windows::UI::Xaml::IApplicationFactory
+ABI::Windows::UI::Xaml::IApplicationStatics
+ABI::Windows::UI::Xaml::IDispatcherTimer
+ABI::Windows::UI::Xaml::IDispatcherTimerFactory
+
+# Metadata-provider bridge used by the generated Terminal application to
+# register the WinUI control metadata source during startup.
+ABI::Windows::UI::Xaml::Markup::IXamlMetadataProvider
+
+# Desktop-XAML bootstrap probes for a UWP dispatcher before initializing its
+# own WindowsXamlManager.
+ABI::Windows::System::IDispatcherQueueStatics
+ABI::Windows::System::IDispatcherQueue
+ABI::Windows::System::IDispatcherQueue2
+ABI::Windows::System::IDispatcherQueueTimer
+
+# Desktop-XAML lifetime object returned once the UWP dispatcher probe fails.
+ABI::Windows::UI::Xaml::Hosting::IWindowsXamlManager
+ABI::Windows::UI::Xaml::Hosting::IWindowsXamlManagerStatics
+ABI::Windows::Foundation::IClosable
+ABI::Windows::Foundation::IPropertyValue
+ABI::Windows::UI::IColorsStatics
+ABI::Windows::UI::ViewManagement::IAccessibilitySettings
+
+# View-independent string-resource path used by Terminal's ScopedResourceLoader.
+ABI::Windows::ApplicationModel::Resources::Core::IResourceManager
+ABI::Windows::ApplicationModel::Resources::Core::IResourceManagerStatics
+ABI::Windows::ApplicationModel::Resources::Core::IResourceMap
+ABI::Windows::ApplicationModel::Resources::Core::IResourceCandidate
+ABI::Windows::ApplicationModel::Resources::Core::IResourceContext
+ABI::Windows::ApplicationModel::Resources::Core::IResourceContextStatics
+ABI::Windows::ApplicationModel::Resources::Core::IResourceContextStatics2
+
+# Desktop HWND island used by the real Terminal window host.
+ABI::Windows::UI::Xaml::Hosting::IDesktopWindowXamlSource
+ABI::Windows::UI::Xaml::Hosting::IDesktopWindowXamlSourceFactory
+ABI::Windows::UI::Xaml::Controls::IGridFactory
+ABI::Windows::UI::Xaml::Controls::Primitives::IRangeBase
+ABI::Windows::UI::Xaml::Controls::Primitives::IScrollBar
+ABI::Windows::UI::Xaml::Controls::IAppBarButton
+ABI::Windows::UI::Xaml::Controls::ICommandBarElement
+ABI::Windows::UI::Xaml::Controls::IContentDialog
+ABI::Windows::UI::Xaml::Controls::IContentDialog2
+ABI::Windows::UI::Xaml::Controls::IContentDialog3
+ABI::Windows::UI::Xaml::Controls::IContentDialogFactory
+ABI::Windows::UI::Xaml::Controls::Primitives::ISelectorItem
+ABI::Windows::UI::Xaml::IGridLengthHelper
+ABI::Windows::UI::Xaml::IGridLengthHelperStatics
+ABI::Windows::UI::Xaml::IVisualStateManagerStatics
+ABI::Windows::UI::Xaml::Media::Animation::ITimelineStatics

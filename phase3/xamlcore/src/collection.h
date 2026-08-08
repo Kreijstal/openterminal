@@ -9,6 +9,7 @@
 #ifndef OPENXAML_COLLECTION_H
 #define OPENXAML_COLLECTION_H
 
+#include <map>
 #include <vector>
 
 #include "com.h"
@@ -80,7 +81,7 @@ private:
 
 template <class VectorAbi, class IterableAbi, class IteratorAbi, class ItemAbi,
           class ViewAbi>
-class Vector final : public ComObject, public VectorAbi, public IterableAbi {
+class Vector : public ComObject, public VectorAbi, public IterableAbi {
 public:
     using Traits = CollectionTraits<ItemAbi>;
     using Iterator = VectorIterator<VectorAbi, IterableAbi, IteratorAbi, ItemAbi, ViewAbi>;
@@ -240,6 +241,59 @@ private:
     ComObject* owner_;
     std::vector<Entry> entries_;
     std::vector<typename Traits::Projected> projected_;
+};
+
+// WinUI's CommandBarFlyout exposes observable vectors. IObservableVector<T>
+// is a separate WinRT interface layered beside IVector<T>, rather than an ABI
+// base of it, so reuse the vector implementation and add the event contract as
+// another COM face. The collection remains useful even when nobody subscribes;
+// handlers are retained with the same token semantics as the rest of the
+// compatibility runtime.
+template <class VectorAbi, class IterableAbi, class IteratorAbi, class ItemAbi,
+          class ViewAbi, class ObservableAbi, class ChangedHandlerAbi>
+class ObservableVector final
+    : public Vector<VectorAbi, IterableAbi, IteratorAbi, ItemAbi, ViewAbi>,
+      public ObservableAbi {
+public:
+    using Base = Vector<VectorAbi, IterableAbi, IteratorAbi, ItemAbi, ViewAbi>;
+
+    ObservableVector(const typename Base::Iids& iids, const GUID& observable_iid,
+                     const wchar_t* name, ComObject* owner = nullptr)
+        : Base(iids, name, owner), observable_iid_(observable_iid) {}
+    ~ObservableVector() override {
+        for (auto& [_, handler] : handlers_) handler->Release();
+    }
+
+    const wchar_t* RuntimeClassName() const override {
+        return Base::RuntimeClassName();
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(observable_iid_, ObservableAbi)
+        return Base::QueryInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE add_VectorChanged(ChangedHandlerAbi* handler,
+                                                 EventRegistrationToken* token) override {
+        if (!handler || !token) return E_INVALIDARG;
+        token->value = ++next_token_;
+        handler->AddRef();
+        handlers_[token->value] = handler;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE remove_VectorChanged(EventRegistrationToken token) override {
+        const auto found = handlers_.find(token.value);
+        if (found == handlers_.end()) return S_OK;
+        found->second->Release();
+        handlers_.erase(found);
+        return S_OK;
+    }
+
+private:
+    const GUID& observable_iid_;
+    LONGLONG next_token_ = 0;
+    std::map<LONGLONG, IUnknown*> handlers_;
 };
 
 }  // namespace openxaml::winrt

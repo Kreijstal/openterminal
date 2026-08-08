@@ -27,6 +27,9 @@ SEMI_STUB = re.compile(
     r"RoGetActivationFactory \(L\"([^\"]+)\", \{([0-9a-fA-F-]+)\}")
 IMPORT_FAILURE = re.compile(r"import_dll Library (\S+) \(which is needed")
 TERMINATED = re.compile(r"terminate called after throwing an instance of '([^']+)'")
+OPENXAML_NOT_IMPLEMENTED = re.compile(r"OpenXaml: E_NOTIMPL ([A-Za-z0-9_.]+)")
+OPENXAML_XBF_FAILURE = re.compile(r"OpenXaml: XBF[^\r\n\"]*failed[^\r\n\"]*")
+ACCESS_VIOLATION = re.compile(r"(?:Unhandled exception|Exception)\s+0xc0000005", re.I)
 NO_DRIVER = "nodrv_CreateWindow"
 
 
@@ -51,7 +54,9 @@ def find_mingw_runtime() -> Path:
 def run(executable: Path, prefix: Path, timeout: int, use_xvfb: bool) -> dict:
     environment = dict(os.environ)
     environment["WINEPREFIX"] = str(prefix)
-    environment["WINEDEBUG"] = "err+all,warn+combase,fixme+combase"
+    environment["WINEDEBUG"] = "err+all,warn+combase,warn+debugstr,fixme+combase"
+    environment["OPENXAML_TRACE_QI"] = "1"
+    environment["WINEDLLOVERRIDES"] = "winedbg.exe=d"
     runtime = find_mingw_runtime()
     environment["WINEPATH"] = "Z:" + str(runtime).replace("/", "\\")
 
@@ -71,10 +76,15 @@ def run(executable: Path, prefix: Path, timeout: int, use_xvfb: bool) -> dict:
         if name not in missing_classes:
             missing_classes.append(name)
     crash = TERMINATED.search(log)
+    not_implemented = OPENXAML_NOT_IMPLEMENTED.search(log)
+    xbf_failure = OPENXAML_XBF_FAILURE.search(log)
+    access_violation = bool(ACCESS_VIOLATION.search(log))
+    timed_out = completed.returncode == 124
 
     frontier = {
         "executable": executable.name,
         "exit_code": completed.returncode,
+        "timed_out": timed_out,
         "milestones": {
             "process_started": bool(log) or completed.returncode == 0,
             "mingw_runtime_loaded": not missing_imports,
@@ -86,6 +96,10 @@ def run(executable: Path, prefix: Path, timeout: int, use_xvfb: bool) -> dict:
         "first_missing_class": missing_classes[0] if missing_classes else None,
         "missing_classes": missing_classes,
         "crash": crash.group(1) if crash else None,
+        "access_violation": access_violation,
+        "first_not_implemented": not_implemented.group(1)
+        if not_implemented else None,
+        "first_xbf_failure": xbf_failure.group(0) if xbf_failure else None,
     }
     return frontier
 

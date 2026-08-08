@@ -33,6 +33,7 @@ REPOSITORY_ROOT = PHASE3_DIR.parent
 sys.path.insert(0, str(REPOSITORY_ROOT / "phase2" / "scripts"))
 from build_mingw import (  # noqa: E402
     download_checked,
+    ensure_checkout,
     ensure_tmp_root,
     require_tool,
 )
@@ -62,34 +63,79 @@ LAYOUT_SOURCES += ["binding.cpp", "visual_state.cpp", "default_styles.cpp",
 # route a caller to us and then fail at DllGetActivationFactory, which is worse
 # than not being registered at all.
 RUNTIME_CLASSES = [
+    "Windows.Foundation.Collections.ValueSet",
+    "Windows.UI.Colors",
+    "Windows.UI.ViewManagement.AccessibilitySettings",
+    "Windows.UI.Xaml.VisualStateManager",
+    "Windows.UI.Xaml.DispatcherTimer",
+    "Windows.UI.Xaml.Media.Animation.Timeline",
     "Windows.UI.Xaml.Controls.Border",
+    "Windows.UI.Xaml.Controls.Panel",
     "Windows.UI.Xaml.Controls.Grid",
     "Windows.UI.Xaml.Controls.StackPanel",
     "Windows.UI.Xaml.Controls.Canvas",
     "Windows.UI.Xaml.Controls.ContentPresenter",
+    "Windows.UI.Xaml.Controls.SwapChainPanel",
     "Windows.UI.Xaml.Controls.Image",
     "Windows.UI.Xaml.Controls.PathIcon",
     "Windows.UI.Xaml.Shapes.Path",
     "Windows.UI.Xaml.Controls.TextBlock",
+    "Windows.UI.Xaml.Documents.Run",
+    "Windows.UI.Xaml.Documents.LineBreak",
+    "Windows.UI.Xaml.Data.PropertyChangedEventArgs",
     "Windows.UI.Xaml.Controls.ColumnDefinition",
     "Windows.UI.Xaml.Controls.RowDefinition",
     "Windows.UI.Xaml.Controls.Primitives.LayoutInformation",
+    "Windows.UI.Xaml.DurationHelper",
+    "Windows.UI.Xaml.GridLengthHelper",
+    "Windows.UI.Xaml.Application",
+    "Windows.UI.Xaml.ResourceDictionary",
+    "Windows.UI.Xaml.Controls.UserControl",
+    "Microsoft.UI.Xaml.Controls.XamlControlsResources",
+    "Microsoft.UI.Xaml.Controls.TabView",
+    "Microsoft.UI.Xaml.Controls.TabViewItem",
+    "Microsoft.UI.Xaml.Controls.SplitButton",
+    "Microsoft.UI.Xaml.Controls.CommandBarFlyout",
+    "Microsoft.UI.Xaml.Controls.ProgressRing",
+    "Microsoft.UI.Xaml.Controls.BitmapIconSource",
+    "Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider",
+    "Windows.System.DispatcherQueue",
+    "Windows.UI.Xaml.Hosting.WindowsXamlManager",
+    "Windows.ApplicationModel.Resources.Core.ResourceManager",
+    "Windows.ApplicationModel.Resources.Core.ResourceContext",
+    "Windows.UI.Xaml.Hosting.DesktopWindowXamlSource",
     "Windows.UI.Xaml.Controls.ContentControl",
+    "Windows.UI.Xaml.Controls.ContentDialog",
     "Windows.UI.Xaml.Controls.Page",
     "Windows.UI.Xaml.Controls.Frame",
     "Windows.UI.Xaml.Controls.ItemsControl",
     "Windows.UI.Xaml.Controls.ListView",
     "Windows.UI.Xaml.Controls.Primitives.Popup",
+    "Windows.UI.Xaml.Controls.MenuFlyout",
+    "Windows.UI.Xaml.Controls.MenuFlyoutItem",
+    "Windows.UI.Xaml.Controls.MenuFlyoutSeparator",
+    "Windows.UI.Xaml.Controls.MenuFlyoutSubItem",
+    "Windows.UI.Xaml.Controls.BitmapIconSource",
+    "Windows.UI.Xaml.Controls.IconSourceElement",
+    "Windows.UI.Xaml.Controls.ToolTipService",
+    "Windows.UI.Xaml.Controls.Primitives.FlyoutBase",
+    "Windows.UI.Xaml.Automation.AutomationProperties",
+    "Windows.UI.Text.FontWeights",
     "Windows.UI.Xaml.Controls.Button",
+    "Windows.UI.Xaml.Controls.AppBarButton",
     "Windows.UI.Xaml.Controls.TextBox",
     "Windows.UI.Xaml.Controls.ToolTip",
     "Windows.UI.Xaml.Controls.Primitives.Thumb",
+    "Windows.UI.Xaml.Controls.Primitives.ScrollBar",
     "Windows.UI.Xaml.Controls.ScrollViewer",
     "Windows.UI.Xaml.Controls.FontIcon",
+    "Windows.UI.Xaml.Controls.SymbolIcon",
     "Windows.UI.Xaml.Shapes.Rectangle",
     # Not a control: a TextBlock's FontFamily is an object, so the ABI needs a
     # class to make one with.
     "Windows.UI.Xaml.Media.FontFamily",
+    "Windows.UI.Xaml.Media.ImageBrush",
+    "Windows.UI.Xaml.Media.SolidColorBrush",
 ]
 
 
@@ -172,6 +218,10 @@ def main() -> None:
                         help="where to write measurements (default: <root>/results)")
     parser.add_argument("--skip-run", action="store_true",
                         help="build and register, but do not measure")
+    parser.add_argument("--dll-only", action="store_true",
+                        help="build only openxaml.dll; keep the existing registration")
+    parser.add_argument("--register-only", action="store_true",
+                        help="register an already-built openxaml.dll")
     parser.add_argument("--fonts", type=Path, default=PHASE3_DIR / "xaml-db" / "fonts",
                         help="harvested font metrics; the DLL reads them from here")
     args = parser.parse_args()
@@ -183,9 +233,33 @@ def main() -> None:
     prefix = args.prefix or root / "wine-prefix"
     results = args.results or root / "results"
 
+    if args.register_only:
+        dll = root / "openxaml.dll"
+        if not dll.is_file():
+            raise SystemExit(f"no DLL to register at {dll}")
+        environment = os.environ.copy()
+        environment["WINEPREFIX"] = str(prefix)
+        environment["WINEDEBUG"] = environment.get("WINEDEBUG", "-all")
+        registry_file = root / "openxaml.reg"
+        registry_file.write_text(registration(dll), encoding="utf-8")
+        run(["wine", "regedit", str(registry_file)], env=environment)
+        print(f"registered {dll}")
+        return
+
     include = fetch_sdk(root)
     shadow = root / "sdk-headers"
     generated = root / "generated"
+    pins = json.loads((REPOSITORY_ROOT / "phase2" / "upstreams.json").read_text())
+    xaml_source = ensure_checkout(
+        pins["windows_ui_xaml_source"], root / "windows-ui-xaml-source"
+    )
+    run([
+        sys.executable,
+        str(PHASE3_DIR / "scripts" / "generate_stable_xbf_schema.py"),
+        str(xaml_source / "dxaml" / "xcp" / "tools" / "XbfParser" /
+            "WidgetSpinner" / "Metadata" / "StableXbfIndexMetadata.g.cs"),
+        str(generated / "stable_xbf_schema.h"),
+    ])
     run([sys.executable, str(PHASE3_DIR / "scripts" / "prepare_sdk_headers.py"),
          str(include), str(shadow)])
     run([sys.executable, str(PHASE3_DIR / "scripts" / "harvest_xaml_iids.py"),
@@ -206,13 +280,19 @@ def main() -> None:
     # under Wine with a bare MOD_NOT_FOUND, which reads as a missing DLL
     # rather than as a missing dependency of one.
     common = ["x86_64-w64-mingw32-g++", "-std=c++17", "-O2", "-Wall",
+              "-DOPENXAML_STABLE_XBF_SCHEMA",
               "-static", "-static-libgcc", "-static-libstdc++"]
-    libraries = ["-lruntimeobject", "-lole32", "-luuid"]
+    libraries = ["-lruntimeobject", "-lole32", "-luuid", "-lgdi32"]
 
     dll = root / "openxaml.dll"
-    run(common + ["-shared", "-o", str(dll), str(core_src / "factory.cpp")]
+    run(common + ["-shared", "-o", str(dll), str(core_src / "factory.cpp"),
+                  str(core_src / "xbf.cpp"), str(core_src / "xbf_object.cpp")]
         + [str(layout_src / name) for name in LAYOUT_SOURCES]
         + includes + libraries)
+
+    if args.dll_only:
+        print(f"built {dll}")
+        return
 
     client = root / "measure_cases_winrt.exe"
     run(common + ["-o", str(client),

@@ -15,6 +15,7 @@
 #define OPENXAML_ELEMENT_H
 
 #include <memory>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -99,6 +100,24 @@ public:
     Rect layout_slot() const { return layout_slot_; }
 
     virtual std::vector<Element*> Children() const { return {}; }
+
+    // The WinRT bridge installs this callback on each projected element. An
+    // island layout pass walks the layout tree and invokes it after arrange,
+    // which is the point at which FrameworkElement.Loaded/LayoutUpdated are
+    // observable. Keeping the callback on the layout node also lets a root
+    // reach projected descendants without exposing ABI objects to this
+    // platform-neutral library.
+    void SetLayoutPassCallback(std::function<void()> callback) {
+        layout_pass_callback_ = std::move(callback);
+    }
+    void NotifyLayoutPass() {
+        if (layout_pass_callback_) layout_pass_callback_();
+        // Fetch children after the callback: a LayoutUpdated handler is
+        // allowed to mutate the visual tree (Terminal does this at startup).
+        for (Element* child : Children()) {
+            if (child) child->NotifyLayoutPass();
+        }
+    }
 
     // The children the *oracle* has, which is not the same collection.
     //
@@ -213,6 +232,7 @@ protected:
     void Adopt(Element& child) { child.SetInheritanceParent(this); }
 
 private:
+    std::function<void()> layout_pass_callback_;
     // True once the element has been given layout storage, which happens on
     // the first Measure that it takes part in. Both recorded sizes read it.
     bool TakesPartInLayout() const;

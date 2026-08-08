@@ -1,16 +1,18 @@
 {
-  "crash": "winrt::hresult_class_not_registered",
+  "access_violation": false,
+  "crash": null,
   "executable": "WindowsTerminal.exe",
-  "exit_code": 3,
-  "first_missing_class": "Windows.UI.Xaml.DurationHelper",
+  "exit_code": 124,
+  "first_missing_class": null,
+  "first_not_implemented": null,
+  "first_xbf_failure": null,
   "milestones": {
     "mingw_runtime_loaded": true,
     "process_started": true,
     "reached_winrt_activation": true,
     "window_driver_present": true
   },
-  "missing_classes": [
-    "Windows.UI.Xaml.DurationHelper"
-  ],
-  "missing_imports": []
+  "missing_classes": [],
+  "missing_imports": [],
+  "timed_out": true
 }

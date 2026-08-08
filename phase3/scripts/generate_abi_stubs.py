@@ -115,8 +115,9 @@ def emit(order: list[str], qualified: dict[str, str],
                 continue
             args = ", ".join(params)
             lines.append(
-                f"    HRESULT STDMETHODCALLTYPE {method}({args}) override "
-                f"{{ return E_NOTIMPL; }}"
+                f"    HRESULT STDMETHODCALLTYPE {method}({args}) override {{ "
+                f"::openxaml::winrt::TraceRuntime(\"OpenXaml: E_NOTIMPL "
+                f"{name}.{method}\\n\"); return E_NOTIMPL; }}"
             )
         lines.append("};")
         lines.append("")
@@ -143,6 +144,18 @@ def main() -> None:
         order.append(short)
 
     headers = sorted(args.include_dir.glob("[Ww]indows.[Uu][Ii].[Xx]aml*.h"))
+    colors_header = args.include_dir / "windows.ui.h"
+    if colors_header.is_file():
+        headers.append(colors_header)
+    text_header = args.include_dir / "windows.ui.text.h"
+    if text_header.is_file():
+        headers.append(text_header)
+    for adjacent in ("windows.foundation.h", "windows.system.h",
+                     "windows.applicationmodel.resources.core.h",
+                     "windows.ui.viewmanagement.h"):
+        header = args.include_dir / adjacent
+        if header.is_file():
+            headers.append(header)
     found = find_interfaces(headers, set(order))
     missing = [n for n in order if n not in found]
     if missing:

@@ -12,43 +12,30 @@ runtime or its activation factories".
 
 ## What it implements
 
-Twenty-six runtime classes, backed by [the layout core](../layout/):
+Seventy-one registered runtime classes, backed by [the layout core](../layout/)
+and the desktop-bootstrap compatibility objects Terminal reaches while loading
+its compiled UI. The authoritative class list is `RUNTIME_CLASSES` in
+[`build_xamlcore.py`](../scripts/build_xamlcore.py); it includes:
 
-| class | interfaces |
-|---|---|
-| `Windows.UI.Xaml.Controls.Border` | `IBorder` |
-| `Windows.UI.Xaml.Controls.Grid` | `IGrid`, `IGridStatics` on the factory |
-| `Windows.UI.Xaml.Controls.StackPanel` | `IStackPanel` |
-| `Windows.UI.Xaml.Controls.TextBlock` | `ITextBlock` |
-| `Windows.UI.Xaml.Media.FontFamily` | `IFontFamily`, `IFontFamilyFactory` on the factory |
-| `Windows.UI.Xaml.Controls.ColumnDefinition` | `IColumnDefinition` |
-| `Windows.UI.Xaml.Controls.RowDefinition` | `IRowDefinition` |
-| `Windows.UI.Xaml.Controls.Primitives.LayoutInformation` | `ILayoutInformationStatics` |
-| `Windows.UI.Xaml.Controls.ContentControl` | `IControl`, `IContentControl` |
-| `Windows.UI.Xaml.Controls.Page` | `IControl`, `IContentControl`, `IPage` |
-| `Windows.UI.Xaml.Controls.Frame` | `IControl`, `IContentControl`, `IFrame` |
-| `Windows.UI.Xaml.Controls.ItemsControl` | `IControl`, `IItemsControl` |
-| `Windows.UI.Xaml.Controls.ListView` | `IControl`, `IItemsControl`, `IListView`, `IListViewBase` |
-| `Windows.UI.Xaml.Controls.Primitives.Popup` | `IPopup` |
-| `Windows.UI.Xaml.Controls.Canvas` | `IPanel`, `ICanvas` |
-| `Windows.UI.Xaml.Controls.ContentPresenter` | `IContentPresenter` |
-| `Windows.UI.Xaml.Controls.Image` | `IImage` |
-| `Windows.UI.Xaml.Shapes.Path` | `IPath` |
-| `Windows.UI.Xaml.Controls.PathIcon` | `IPathIcon` |
-| `Windows.UI.Xaml.Controls.FontIcon` | `IFontIcon` |
-| `Windows.UI.Xaml.Controls.ScrollViewer` | `IControl`, `IContentControl`, `IScrollViewer` |
-| `Windows.UI.Xaml.Controls.Button` | `IControl`, `IContentControl`, `IButton` |
-| `Windows.UI.Xaml.Controls.TextBox` | `IControl`, `ITextBox` |
-| `Windows.UI.Xaml.Controls.ToolTip` | `IControl`, `IContentControl`, `IToolTip` |
-| `Windows.UI.Xaml.Controls.Primitives.Thumb` | `IControl`, `IThumb` |
-| `Windows.UI.Xaml.Shapes.Rectangle` | `IRectangle` |
+- the layout and presentation controls (`Grid`, `StackPanel`, `Canvas`,
+  `Border`, `TextBlock`, images, shapes, brushes, icons and scrolling);
+- content, items, flyout and dialog controls, including stateful
+  `ContentDialog`, `MenuFlyoutSubItem`, `TextBox` and `ListView` projections;
+- Terminal's Microsoft.UI.Xaml controls (`TabView`, `TabViewItem`,
+  `SplitButton`, `CommandBarFlyout`, `ProgressRing`, `XamlControlsResources`
+  and `BitmapIconSource`);
+- `Application`, `ResourceDictionary`, the metadata-provider bridge, desktop
+  XAML hosting, dispatcher and resource-manager bootstrap classes; and
+- value/helper surfaces such as `ValueSet`, colors, font weights, duration and
+  grid length.
 
-Each element also carries `IDependencyObject`, `IUIElement` and
-`IFrameworkElement`, and the panels carry `IPanel` — plus `IVector`,
-`IIterable` and `IIterator` for the three collections. The generated contract
-currently covers 34 interfaces and 562 methods. Methods outside the
-implemented layout, content, journal, selection and popup state still return
-`E_NOTIMPL`: the DLL does not silently substitute a plausible zero.
+Elements carry the dependency-object, UI-element and framework-element ABI,
+including the focus/navigation surface used through `IUIElement5` and the
+XamlRoot/size surface used through `IUIElement10`. Collections expose their
+vector, iterable, iterator and observable interfaces. The generated contract
+currently covers 126 interfaces and 1,246 methods, with 177 harvested IIDs.
+Unimplemented operations still return an explicit error instead of silently
+inventing state.
 
 `FontFamily` is there because `ITextBlock::put_FontFamily` takes an object, not
 a string: there is no way to say "Segoe UI" through this ABI without a class to
@@ -167,9 +154,18 @@ the numbers really came through the DLL:
 Both stop the run before a single case is measured.
 
 The build also compiles and runs `wave34_smoke.exe` after registration. It
-activates all six new classes through Wine, independently queries their WinRT
-interfaces, places a Border in a ContentControl, checks Frame's initial
-journal, round-trips ListView selection mode, and opens a Popup.
+activates the Wave 3/4 controls and bootstrap helpers through Wine,
+independently queries their WinRT interfaces, constructs `Application`, checks
+the metadata-provider bridge and duration helpers, exercises `ContentDialog`'s
+completed async operation, round-trips text and automation state, queries the
+newer UI-element interfaces, and activates both Windows and Microsoft
+`BitmapIconSource`/menu/tab surfaces.
+
+The portable XBF 2.1 reader turns node streams into an object graph and
+`Application.LoadComponent` materializes that graph through the WinRT ABI,
+including local Terminal types, component connections and resource
+dictionaries. The native XBF test parses Terminal's shipped `App.xbf` and
+`TermControl.xbf` as 2,830 nodes before the real executable is probed.
 
 ## Deliberate omissions
 
@@ -187,8 +183,22 @@ journal, round-trips ListView selection mode, and opens a Popup.
   has local, style, inherited and animation sources plus effective-change
   notifications. `IGridStatics`' `*Property` getters still stay `E_NOTIMPL`
   until that native identity is projected as a WinRT DependencyProperty.
-- **No `IXamlMetadataProvider`, no XBF, no text, no rendering, no input.** This
-  is the layer those sit on, not a shortcut past them.
+- **Rendering is only a host bootstrap.** The desktop island paints its base
+  background, but controls do not yet produce a complete visual tree and a
+  `SwapChainPanel` retains the supplied chain without presenting Terminal's
+  rendered frames.
+- **Input and focus are compatibility surfaces.** Event subscriptions and the
+  focus/navigation properties Terminal queries are stateful, but complete
+  pointer, keyboard, routed-event and accessibility dispatch is Phase 4 work.
+- **Some live relationships are placeholders.** Framework-element parent links,
+  a real `XamlRoot`/`UIContext`, CoreDispatcher projection, scheduled XAML
+  `DispatcherTimer` ticks and observable-vector change notifications are not
+  complete. Popup and dialog state exists without full visual presentation;
+  `ContentDialog.ShowAsync` currently completes deterministically with `None`.
+- **XBF coverage follows Terminal's current streams.** The 2.1 reader and ABI
+  materializer load the two real Terminal XBFs, but uncommon opcodes, deferred
+  templates and richer custom runtime data still need tests before this can be
+  called a general Windows.UI.Xaml implementation.
 - **The client uses the raw C ABI, not C++/WinRT.** Both sides therefore take
   their vtable layouts from the same SDK headers, so a header that was itself
   wrong would cancel out. The IIDs are independent — they come from the IDL —
