@@ -341,6 +341,21 @@ jobs:
             --output phase3/xaml-db/fonts/derived/segoe-ui.json \
             --check
 
+      # The one metric the derived file cannot carry, checked the same way. A
+      # pair adjustment needs the advances before the corpus can say anything
+      # about it -- a word constrains their sum, not any one of them -- so this
+      # reads them out of the harvest and asks the measurements what is left
+      # over. "Terminal" in Segoe UI measures 200 design units narrower than
+      # its advances add up to, at every recorded size, and the pangram beside
+      # it needs nothing; a kern table that does not say the same about T
+      # before e means the rules in text.cpp and the font have parted company.
+      - name: The kern table matches what the recorded runs imply
+        shell: bash
+        run: |
+          python3 -B phase3/scripts/derive_font_metrics.py \
+            --measurements "phase3/xaml-db/measurements/${os_build}" \
+            --check-kerning phase3/xaml-db/fonts/segoe-ui.json
+
       # The measurements are not committed -- they are this job's artifact. The
       # digest of them is, so that a servicing update to Windows shows up as a
       # reviewable diff rather than quietly re-baselining every expectation.

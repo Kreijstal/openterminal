@@ -31,6 +31,15 @@ namespace {
 //    lines at size 24 measure 319.2334; ten times the line height is
 //    319.2333, and only repeated float addition produces the recorded value.
 //
+// 4. A pair of adjacent glyphs can move the first one's advance, and the move
+//    happens in design units, before that advance snaps. "Terminal" measures
+//    200 units narrower than its advances add up to, at all three recorded
+//    sizes, and the pangram beside it measures exactly what they add up to --
+//    so the 200 belongs to a pair rather than to the arithmetic. Where the
+//    move joins matters: snapping it on its own and adding it afterwards
+//    lands 1/300 of a DIP away at size 12, and the corpus records the first.
+//    Which pairs a font moves is harvested from it, not decided here.
+//
 // All 72 L4 cases agree with these rules on every number that does not depend
 // on a per-character advance.
 

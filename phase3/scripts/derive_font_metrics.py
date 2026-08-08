@@ -81,6 +81,9 @@ class Sample:
     font_size: float
     width: float
     height: float
+    # A wrapped run's recorded width is its longest line, not the whole run, so
+    # it constrains nothing about the pairs that fell on another line.
+    wraps: bool = False
 
 
 def float32(value: float) -> float:
@@ -155,6 +158,7 @@ def collect(cases: Path, measurements: Path, family: str) -> list[Sample]:
             font_size=float(element.get("FontSize", environment.get("font_size", 0.0))),
             width=float(width),
             height=float(height),
+            wraps=element.get("TextWrapping", "NoWrap") != "NoWrap",
         ))
     return samples
 
@@ -233,6 +237,80 @@ def solve_advances(samples: list[Sample],
     return solved, sorted(seen - set(solved))
 
 
+def run_width(text: str, advances: dict[int, int], kerning: dict[tuple[str, str], int],
+              units_per_em: int, font_size: float) -> float:
+    """What a single line of `text` measures, per the rules in text.cpp.
+
+    A pair adjustment joins the first glyph's advance in design units and
+    snaps with it. Snapping it on its own and adding it afterwards is a
+    different computation -- at size 12 the two land 1/300 of a DIP apart --
+    and the corpus records the first.
+    """
+    width = 0.0
+    for index, character in enumerate(text):
+        advance = advances[ord(character)]
+        if index + 1 < len(text):
+            advance += kerning.get((character, text[index + 1]), 0)
+        width = float32(width + snap(advance * font_size / units_per_em))
+    return width
+
+
+def solve_pair_adjustments(samples: list[Sample], advances: dict[int, int],
+                           units_per_em: int) -> dict[tuple[str, str], int]:
+    """What adjacent glyphs do to the advance, solved out of the recorded runs.
+
+    Unlike an advance or a line height this cannot be solved from the corpus
+    alone: a word constrains the sum of its advances, so the advances have to
+    come from the harvest first. What the corpus then adds is a check on the
+    font's kern table -- the one number the measurements imply, which the font
+    is allowed to contradict and CI is where it would.
+
+    Only one pair is ever solved for. A corpus needing two adjustments at once
+    cannot separate them from the sums it records, so that is refused by name.
+    """
+    usable = [s for s in samples
+              if not s.wraps and len(s.text) > 1
+              and all(ord(c) in advances for c in s.text)]
+    if not usable:
+        raise DerivationError(
+            "no unwrapped run of two or more harvested characters was recorded; "
+            "nothing constrains any pair")
+
+    def reproduces(kerning: dict[tuple[str, str], int]) -> list[Sample]:
+        return [s for s in usable
+                if not agrees(run_width(s.text, advances, kerning, units_per_em,
+                                        s.font_size), s.width)]
+
+    disagreeing = reproduces({})
+    if not disagreeing:
+        return {}
+
+    # Only a pair one of the disagreeing runs actually contains can be what
+    # fixes them; a pair that appears solely in runs the advances already
+    # explain would break those instead.
+    candidates = sorted({(s.text[i], s.text[i + 1])
+                         for s in disagreeing for i in range(len(s.text) - 1)})
+    # A kern past half an em is not a kern, it is a different glyph.
+    bound = units_per_em // 2
+    solutions = [(pair, value)
+                 for pair in candidates
+                 for value in range(-bound, bound + 1)
+                 if value and not reproduces({pair: value})]
+
+    if not solutions:
+        raise DerivationError(
+            f"more than one pair would have to move: no single adjustment "
+            f"reproduces the {len(disagreeing)} recorded run(s) the advances alone "
+            f"do not explain, so the corpus cannot separate them")
+    if len(solutions) > 1:
+        listed = ", ".join(f"{left}{right} {value:+d}" for (left, right), value in solutions)
+        raise DerivationError(
+            f"the pair adjustment is not pinned down: {len(solutions)} of them "
+            f"reproduce every recorded run ({listed})")
+    (pair, value), = solutions
+    return {pair: value}
+
+
 # --- the file -----------------------------------------------------------------
 
 
@@ -283,6 +361,59 @@ def render(metrics: dict) -> str:
     return json.dumps(metrics, indent=1, sort_keys=True) + "\n"
 
 
+# --- the kern table, checked rather than derived ------------------------------
+
+
+def pair_key(left: str, right: str) -> str:
+    """How a harvest spells a pair: the two decimal codepoints, comma joined."""
+    return f"{ord(left)},{ord(right)}"
+
+
+def check_kerning(cases: Path, measurements: Path, harvest: dict) -> list[str]:
+    """Hold a harvested kern table to what the recorded runs imply.
+
+    The mirror of `harvest_font_metrics.py --expect`, for the one metric that
+    cannot be solved without the harvest: the corpus needs the advances before
+    it can say anything about a pair, so this reads them out of the harvest and
+    then asks the measurements what is left over. A font whose kern table
+    disagrees is the same finding as an advance that disagrees -- either the
+    rules in text.cpp are wrong or the font is not the one that was measured --
+    and it is a failure either way.
+    """
+    advances = {int(codepoint): advance
+                for codepoint, advance in harvest["advances"].items()}
+    samples = collect(cases, measurements, harvest["family"])
+    if not samples:
+        return [f"no recorded lone-TextBlock case uses {harvest['family']!r}"]
+
+    try:
+        implied = solve_pair_adjustments(samples, advances, harvest["units_per_em"])
+    except DerivationError as failure:
+        return [str(failure)]
+
+    found = harvest.get("kerning", {})
+    problems = []
+    for (left, right), value in sorted(implied.items()):
+        key = pair_key(left, right)
+        if found.get(key) != value:
+            problems.append(f"pair {left}{right}: the font says {found.get(key)}, "
+                            f"the oracle implies {value}")
+    # The other direction only for pairs the corpus can see. A font kerns
+    # thousands of pairs and the corpus measures two words; a pair no recorded
+    # run contains is not a disagreement, it is simply unmeasured.
+    measured = {pair_key(s.text[i], s.text[i + 1])
+                for s in samples if not s.wraps
+                for i in range(len(s.text) - 1)}
+    implied_keys = {pair_key(left, right) for left, right in implied}
+    for key in sorted(measured & set(found)):
+        if key not in implied_keys and found[key]:
+            left, right = (chr(int(part)) for part in key.split(","))
+            problems.append(f"pair {left}{right}: the font says {found[key]}, "
+                            f"the oracle implies the runs containing it need no "
+                            f"adjustment at all")
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -299,7 +430,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true",
                         help="verify --output already holds what the measurements "
                              "imply, and change nothing")
+    parser.add_argument("--check-kerning", type=Path, default=None,
+                        help="a harvested metrics file; hold its kern table to the "
+                             "pair adjustment the recorded runs imply, and derive "
+                             "nothing. Needs the harvest because a word constrains "
+                             "the sum of its advances and not any one of them")
     args = parser.parse_args(argv)
+
+    if args.check_kerning:
+        harvest = json.loads(args.check_kerning.read_text(encoding="utf-8"))
+        problems = check_kerning(args.cases, args.measurements, harvest)
+        if problems:
+            print(f"::error::{args.check_kerning} disagrees with what the recorded "
+                  f"measurements imply about kerning", file=sys.stderr)
+            for problem in problems:
+                print(f"  {problem}", file=sys.stderr)
+            return 1
+        print(f"{harvest['family']}: the kern table agrees with the recorded runs",
+              file=sys.stderr)
+        return 0
 
     try:
         metrics = derive(args.cases, args.measurements, args.family, args.units_per_em)
