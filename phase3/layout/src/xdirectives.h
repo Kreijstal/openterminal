@@ -27,14 +27,16 @@ struct XDirectives {
     // x:Name, retained for namescope registration and storyboard targets.
     std::string name;
 
-    // x:Load="False", or x:DeferLoadStrategy="Lazy". The element is described
-    // by the markup but not created: it is absent from the tree, takes part in
-    // no measure or arrange pass, and occupies no slot in its parent.
+    // x:Load="False", or x:DeferLoadStrategy="Lazy" -- read, checked for
+    // self-contradiction, and then not acted on, because that is what the
+    // runtime does with it.
     //
-    // Nothing here can bring it back. Both directives are realised by a
-    // code-behind asking for the element by name, and there is no code-behind
-    // in a XamlReader.Load -- so "deferred" and "never" are the same state for
-    // the corpus, and the loader does not pretend otherwise.
+    // Deferral is the XAML *compiler's*: it generates the code that creates the
+    // element on demand, and a load from a string never went through it. The
+    // corpus says so directly -- L5-xdirectives-load-false-sibling records a
+    // StackPanel with three 18-high children as 54 high, and load-false-only-
+    // child records the deferring child of a Border at its full 30 x 18. The
+    // element is there, at its ordinary size, in its ordinary slot.
     bool deferred = false;
 
     // x:Uid, if the element carried one. Empty otherwise. The uid is a key
