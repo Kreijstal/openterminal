@@ -131,8 +131,10 @@ checks the harvest. So this half is committed and the harvest is not.
     phase3/layout/build/measure_cases phase3/xaml-db/cases /tmp/results \
         phase3/xaml-db/fonts/derived
 
-That gets 36 of the 72 level 4 cases — every one whose answer needs only a line
-height and the advance of `M`. The other 36 measure `Terminal` and a pangram,
+That gets 46 of the 147 level 4 cases — every one whose answer needs only a line
+height and the advance of `M`, including the six `FontIcon` cases deliberately
+written in Segoe UI so the icon sizing rule could be pinned before any icon
+metric was trusted. The text cases that remain measure `Terminal` and a pangram,
 which constrain the *sum* of several advances and not any one of them, so those
 characters are absent from the derived file on purpose and the cases that need
 them fail by name:

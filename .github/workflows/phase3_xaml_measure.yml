@@ -564,8 +564,11 @@ jobs:
       #
       #  * L4-text and L4-source are the TextBlock cases. The rule above is
       #    theirs and is unchanged: match, or name the advance you have not got.
-      #  * L4-icon is FontIcon, which the layout core does not implement at all.
-      #    Those must fail by name too, but by a different name, and holding
+      #  * L4-icon is FontIcon. Six of those measure an icon in Segoe UI, whose
+      #    advance the corpus already knows, and they match here -- which is
+      #    what they were authored for: the sizing rule is pinned before any
+      #    icon metric is trusted. The rest name a family this directory has no
+      #    metrics for, and must fail by name rather than by number. Holding
       #    them to the text rule would have failed this step for saying exactly
       #    what it is supposed to say.
       - name: The derived metrics match or say why not
