@@ -11,9 +11,9 @@ namespace {
 // constraint whatever its position is, so moving one changes only where it is
 // arranged.
 const DependencyProperty* const kLeft =
-    RegisterProperty("Canvas", "Canvas.Left", {0.0, false, false});
+    RegisterAttachedProperty("Canvas", "Left", {0.0, false, false});
 const DependencyProperty* const kTop =
-    RegisterProperty("Canvas", "Canvas.Top", {0.0, false, false});
+    RegisterAttachedProperty("Canvas", "Top", {0.0, false, false});
 
 // Canvas has a Background, as every Panel does, and no Padding: there is no
 // content rect for one to deflate.

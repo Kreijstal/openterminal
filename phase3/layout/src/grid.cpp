@@ -21,14 +21,15 @@ constexpr int kLayoutLoopMaxCount = 5;
 bool GridIsZero(double v) { return std::abs(v) < kGridEpsilon; }
 bool GridAreClose(double a, double b) { return std::abs(a - b) < kGridEpsilon; }
 
-// Attached properties are registered under their dotted name, which is also
-// how the markup writes them: the name carries its owner, so it resolves on
-// any element rather than against that element's own type chain.
-const DependencyProperty* const kColumn = RegisterProperty("Grid", "Grid.Column", {0, false, true});
-const DependencyProperty* const kRow = RegisterProperty("Grid", "Grid.Row", {0, false, true});
+// Attached properties are registered under their bare name and filed under the
+// dotted one, which is also how the markup writes them: the name carries its
+// owner, so it resolves on any element rather than against that element's own
+// type chain.
+const DependencyProperty* const kColumn = RegisterAttachedProperty("Grid", "Column", {0, false, true});
+const DependencyProperty* const kRow = RegisterAttachedProperty("Grid", "Row", {0, false, true});
 const DependencyProperty* const kColumnSpan =
-    RegisterProperty("Grid", "Grid.ColumnSpan", {1, false, true});
-const DependencyProperty* const kRowSpan = RegisterProperty("Grid", "Grid.RowSpan", {1, false, true});
+    RegisterAttachedProperty("Grid", "ColumnSpan", {1, false, true});
+const DependencyProperty* const kRowSpan = RegisterAttachedProperty("Grid", "RowSpan", {1, false, true});
 
 // kChromePropertyOwner is where BorderThickness and Padding come from -- see
 // chrome.h. Grid grew them in WinUI 2.6, so that a page does not have to wrap

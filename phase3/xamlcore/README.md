@@ -12,7 +12,7 @@ runtime or its activation factories".
 
 ## What it implements
 
-Twenty-six runtime classes, backed by [the layout core](../layout/):
+Twenty-eight runtime classes, backed by [the layout core](../layout/):
 
 | class | interfaces |
 |---|---|
@@ -43,12 +43,60 @@ Twenty-six runtime classes, backed by [the layout core](../layout/):
 | `Windows.UI.Xaml.Controls.Primitives.Thumb` | `IControl`, `IThumb` |
 | `Windows.UI.Xaml.Shapes.Rectangle` | `IRectangle` |
 
-Each element also carries `IDependencyObject`, `IUIElement` and
-`IFrameworkElement`, and the panels carry `IPanel` — plus `IVector`,
+| `Windows.UI.Xaml.DependencyProperty` | `IDependencyPropertyStatics` on the factory |
+| `Windows.UI.Xaml.PropertyMetadata` | `IPropertyMetadataFactory`, `IPropertyMetadataStatics` on the factory |
+
+Each element also carries `IDependencyObject`, `IDependencyObject2`, `IUIElement`
+and `IFrameworkElement`, and the panels carry `IPanel` — plus `IVector`,
 `IIterable` and `IIterator` for the three collections. The generated contract
-currently covers 34 interfaces and 562 methods. Methods outside the
-implemented layout, content, journal, selection and popup state still return
-`E_NOTIMPL`: the DLL does not silently substitute a plausible zero.
+currently covers 41 interfaces and 578 methods. Methods outside the
+implemented layout, content, journal, selection, popup and property state still
+return `E_NOTIMPL`: the DLL does not silently substitute a plausible zero.
+
+## The property system, reached through the ABI
+
+`DependencyProperty` and `PropertyMetadata` are runtime classes here now, so the
+store the layout core has had since wave 1 is reachable the way a WinUI
+application reaches it. Nothing was duplicated to do it: a projected
+`DependencyProperty` holds a pointer to the native identity, and every
+`GetValue` lands in the same slot `put_Width` writes.
+
+| what | state |
+|---|---|
+| `DependencyProperty.Register`, `RegisterAttached` | real; a duplicate registration is `E_INVALIDARG`, as the runtime throws |
+| `DependencyProperty.UnsetValue` | real; one object, compared by identity |
+| `IDependencyProperty::GetMetadata` | real; the registration's metadata, `forType` ignored because nothing here has per-type overrides |
+| `PropertyMetadata.CreateWithDefaultValue` | real |
+| `PropertyMetadata.CreateWithDefaultValueAndCallback`, `CreateWithFactory*` | `E_NOTIMPL`, by name — see the omissions below |
+| `IDependencyObject::GetValue`, `SetValue`, `ClearValue`, `ReadLocalValue` | real |
+| `IDependencyObject2::RegisterPropertyChangedCallback`, `Unregister…` | real, with removable tokens |
+| `IDependencyObject::GetAnimationBaseValue`, `get_Dispatcher` | `E_NOTIMPL` |
+| `IGridStatics::get_RowProperty`, `get_ColumnProperty`, `get_RowSpanProperty`, `get_ColumnSpanProperty` | real; the same singleton every time |
+
+A property identity is a singleton, because that is the only thing a caller can
+do with one: dependency properties are compared by pointer, so two reads of
+`Grid.RowProperty` that disagreed would make every such comparison false.
+
+Values cross as `IInspectable`, boxed by the platform's own
+`Windows.Foundation.PropertyValue` rather than by a box of ours — so a value
+this DLL hands out is indistinguishable from one the caller made, and answers
+to the `IReference<T>` a projection unboxes through. An integer written to a
+property whose default is a double is stored as the double it stands for.
+
+## Events
+
+`add_`/`remove_` pairs for the sixteen framework events Terminal's own code
+subscribes to: `Loaded`, `Unloaded`, `SizeChanged`, `LayoutUpdated`,
+`PointerPressed`/`Released`/`Moved`/`Entered`/`Exited`, `KeyDown`, `KeyUp`,
+`GotFocus`, `LostFocus`, `Tapped`, `DoubleTapped`, `RightTapped`. Tokens are
+real: the handler is held by reference, a token takes exactly its own
+registration off, and a token is never reused.
+
+`SizeChanged` and `LayoutUpdated` are raised, at the moment the published core
+raises them — see [the layout core's event
+section](../layout/README.md#the-event-system) for the rule and where in the
+reference it comes from. The rest are stored and never raised, which is the
+honest state and not a stub: there is no live visual tree here and no input.
 
 `FontFamily` is there because `ITextBlock::put_FontFamily` takes an object, not
 a string: there is no way to say "Segoe UI" through this ABI without a class to
@@ -171,6 +219,17 @@ activates all six new classes through Wine, independently queries their WinRT
 interfaces, places a Border in a ContentControl, checks Frame's initial
 journal, round-trips ListView selection mode, and opens a Popup.
 
+It then exercises the property and event surface through the same ABI: reads
+`Grid.RowProperty` twice and checks it is one object, round-trips an attached
+value between `SetValue` and `IGridStatics::GetRow`, checks `ReadLocalValue`
+answers `UnsetValue` before a write and after a `ClearValue`, registers a
+property and an attached property of its own and reads their defaults back,
+refuses a duplicate registration, drives a `RegisterPropertyChangedCallback`
+through a change and an unchanged write and an unregister, and takes a
+`SizeChanged` and a `LayoutUpdated` through a real `Measure`/`Arrange` pass —
+checking the sizes the arguments report and that a removed handler stops
+running.
+
 ## Deliberate omissions
 
 - **Not named `windows.ui.xaml.dll`.** It registers the real class names but
@@ -183,10 +242,24 @@ journal, round-trips ListView selection mode, and opens a Popup.
   no more: a script needing glyph substitution, or a pair the font kerns, is
   not handled and would measure wrong rather than fail. A character with no
   advance in the metrics does fail, by name.
-- **No ABI `DependencyProperty` projection.** The native property system now
-  has local, style, inherited and animation sources plus effective-change
-  notifications. `IGridStatics`' `*Property` getters still stay `E_NOTIMPL`
-  until that native identity is projected as a WinRT DependencyProperty.
+- **No `DependencyProperty` value of every type.** `GetValue` on a
+  `Thickness`-valued property is refused by name. The runtime boxes one as
+  `IReference<Thickness>`, whose IID is computed from a type signature that the
+  SDK's headers do not write down for it, and a box answering only to
+  `IPropertyValue` would unbox as nothing in a projection. `Margin`, `Padding`
+  and `BorderThickness` all have typed accessors, so the refusal costs a name
+  and nothing else.
+- **No `PropertyMetadata` property-changed callback.** Accepted nowhere:
+  `CreateWithDefaultValueAndCallback` answers `E_NOTIMPL`. The native store has
+  the slot and calls it in the runtime's order, but a change arrives there as a
+  change on a *layout element*, which has no way back to the WinRT object that
+  would have to be the callback's sender.
+  `RegisterPropertyChangedCallback` is the observer that does work.
+- **No `INotifyPropertyChanged` binding source.** The layout core's binding
+  engine takes one, and there is no ABI entry point that could hand it one:
+  binding expressions are created by the markup parser, and this DLL reads no
+  markup. An adapter with nothing able to reach it would be dead code, so
+  there is not one.
 - **No `IXamlMetadataProvider`, no XBF, no text, no rendering, no input.** This
   is the layer those sit on, not a shortcut past them.
 - **The client uses the raw C ABI, not C++/WinRT.** Both sides therefore take

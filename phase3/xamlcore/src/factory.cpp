@@ -53,14 +53,30 @@ private:
 // Grid's attached properties. Row, Column, RowSpan and ColumnSpan live on any
 // element, not just a Grid's children, so they are stored on the element and
 // read by whichever Grid happens to be the parent.
-//
-// The `*Property` getters stay E_NOTIMPL. There is a property system behind
-// this now -- Get and Set go through it -- but its DependencyProperty is a
-// plain C++ object and the ABI wants a Windows.UI.Xaml.DependencyProperty,
-// which is a runtime class this DLL does not project.
 class GridFactory : public Factory<GridObject>, public abi::NotImpl_IGridStatics {
 public:
     GridFactory() : Factory(L"Windows.UI.Xaml.Controls.Grid") {}
+
+    // The identity half of an attached property, which is what a caller needs
+    // to reach it through GetValue/SetValue rather than through the typed
+    // Get/Set pair beside it. The same singleton every time, because that is
+    // what a dependency property is.
+    HRESULT STDMETHODCALLTYPE get_RowProperty(
+        ABI::Windows::UI::Xaml::IDependencyProperty** value) override {
+        return Project(openxaml::Grid::RowProperty(), value);
+    }
+    HRESULT STDMETHODCALLTYPE get_ColumnProperty(
+        ABI::Windows::UI::Xaml::IDependencyProperty** value) override {
+        return Project(openxaml::Grid::ColumnProperty(), value);
+    }
+    HRESULT STDMETHODCALLTYPE get_RowSpanProperty(
+        ABI::Windows::UI::Xaml::IDependencyProperty** value) override {
+        return Project(openxaml::Grid::RowSpanProperty(), value);
+    }
+    HRESULT STDMETHODCALLTYPE get_ColumnSpanProperty(
+        ABI::Windows::UI::Xaml::IDependencyProperty** value) override {
+        return Project(openxaml::Grid::ColumnSpanProperty(), value);
+    }
 
     HRESULT STDMETHODCALLTYPE GetRow(ABI::Windows::UI::Xaml::IFrameworkElement* element,
                                      INT32* value) override {
@@ -112,6 +128,14 @@ protected:
 private:
     using Attached = const openxaml::DependencyProperty&;
 
+    static HRESULT Project(Attached property,
+                           ABI::Windows::UI::Xaml::IDependencyProperty** value) {
+        if (!value) return E_POINTER;
+        *value = ProjectProperty(property);
+        (*value)->AddRef();
+        return S_OK;
+    }
+
     static openxaml::Element* Unwrap(ABI::Windows::UI::Xaml::IFrameworkElement* element) {
         if (!element) return nullptr;
         IOpenXamlNative* native = nullptr;
@@ -140,6 +164,186 @@ private:
         layout->SetValue(property, value);
         return S_OK;
     }
+};
+
+// DependencyProperty.Register and RegisterAttached.
+//
+// Static-only, like LayoutInformation: a DependencyProperty is never
+// constructed, it is registered. What comes back is the same identity object
+// the layout core's own registry hands out, so a property a caller registers
+// here and one this DLL registered for itself are the same kind of thing and
+// live in the same table -- there is one property store, not two.
+class DependencyPropertyFactory : public ComObject,
+                                  public IActivationFactory,
+                                  public abi::NotImpl_IDependencyPropertyStatics {
+public:
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.DependencyProperty";
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IDependencyPropertyStatics,
+                        ABI::Windows::UI::Xaml::IDependencyPropertyStatics)
+        OPENXAML_QI_ARM(::openxaml::iid::IActivationFactory, IActivationFactory)
+        OPENXAML_QI_ARM(IID_IUnknown, IActivationFactory)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, IActivationFactory)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable**) override { return E_NOTIMPL; }
+
+    // DependencyProperty.UnsetValue. One object, compared by identity, which
+    // is the only thing a caller can do with it -- and the same thing
+    // ReadLocalValue answers with when there is no local value. Null is not
+    // usable for that: null is a legitimate value for an object-typed
+    // property, so the sentinel has to be an object that is not any value.
+    HRESULT STDMETHODCALLTYPE get_UnsetValue(IInspectable** value) override {
+        if (!value) return E_POINTER;
+        *value = UnsetValue();
+        (*value)->AddRef();
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE Register(
+        HSTRING name, ABI::Windows::UI::Xaml::Interop::TypeName,
+        ABI::Windows::UI::Xaml::Interop::TypeName owner_type,
+        ABI::Windows::UI::Xaml::IPropertyMetadata* metadata,
+        ABI::Windows::UI::Xaml::IDependencyProperty** result) override {
+        return RegisterOne(name, owner_type, metadata, result, false);
+    }
+
+    HRESULT STDMETHODCALLTYPE RegisterAttached(
+        HSTRING name, ABI::Windows::UI::Xaml::Interop::TypeName,
+        ABI::Windows::UI::Xaml::Interop::TypeName owner_type,
+        ABI::Windows::UI::Xaml::IPropertyMetadata* metadata,
+        ABI::Windows::UI::Xaml::IDependencyProperty** result) override {
+        return RegisterOne(name, owner_type, metadata, result, true);
+    }
+
+private:
+    // The property type is ignored, and the value's own type is what decides
+    // how it is stored. That is not a shortcut: this store is a closed set of
+    // alternatives, so a `propertyType` naming something outside it would be a
+    // claim the store cannot keep, and one naming something inside it is
+    // already implied by the default value that arrives with it.
+    static HRESULT RegisterOne(HSTRING name, ABI::Windows::UI::Xaml::Interop::TypeName owner_type,
+                               ABI::Windows::UI::Xaml::IPropertyMetadata* metadata,
+                               ABI::Windows::UI::Xaml::IDependencyProperty** result,
+                               bool attached) {
+        if (!result) return E_POINTER;
+        *result = nullptr;
+        const std::string property_name = Utf8FromHString(name);
+        const std::string owner = Utf8FromHString(owner_type.Name);
+        if (property_name.empty() || owner.empty()) return E_INVALIDARG;
+
+        openxaml::PropertyMetadata registration;
+        if (metadata) {
+            IInspectable* default_value = nullptr;
+            const HRESULT hr = metadata->get_DefaultValue(&default_value);
+            if (FAILED(hr)) return hr;
+            // No expected type to coerce towards: this registration is what
+            // establishes one, so the box's own type is taken as it comes.
+            const HRESULT unboxed = UnboxPropertyValue(
+                default_value, openxaml::PropertyValue(std::monostate{}),
+                &registration.default_value);
+            if (default_value) default_value->Release();
+            if (FAILED(unboxed)) return unboxed;
+        } else {
+            registration.default_value = std::monostate{};
+        }
+
+        const openxaml::DependencyProperty* registered = nullptr;
+        try {
+            registered = attached
+                             ? openxaml::RegisterAttachedProperty(owner, property_name,
+                                                                  std::move(registration))
+                             : openxaml::RegisterProperty(owner, property_name,
+                                                          std::move(registration));
+        } catch (const openxaml::PropertyError&) {
+            // Registered twice under one owner. The runtime throws for this;
+            // across an ABI that is an HRESULT, and the argument at fault is
+            // the name.
+            return E_INVALIDARG;
+        }
+        *result = ProjectProperty(*registered);
+        (*result)->AddRef();
+        return S_OK;
+    }
+};
+
+// PropertyMetadata's constructors. A caller builds one of these to say what a
+// property defaults to before registering it.
+class PropertyMetadataFactory : public ComObject,
+                                public IActivationFactory,
+                                public abi::NotImpl_IPropertyMetadataFactory,
+                                public abi::NotImpl_IPropertyMetadataStatics {
+public:
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.PropertyMetadata";
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IPropertyMetadataFactory,
+                        ABI::Windows::UI::Xaml::IPropertyMetadataFactory)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IPropertyMetadataStatics,
+                        ABI::Windows::UI::Xaml::IPropertyMetadataStatics)
+        OPENXAML_QI_ARM(::openxaml::iid::IActivationFactory, IActivationFactory)
+        OPENXAML_QI_ARM(IID_IUnknown, IActivationFactory)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, IActivationFactory)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    // PropertyMetadata has no default constructor in the runtime either: it is
+    // always built with a value or a factory.
+    HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable**) override { return E_NOTIMPL; }
+
+    HRESULT STDMETHODCALLTYPE CreateInstanceWithDefaultValue(
+        IInspectable* default_value, IInspectable* outer, IInspectable** inner,
+        ABI::Windows::UI::Xaml::IPropertyMetadata** value) override {
+        if (outer) return E_NOTIMPL;
+        if (inner) *inner = nullptr;
+        return CreateWithDefaultValue(default_value, value);
+    }
+
+    HRESULT STDMETHODCALLTYPE CreateInstanceWithDefaultValueAndCallback(
+        IInspectable* default_value, ABI::Windows::UI::Xaml::IPropertyChangedCallback* callback,
+        IInspectable* outer, IInspectable** inner,
+        ABI::Windows::UI::Xaml::IPropertyMetadata** value) override {
+        if (outer) return E_NOTIMPL;
+        if (inner) *inner = nullptr;
+        return CreateWithDefaultValueAndCallback(default_value, callback, value);
+    }
+
+    HRESULT STDMETHODCALLTYPE CreateWithDefaultValue(
+        IInspectable* default_value,
+        ABI::Windows::UI::Xaml::IPropertyMetadata** result) override {
+        if (!result) return E_POINTER;
+        *result = new PropertyMetadataObject(default_value);
+        return S_OK;
+    }
+
+    // Refused, rather than accepted and dropped.
+    //
+    // The native store has a slot for a property-changed callback and calls it
+    // in the runtime's order. What is missing is the *sender*: the callback is
+    // handed a DependencyObject, and a property change arrives here as a
+    // change on a layout element, which has no way back to the WinRT object
+    // wrapping it. Registering a callback that would never fire, or would fire
+    // with the wrong sender, is worse than saying it is not implemented --
+    // a caller that is told E_NOTIMPL knows it has to observe the property
+    // another way, and RegisterPropertyChangedCallback is that way and works.
+    HRESULT STDMETHODCALLTYPE CreateWithDefaultValueAndCallback(
+        IInspectable*, ABI::Windows::UI::Xaml::IPropertyChangedCallback*,
+        ABI::Windows::UI::Xaml::IPropertyMetadata**) override {
+        return E_NOTIMPL;
+    }
+
 };
 
 // LayoutInformation is static-only: it has no constructor, so activating it
@@ -322,6 +526,14 @@ LayoutInformationFactory& TheLayoutInformationFactory() {
     static LayoutInformationFactory factory;
     return factory;
 }
+DependencyPropertyFactory& TheDependencyPropertyFactory() {
+    static DependencyPropertyFactory factory;
+    return factory;
+}
+PropertyMetadataFactory& ThePropertyMetadataFactory() {
+    static PropertyMetadataFactory factory;
+    return factory;
+}
 
 // Where the harvested font metrics are. A real implementation reads the
 // system font directory; this one is told, because the metrics are a build
@@ -384,6 +596,10 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &RowDefinitionFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.Primitives.LayoutInformation") == 0)
         return &TheLayoutInformationFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.DependencyProperty") == 0)
+        return &TheDependencyPropertyFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.PropertyMetadata") == 0)
+        return &ThePropertyMetadataFactory();
     return nullptr;
 }
 

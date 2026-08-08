@@ -9,8 +9,26 @@
 
 # The base chain every element carries.
 ABI::Windows::UI::Xaml::IDependencyObject
+# RegisterPropertyChangedCallback and its unregister are a later revision of
+# the interface, not part of the original one -- so they arrive on their own
+# vtable, which is exactly the kind of thing the generated bases exist to get
+# right.
+ABI::Windows::UI::Xaml::IDependencyObject2
 ABI::Windows::UI::Xaml::IUIElement
 ABI::Windows::UI::Xaml::IFrameworkElement
+
+# The property system as runtime classes. DependencyProperty is what
+# IDependencyObject's GetValue/SetValue are keyed by and what a *Property
+# static hands back; PropertyMetadata is what one is registered with.
+ABI::Windows::UI::Xaml::IDependencyProperty
+ABI::Windows::UI::Xaml::IDependencyPropertyStatics
+ABI::Windows::UI::Xaml::IPropertyMetadata
+ABI::Windows::UI::Xaml::IPropertyMetadataFactory
+ABI::Windows::UI::Xaml::IPropertyMetadataStatics
+
+# What a raised SizeChanged hands its handler. The only event arguments this
+# DLL constructs, because SizeChanged is one of the two events it raises.
+ABI::Windows::UI::Xaml::ISizeChangedEventArgs
 
 # Panels and the decorator.
 ABI::Windows::UI::Xaml::Controls::IPanel

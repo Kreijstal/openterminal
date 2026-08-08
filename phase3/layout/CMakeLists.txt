@@ -10,6 +10,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(openxaml_layout STATIC
     # The property system everything else stores its values in.
     src/property.cpp
+    # Framework event registration, and the two events a layout pass raises.
+    # Beside the property system because it is the other half of what a
+    # DependencyObject offers a caller that is not measuring anything.
+    src/events.cpp
     src/element.cpp
     src/border.cpp
     src/control.cpp
@@ -195,6 +199,16 @@ add_executable(terminal_subtree_tests
 target_link_libraries(terminal_subtree_tests PRIVATE openxaml_layout)
 add_test(NAME terminal_subtree COMMAND terminal_subtree_tests)
 
+# The property system and the event system, which no measurement can see. A
+# recorded tree is a tree of numbers: it cannot say which slot a value came
+# from, that a callback ran before another one, or that a token took its
+# handler back off. Those are the whole content of what the ABI now reaches.
+add_executable(dependency_property_tests
+    tests/dependency_property_test.cpp
+)
+target_link_libraries(dependency_property_tests PRIVATE openxaml_layout)
+add_test(NAME dependency_property COMMAND dependency_property_tests)
+
 if(MSVC)
     target_compile_options(openxaml_layout PRIVATE /W4)
     target_compile_options(measure_cases PRIVATE /W4)
@@ -231,4 +245,5 @@ else()
     target_compile_options(l4_composition_tests PRIVATE -Wall -Wextra)
     target_compile_options(windows_xaml_completion_tests PRIVATE -Wall -Wextra)
     target_compile_options(terminal_subtree_tests PRIVATE -Wall -Wextra)
+    target_compile_options(dependency_property_tests PRIVATE -Wall -Wextra)
 endif()

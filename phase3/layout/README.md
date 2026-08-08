@@ -209,6 +209,42 @@ value not-default. So the same fact produces both halves of the behaviour —
 a style setter shadows what the element would have inherited, and is itself
 inherited by everything below.
 
+### What a caller can do with it
+
+The store is the same one whether it is reached by a typed accessor, by markup,
+or through the ABI — `put_Width`, `Width="40"` and
+`SetValue(WidthProperty, 40)` are three spellings of one write, which is what
+[`tests/dependency_property_test.cpp`](tests/dependency_property_test.cpp)
+checks so that a second store cannot quietly appear behind the projection.
+
+The whole `DependencyObject` surface a caller reaches:
+
+| call | what it answers |
+|---|---|
+| `GetValue` | the effective value, out of the chain above |
+| `SetValue` | writes the local slot |
+| `ClearValue` | removes the local value, revealing whatever was under it |
+| `ReadLocalValue` | the local value **only**, or nothing — not the default |
+| `RegisterPropertyChangedCallback` | observes one property; returns a token |
+| `UnregisterPropertyChangedCallback` | takes that registration off |
+
+`ReadLocalValue` is the one that cannot be simulated: "the default" and
+"nothing here" are the same number and different answers, and a style value is
+neither.
+
+Three kinds of observer can hear a change, and they run in the runtime's order
+— the type's own `OnPropertyChanged`, then the metadata's
+`PropertyChangedCallback`, then the per-object observers, which is
+`DependencyObject::NotifyPropertyChanged` in the published core. Only an
+*effective* change raises anything: a write shadowed by an animation raises
+nothing, and clearing that animation raises the newly exposed value once.
+
+`RegisterAttached` is a separate registration because resolution differs, not
+because storage does. An attached property is filed under its qualified
+`Owner.Name` and found from anywhere; a plain one is found only through the
+owner chain of the object it is read on. Both land in the same store, on
+whatever object the value was written on.
+
 The distinction it exists for is *unset* against *set to the default*.
 `<TextBlock/>` inside a `FontSize="22"` control measures at 22, and
 `<TextBlock FontSize="14"/>` inside the same control measures at 14 even though
@@ -254,6 +290,41 @@ the clearing held — a message naming a key the markup does not contain cannot 
 about this case. It is one-sided by construction, since a key that *is* present
 proves nothing. The contamination and what it costs are written up in
 [the xaml-db README](../xaml-db/README.md#recorded-error-messages-before-run-31017111065-are-not-evidence).
+
+## The event system
+
+[`events.h`](src/events.h) is registration — add, remove, a token that takes
+the handler back off — for the sixteen framework events Terminal's own code
+subscribes to. Registration is the easy half and is complete. *Raising* is the
+half worth being careful about, and the rule kept here is that an event is
+raised only where the published XAML core says when, and where that moment
+exists in this implementation. Two qualify:
+
+| event | when | from |
+|---|---|---|
+| `SizeChanged` | queued during `ArrangeCore` when `RenderSize` moved, raised after the pass, **parents before children** | `framework.cpp`, `LayoutManager.cpp` |
+| `LayoutUpdated` | once per pass, after the size-changed queue is drained, to every subscriber | `LayoutManager.cpp` |
+
+The parent-first order is not a choice. `EnqueueForSizeChanged` files an
+element after its `ArrangeOverride` has already arranged its children, so
+children queue first; the drain then walks the queue backwards — the reference
+comments the reversal explicitly — which delivers the event to the parent
+first. An element with no `SizeChanged` handler is never queued at all, so
+registering one after a size has already moved does not deliver the move that
+happened before it.
+
+Everything else is stored and never raised, by name:
+
+- **`Loaded`, `Unloaded`.** The runtime raises these from the event manager on
+  the tick after an element enters or leaves the live visual tree. There is no
+  live tree here, no application and no tick, so there is no moment here that
+  is the moment the reference names.
+- **pointer, key, focus, tap.** There is no source of an input event at all;
+  input routing is a later wave.
+
+A handler stored and never called is not a lie as long as it is written down,
+and it is what lets Terminal's boot code register what it registers without
+being told `E_NOTIMPL`.
 
 ## The resource system
 

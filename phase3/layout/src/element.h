@@ -21,6 +21,7 @@
 #include "layout.h"
 #include "property.h"
 #include "binding.h"
+#include "events.h"
 #include "visual_state.h"
 
 namespace openxaml {
@@ -55,9 +56,17 @@ inline constexpr const char* kTextPropertyOwner = "TextProperties";
 
 class Element : public DependencyObject {
 public:
+    Element() { events_.Bind(this); }
+
     // The name the oracle reports, so that results compare directly against
     // measurements from the real runtime.
     virtual std::string TypeName() const = 0;
+
+    // The framework events registered on this element. Two of them are raised
+    // by a layout pass; the rest are stored and never raised, which events.h
+    // says why of, one event at a time.
+    EventRegistrations& events() { return events_; }
+    const EventRegistrations& events() const { return events_; }
 
     void Measure(Size available);
     void Arrange(Rect final_rect);
@@ -227,6 +236,7 @@ private:
     Size unclipped_desired_size_;
     Rect layout_slot_;
     bool needs_measure_ = true;
+    EventRegistrations events_;
     std::vector<std::unique_ptr<BindingExpression>> bindings_;
     std::shared_ptr<NameScope> namescope_;
     std::unique_ptr<VisualStateManager> visual_states_;
