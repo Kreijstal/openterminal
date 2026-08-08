@@ -1,5 +1,11 @@
 // Path: a shape sized by where its geometry ends.
 //
+// A Shape is not a layout element, so this measure runs only under a parent
+// that is one -- an IconElement, a Border, a control template's root. A Shape
+// at the root of a tree is never measured at all: it reports no desired size
+// and renders at whatever Width and Height say, geometry or no geometry. See
+// element.h.
+//
 // A Shape's desired size is the *right and bottom* of its geometry bounds, not
 // the width and height. A figure that starts at (10,10) and is 5 wide asks for
 // 15, because the geometry is drawn in the element's own coordinates and the

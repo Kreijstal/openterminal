@@ -25,7 +25,15 @@ namespace openxaml {
 
 class PathIcon : public Element {
 public:
+    // The Path the icon draws with is its child, not a detached helper: a
+    // Shape takes part in layout only under a parent that is a layout element,
+    // and the icon is one. Without the adoption the inner Path would measure
+    // nothing and the icon would report nothing.
+    PathIcon() { Adopt(content_); }
+
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.PathIcon"; }
+    // An IconElement is a layout element, unlike the Shape it draws with.
+    bool IsLayoutElement() const override { return true; }
     static const std::vector<std::string>& Owners();
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
 
@@ -47,6 +55,7 @@ private:
 class FontIcon : public Element {
 public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.FontIcon"; }
+    bool IsLayoutElement() const override { return true; }
     static const std::vector<std::string>& Owners();
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
     const std::string& glyph() const { return GetString(GlyphProperty()); }

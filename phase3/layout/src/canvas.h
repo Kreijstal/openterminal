@@ -1,9 +1,17 @@
 // Canvas: the panel that does not do layout.
 //
-// It measures every child with an infinite constraint, arranges each one at
-// its own Canvas.Left/Canvas.Top at exactly the size the child asked for, and
-// reports no size of its own in either pass. Nothing a Canvas contains
-// influences anything a Canvas contains.
+// It is not a layout element -- the only Panel that is not -- and that decides
+// far more than its own two zeros. An element takes part in layout only if it
+// is a layout element or its parent is one, so a Canvas at the root of a tree
+// is never measured or arranged, its MeasureOverride and ArrangeOverride never
+// run, and its children are therefore never reached at all. Their recorded
+// sizes are all zero however large and explicitly sized they are. See
+// element.h for where that rule lives.
+//
+// When a Canvas does take part -- because the element above it is a layout
+// element -- it measures every child with an infinite constraint, arranges
+// each one at its own Canvas.Left/Canvas.Top at exactly the size the child
+// asked for, and reports no size of its own in either pass.
 
 #ifndef OPENXAML_CANVAS_H
 #define OPENXAML_CANVAS_H
@@ -18,6 +26,9 @@ namespace openxaml {
 class Canvas : public Panel {
 public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.Canvas"; }
+    // The one Panel that is not a layout element, and the reason a Canvas is
+    // the only container here whose children never get measured. See canvas.cpp.
+    bool IsLayoutElement() const override { return false; }
     static const std::vector<std::string>& Owners();
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
 

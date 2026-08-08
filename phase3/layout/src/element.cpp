@@ -151,7 +151,35 @@ std::vector<DependencyObject*> Element::InheritanceChildren() const {
     return out;
 }
 
+Size Element::specified_size() const {
+    auto resolve = [](double explicit_size, double minimum, double maximum) {
+        const double asked = IsAuto(explicit_size) ? std::min(minimum, kInfinity) : explicit_size;
+        const double clamped = std::max(std::min(asked, maximum), minimum);
+        // Nothing was asked for, and an infinite size is not an answer.
+        return std::isinf(clamped) ? 0.0 : clamped;
+    };
+    return {resolve(width(), min_width(), max_width()),
+            resolve(height(), min_height(), max_height())};
+}
+
+bool Element::TakesPartInLayout() const {
+    if (IsLayoutElement()) return true;
+    const auto* parent = dynamic_cast<const Element*>(inheritance_parent());
+    return parent != nullptr && parent->IsLayoutElement();
+}
+
 void Element::Measure(Size available) {
+    // An element that takes no part in layout is measured by nobody: it gets
+    // no layout storage, MeasureOverride never runs -- so a Canvas never
+    // reaches its own children, and they stay unmeasured -- and the only thing
+    // this call leaves behind is the cleared measure-dirty flag that lets
+    // ActualWidth answer with the specified size instead of with zero.
+    if (!TakesPartInLayout()) {
+        needs_measure_ = false;
+        return;
+    }
+    has_layout_storage_ = true;
+
     // A collapsed element is suspended from layout rather than merely hidden:
     // MeasureOverride is never reached, no explicit Width or MinWidth applies,
     // and the parent is told the element wants nothing. Treating it as a
@@ -228,6 +256,10 @@ void Element::Measure(Size available) {
 }
 
 void Element::Arrange(Rect final_rect) {
+    // No layout storage, no slot to record and no render size to compute: an
+    // element that takes no part in layout is not arranged either.
+    if (!TakesPartInLayout()) return;
+
     // The slot is recorded even for a collapsed element -- the parent did
     // place it, and LayoutInformation reports that placement -- but nothing
     // below the slot happens.

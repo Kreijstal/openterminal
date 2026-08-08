@@ -14,6 +14,7 @@ namespace openxaml {
 class Border : public Element {
 public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.Border"; }
+    bool IsLayoutElement() const override { return true; }
     static const std::vector<std::string>& Owners();
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
 

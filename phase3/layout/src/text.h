@@ -66,6 +66,7 @@ enum class TextWrapping { NoWrap, Wrap };
 class TextBlock : public Element {
 public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.TextBlock"; }
+    bool IsLayoutElement() const override { return true; }
     static const std::vector<std::string>& Owners();
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
 
