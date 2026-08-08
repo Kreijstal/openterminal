@@ -44,6 +44,7 @@ Windows.UI.Xaml.Media.IFontFamilyFactory
 
 Windows.UI.Xaml.Controls.IGridStatics
 Windows.UI.Xaml.Controls.Primitives.ILayoutInformationStatics
+Windows.UI.Xaml.IDurationHelperStatics
 
 # Parameterized collection interfaces, named by the mangled name the SDK's
 # generated headers give each specialization. Their IIDs are computed from the

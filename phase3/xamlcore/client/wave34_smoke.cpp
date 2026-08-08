@@ -29,6 +29,20 @@ Interface* Activate(const wchar_t* name, const GUID& iid) {
     return SUCCEEDED(queried) ? result : nullptr;
 }
 
+// A static-only class has no instance to activate: its members live on the
+// activation factory, which is what RoGetActivationFactory hands back.
+template <class Interface>
+Interface* Statics(const wchar_t* name, const GUID& iid) {
+    HSTRING class_name = nullptr;
+    if (FAILED(WindowsCreateString(name, static_cast<UINT32>(::wcslen(name)), &class_name)))
+        return nullptr;
+    Interface* result = nullptr;
+    const HRESULT got = RoGetActivationFactory(class_name, iid,
+                                               reinterpret_cast<void**>(&result));
+    WindowsDeleteString(class_name);
+    return SUCCEEDED(got) ? result : nullptr;
+}
+
 int main() {
     if (FAILED(RoInitialize(RO_INIT_SINGLETHREADED))) return 1;
     int failures = 0;
@@ -229,6 +243,64 @@ int main() {
                                                 openxaml::iid::Windows_UI_Xaml_Controls_IPathIcon);
     check(path_icon != nullptr, "PathIcon activation");
     if (path_icon) path_icon->Release();
+
+    // DurationHelper. Terminal reaches this one before main, so it is the
+    // first thing the real host asks the runtime for; the values below are the
+    // three-way case analysis the published XAML core does.
+    auto* durations = Statics<wux::IDurationHelperStatics>(
+        L"Windows.UI.Xaml.DurationHelper",
+        openxaml::iid::Windows_UI_Xaml_IDurationHelperStatics);
+    check(durations != nullptr, "DurationHelper statics");
+    if (durations) {
+        // 200ms in 100-nanosecond ticks, the way Pane.cpp builds it.
+        wux::Duration span{};
+        check(SUCCEEDED(durations->FromTimeSpan({2000000}, &span)) &&
+                  span.Type == wux::DurationType_TimeSpan &&
+                  span.TimeSpan.Duration == 2000000,
+              "DurationHelper.FromTimeSpan");
+        check(durations->FromTimeSpan({-1}, &span) == E_INVALIDARG,
+              "DurationHelper.FromTimeSpan rejects a negative span");
+        boolean has_span = 0;
+        check(SUCCEEDED(durations->GetHasTimeSpan(span, &has_span)) && has_span,
+              "DurationHelper.GetHasTimeSpan");
+        wux::Duration automatic{};
+        wux::Duration forever{};
+        check(SUCCEEDED(durations->get_Automatic(&automatic)) &&
+                  automatic.Type == wux::DurationType_Automatic,
+              "DurationHelper.Automatic");
+        check(SUCCEEDED(durations->get_Forever(&forever)) &&
+                  forever.Type == wux::DurationType_Forever,
+              "DurationHelper.Forever");
+        check(SUCCEEDED(durations->GetHasTimeSpan(forever, &has_span)) && !has_span,
+              "DurationHelper.GetHasTimeSpan says Forever has none");
+        INT32 order = 0;
+        check(SUCCEEDED(durations->Compare(automatic, span, &order)) && order == -1,
+              "DurationHelper.Compare puts Automatic first");
+        check(SUCCEEDED(durations->Compare(forever, span, &order)) && order == 1,
+              "DurationHelper.Compare puts Forever last");
+        check(SUCCEEDED(durations->Compare(forever, forever, &order)) && order == 0,
+              "DurationHelper.Compare makes Forever equal to itself");
+        wux::Duration sum{};
+        check(SUCCEEDED(durations->Add(span, span, &sum)) &&
+                  sum.Type == wux::DurationType_TimeSpan &&
+                  sum.TimeSpan.Duration == 4000000,
+              "DurationHelper.Add sums two spans");
+        check(SUCCEEDED(durations->Add(forever, span, &sum)) &&
+                  sum.Type == wux::DurationType_Forever,
+              "DurationHelper.Add keeps Forever");
+        check(SUCCEEDED(durations->Subtract(forever, span, &sum)) &&
+                  sum.Type == wux::DurationType_Forever,
+              "DurationHelper.Subtract keeps Forever");
+        check(SUCCEEDED(durations->Subtract(span, forever, &sum)) &&
+                  sum.Type == wux::DurationType_Automatic,
+              "DurationHelper.Subtract of Forever is Automatic");
+        boolean same = 0;
+        check(SUCCEEDED(durations->Equals(span, span, &same)) && same,
+              "DurationHelper.Equals");
+        check(SUCCEEDED(durations->Equals(automatic, forever, &same)) && !same,
+              "DurationHelper.Equals separates Automatic from Forever");
+        durations->Release();
+    }
 
     RoUninitialize();
     if (!failures) std::puts("Wave 3/4 activation smoke passed");

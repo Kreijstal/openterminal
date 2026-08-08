@@ -10,6 +10,7 @@
 
 #include "elements.h"
 #include "fonts.h"
+#include "helpers.h"
 
 namespace openxaml::winrt {
 namespace {
@@ -322,6 +323,10 @@ LayoutInformationFactory& TheLayoutInformationFactory() {
     static LayoutInformationFactory factory;
     return factory;
 }
+DurationHelperFactory& TheDurationHelperFactory() {
+    static DurationHelperFactory factory;
+    return factory;
+}
 
 // Where the harvested font metrics are. A real implementation reads the
 // system font directory; this one is told, because the metrics are a build
@@ -384,6 +389,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &RowDefinitionFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.Primitives.LayoutInformation") == 0)
         return &TheLayoutInformationFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.DurationHelper") == 0)
+        return &TheDurationHelperFactory();
     return nullptr;
 }
 

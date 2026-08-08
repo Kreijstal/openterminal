@@ -90,6 +90,9 @@ RUNTIME_CLASSES = [
     # Not a control: a TextBlock's FontFamily is an object, so the ABI needs a
     # class to make one with.
     "Windows.UI.Xaml.Media.FontFamily",
+    # Not a control either, and not activatable: a static-only class holding
+    # the operations Windows.UI.Xaml.Duration cannot carry itself.
+    "Windows.UI.Xaml.DurationHelper",
 ]
 
 

@@ -2,7 +2,7 @@
   "crash": "winrt::hresult_class_not_registered",
   "executable": "WindowsTerminal.exe",
   "exit_code": 3,
-  "first_missing_class": "Windows.UI.Xaml.DurationHelper",
+  "first_missing_class": "Windows.UI.Xaml.Application",
   "milestones": {
     "mingw_runtime_loaded": true,
     "process_started": true,
@@ -10,7 +10,7 @@
     "window_driver_present": true
   },
   "missing_classes": [
-    "Windows.UI.Xaml.DurationHelper"
+    "Windows.UI.Xaml.Application"
   ],
   "missing_imports": []
 }
