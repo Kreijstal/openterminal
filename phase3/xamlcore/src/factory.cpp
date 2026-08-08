@@ -8,6 +8,7 @@
 
 #include <cstring>
 
+#include "application.h"
 #include "elements.h"
 #include "fonts.h"
 #include "helpers.h"
@@ -327,6 +328,10 @@ DurationHelperFactory& TheDurationHelperFactory() {
     static DurationHelperFactory factory;
     return factory;
 }
+ApplicationFactory& TheApplicationFactory() {
+    static ApplicationFactory factory;
+    return factory;
+}
 
 // Where the harvested font metrics are. A real implementation reads the
 // system font directory; this one is told, because the metrics are a build
@@ -391,6 +396,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &TheLayoutInformationFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.DurationHelper") == 0)
         return &TheDurationHelperFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Application") == 0)
+        return &TheApplicationFactory();
     return nullptr;
 }
 

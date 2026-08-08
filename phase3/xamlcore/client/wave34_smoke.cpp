@@ -43,6 +43,54 @@ Interface* Statics(const wchar_t* name, const GUID& iid) {
     return SUCCEEDED(got) ? result : nullptr;
 }
 
+// A stand-in for a class that derives from Windows.UI.Xaml.Application, doing
+// what C++/WinRT's Application base does: hand itself to the factory as the
+// controlling outer, keep the non-delegating inner, and resolve anything it
+// does not implement through that inner.
+//
+// It exists so the composition is exercised the way the real host exercises
+// it. Composition cannot be checked by activating something -- there is
+// nothing to activate -- and getting it wrong shows up as a refcount that
+// never reaches zero or a QueryInterface that recurses, neither of which a
+// single activation call would reveal.
+class DerivedApp final : public IInspectable {
+public:
+    IInspectable* inner = nullptr;
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        if (IsEqualGUID(iid, IID_IUnknown) || IsEqualGUID(iid, openxaml::iid::IInspectable)) {
+            *object = static_cast<IInspectable*>(this);
+            AddRef();
+            return S_OK;
+        }
+        // Everything this fake derived class does not implement itself is the
+        // base class's, which is exactly what the inner resolves.
+        return inner ? inner->QueryInterface(iid, object) : E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++references; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = --references;
+        if (remaining == 0 && inner) {
+            IInspectable* dying = inner;
+            inner = nullptr;
+            dying->Release();
+        }
+        return remaining;
+    }
+    HRESULT STDMETHODCALLTYPE GetIids(ULONG*, IID**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING* name) override {
+        return WindowsCreateString(L"OpenXaml.Smoke.DerivedApp", 25, name);
+    }
+    HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel* level) override {
+        if (!level) return E_POINTER;
+        *level = BaseTrust;
+        return S_OK;
+    }
+
+    ULONG references = 1;
+};
+
 int main() {
     if (FAILED(RoInitialize(RO_INIT_SINGLETHREADED))) return 1;
     int failures = 0;
@@ -300,6 +348,100 @@ int main() {
         check(SUCCEEDED(durations->Equals(automatic, forever, &same)) && !same,
               "DurationHelper.Equals separates Automatic from Forever");
         durations->Release();
+    }
+
+    // Application, composed the way a derived App composes it.
+    auto* applications = Statics<wux::IApplicationStatics>(
+        L"Windows.UI.Xaml.Application",
+        openxaml::iid::Windows_UI_Xaml_IApplicationStatics);
+    check(applications != nullptr, "Application statics");
+    if (applications) {
+        wux::IApplication* before = reinterpret_cast<wux::IApplication*>(1);
+        check(SUCCEEDED(applications->get_Current(&before)) && before == nullptr,
+              "Application.Current is null before one is made");
+
+        wux::IApplicationFactory* composer = nullptr;
+        check(SUCCEEDED(applications->QueryInterface(
+                  openxaml::iid::Windows_UI_Xaml_IApplicationFactory,
+                  reinterpret_cast<void**>(&composer))),
+              "Application composable factory");
+        if (composer) {
+            DerivedApp app;
+            wux::IApplication* base = nullptr;
+            check(SUCCEEDED(composer->CreateInstance(&app, &app.inner, &base)) &&
+                      app.inner != nullptr && base != nullptr,
+                  "Application composition");
+            // CreateInstance handed back one reference on the aggregate, so
+            // the derived object's count is two: its own and that one.
+            check(app.references == 2, "Application composition counts the aggregate");
+
+            if (base) {
+                // The composed base is the same COM identity as the derived
+                // object: asking the base for the derived object's own
+                // interface has to come back to the derived object.
+                IInspectable* identity = nullptr;
+                check(SUCCEEDED(base->QueryInterface(openxaml::iid::IInspectable,
+                                                     reinterpret_cast<void**>(&identity))) &&
+                          identity == static_cast<IInspectable*>(&app),
+                      "Application composition is one identity");
+                if (identity) identity->Release();
+
+                // A base interface reached through the derived object, which
+                // is the path C++/WinRT's app.as<IApplication3>() takes.
+                wux::IApplication3* three = nullptr;
+                check(SUCCEEDED(app.QueryInterface(
+                          openxaml::iid::Windows_UI_Xaml_IApplication3,
+                          reinterpret_cast<void**>(&three))),
+                      "Application3 through the aggregate");
+                if (three) {
+                    wux::ApplicationHighContrastAdjustment adjustment =
+                        wux::ApplicationHighContrastAdjustment_None;
+                    check(SUCCEEDED(three->get_HighContrastAdjustment(&adjustment)) &&
+                              adjustment == wux::ApplicationHighContrastAdjustment_Auto,
+                          "HighContrastAdjustment defaults to Auto");
+                    check(SUCCEEDED(three->put_HighContrastAdjustment(
+                              wux::ApplicationHighContrastAdjustment_None)),
+                          "HighContrastAdjustment setter");
+                    check(SUCCEEDED(three->get_HighContrastAdjustment(&adjustment)) &&
+                              adjustment == wux::ApplicationHighContrastAdjustment_None,
+                          "HighContrastAdjustment round-trip");
+                    three->Release();
+                }
+
+                wux::IApplication* current = nullptr;
+                check(SUCCEEDED(applications->get_Current(&current)) && current != nullptr,
+                      "Application.Current after composition");
+                if (current) {
+                    IInspectable* same = nullptr;
+                    check(SUCCEEDED(current->QueryInterface(
+                              openxaml::iid::IInspectable, reinterpret_cast<void**>(&same))) &&
+                              same == static_cast<IInspectable*>(&app),
+                          "Application.Current is the composed application");
+                    if (same) same->Release();
+                    current->Release();
+                }
+
+                // Only one application per process, as the published core
+                // enforces.
+                DerivedApp second;
+                wux::IApplication* refused = nullptr;
+                check(composer->CreateInstance(&second, &second.inner, &refused) ==
+                              E_UNEXPECTED &&
+                          second.inner == nullptr,
+                      "a second Application is refused");
+
+                base->Release();
+            }
+            check(app.references == 1, "Application composition released the aggregate");
+            composer->Release();
+            // Letting `app` die releases the inner, which is the whole
+            // aggregate; Application.Current goes back to null with it.
+            app.Release();
+            wux::IApplication* after = reinterpret_cast<wux::IApplication*>(1);
+            check(SUCCEEDED(applications->get_Current(&after)) && after == nullptr,
+                  "Application.Current is null again once the application dies");
+        }
+        applications->Release();
     }
 
     RoUninitialize();

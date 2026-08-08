@@ -46,6 +46,12 @@ Windows.UI.Xaml.Controls.IGridStatics
 Windows.UI.Xaml.Controls.Primitives.ILayoutInformationStatics
 Windows.UI.Xaml.IDurationHelperStatics
 
+Windows.UI.Xaml.IApplication
+Windows.UI.Xaml.IApplication2
+Windows.UI.Xaml.IApplication3
+Windows.UI.Xaml.IApplicationFactory
+Windows.UI.Xaml.IApplicationStatics
+
 # Parameterized collection interfaces, named by the mangled name the SDK's
 # generated headers give each specialization. Their IIDs are computed from the
 # type signature rather than declared, so they come from the headers, not the

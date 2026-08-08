@@ -93,6 +93,9 @@ RUNTIME_CLASSES = [
     # Not a control either, and not activatable: a static-only class holding
     # the operations Windows.UI.Xaml.Duration cannot carry itself.
     "Windows.UI.Xaml.DurationHelper",
+    # Composable rather than activatable. A host derives its own App from this
+    # one, so what the caller reaches is IApplicationFactory::CreateInstance.
+    "Windows.UI.Xaml.Application",
 ]
 
 

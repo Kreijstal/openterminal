@@ -62,3 +62,11 @@ ABI::Windows::UI::Xaml::Controls::Primitives::ILayoutInformationStatics
 # Duration live on a static-only runtime class beside it. Terminal calls this
 # one before main: a file-scope Duration in Pane.cpp is built from a TimeSpan.
 ABI::Windows::UI::Xaml::IDurationHelperStatics
+
+# The application object. Terminal's App derives from Application, so the
+# factory's CreateInstance is what builds it -- composition, not activation.
+ABI::Windows::UI::Xaml::IApplication
+ABI::Windows::UI::Xaml::IApplication2
+ABI::Windows::UI::Xaml::IApplication3
+ABI::Windows::UI::Xaml::IApplicationFactory
+ABI::Windows::UI::Xaml::IApplicationStatics
