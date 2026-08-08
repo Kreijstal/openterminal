@@ -96,18 +96,26 @@ void Primitives() {
                         "</Border.Width></Border>"),
                60.0);
 
-    // The widening the resource path already commits to, reached the other way.
-    ChildWidth("an x:Int32 widens into a Double property",
-               Document("Border", "",
-                        "<Border Height=\"30\"><Border.Width><x:Int32>60</x:Int32>"
-                        "</Border.Width></Border>"),
-               60.0);
-
     ChildWidth("XAML trims the whitespace an indented primitive is written with",
                Document("Border", "",
                         "<Border Height=\"30\"><Border.Width><x:Double>\n  60\n  </x:Double>"
                         "</Border.Width></Border>"),
                60.0);
+
+    // There is no widening. L5-xprimitives-int32-width is recorded as a load
+    // failure -- the runtime refused it with 0x802b000a -- so an Int32 does not
+    // reach a Double property even though every value it can hold would fit.
+    // Its Integer properties are a different question and are answered the
+    // other way: L5-resources-int32-attached measures an x:Int32 into
+    // Grid.Column and Grid.ColumnSpan.
+    Rejects("an x:Int32 does not satisfy a Width",
+            Document("Border", "",
+                     "<Border Height=\"30\"><Border.Width><x:Int32>60</x:Int32>"
+                     "</Border.Width></Border>"),
+            "<x:Int32> cannot supply 'Width'");
+
+    ChildWidth("and the same value written as an attribute is still a Double",
+               Document("Border", "", "<Border Height=\"30\" Width=\"60\"/>"), 60.0);
 
     // The check that makes this more than text substitution.
     Rejects("an x:String does not satisfy a Width",

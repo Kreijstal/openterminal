@@ -108,10 +108,10 @@ add_executable(error_hygiene_test tests/error_hygiene_test.cpp)
 target_include_directories(error_hygiene_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../harness)
 add_test(NAME error_hygiene COMMAND error_hygiene_test)
 
-# What a directive does, and what it refuses to do. A deferred element measures
-# nothing by definition, so the corpus cannot hold this to anything: "the
-# element is absent" and "the element is there but zero-sized" produce different
-# trees, and only a test can say which one this is.
+# What a directive does, and what it refuses to do. The corpus settled deferral
+# -- a runtime load ignores x:Load and realises the element -- but it cannot
+# settle a refusal, and the refusals are most of this file: markup that fails to
+# load has no measurement to compare against.
 add_executable(xdirective_tests
     tests/xdirectives_test.cpp
     src/markup.cpp

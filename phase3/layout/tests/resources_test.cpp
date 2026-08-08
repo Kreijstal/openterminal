@@ -150,10 +150,15 @@ void Types() {
                          "<Border Grid.Column=\"{StaticResource Column}\"/>"),
             "cannot supply 'Grid.Column'");
 
-    // The one conversion XAML does make on the way into a property.
-    Loads("an Int32 widens to a Double",
-          Document("Border", "",
-                   Resources("Border", "<x:Int32 x:Key=\"BoxWidth\">60</x:Int32>") + kUse));
+    // Neither does an Int32 narrow to a Double, which is the conversion this
+    // used to make. L5-xprimitives-int32-width records the runtime refusing an
+    // x:Int32 written into Width (0x802b000a), so there is no widening on the
+    // way into a property in either spelling -- the reference here or the
+    // property element the x-directive tests cover.
+    Rejects("an Int32 does not widen into a Double property",
+            Document("Border", "",
+                     Resources("Border", "<x:Int32 x:Key=\"BoxWidth\">60</x:Int32>") + kUse),
+            "cannot supply 'Width'");
 
     Rejects("a resource type outside the implemented set",
             Document("Border", "",

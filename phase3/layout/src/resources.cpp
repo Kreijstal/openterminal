@@ -61,13 +61,15 @@ const std::map<std::string, ValueKind>& ResourceTypes() {
 }
 
 // Whether a resource of `have` can be assigned to a property that wants `want`.
+//
+// Exact, in both directions. The obvious exception -- an Int32 widening into a
+// Double, since every value it can hold fits -- is not one the runtime makes:
+// L5-xprimitives-int32-width writes <x:Int32>60</x:Int32> into Width and is
+// recorded as a load failure (0x802b000a). An Int32 into an Int32 property is
+// fine and measured, by L5-resources-int32-attached.
 bool Assignable(ValueKind have, ValueKind want) {
     if (want == ValueKind::Unknown) return true;
-    if (have == want) return true;
-    // An Int32 widens to a Double, which is the one conversion XAML performs on
-    // the way into a property. It does not go the other way: WinUI rejects a
-    // Double handed to an Int32 property rather than truncating it.
-    return have == ValueKind::Integer && want == ValueKind::Number;
+    return have == want;
 }
 
 }  // namespace
