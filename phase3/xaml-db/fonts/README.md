@@ -44,13 +44,17 @@ exactly the reason a metric would — the font being serviced.
 
 ## The icon fonts
 
-Three families are harvested, not one:
+Four families are harvested, not one:
 
-| family | file on the runner | codepoints asked for |
+| family | file read | codepoints asked for |
 |---|---|---|
-| Segoe UI | `segoeui.ttf` | U+0020–U+007E, the corpus's text |
-| Segoe MDL2 Assets | `segmdl2.ttf` | the 44 glyphs Terminal's markup names |
-| Segoe Fluent Icons | `SegoeIcons.ttf` | the same 44 |
+| Segoe UI | `segoeui.ttf` on the runner | U+0020–U+007E, the corpus's text |
+| Segoe MDL2 Assets | `segmdl2.ttf` on the runner | the 44 glyphs Terminal's markup names |
+| Segoe Fluent Icons | `SegoeIcons.ttf` on the runner | the same 44 |
+| Cascadia Mono | `res/fonts/CascadiaMono.ttf` in the Terminal checkout | U+0020–U+007E |
+
+The last of those is not an icon font and is [its own
+section](#the-fourth-family-which-terminal-ships-itself) below.
 
 A `FontIcon`'s size is a glyph measured in an icon font, and fifteen level 7
 cases are one `FontIcon` each — every one of them blocked on these numbers
@@ -83,6 +87,27 @@ unweighted glyph is 10 and 14. More than one rule reproduces both — a whole DI
 a twenty-fourth of the em, two percent of it — so two observations do not pin it.
 A third size, or a harvest of the bold face, would.
 
+The third size is now asked for. Five `L4-icon-rule-mdl2-*` cases were added for
+it, and they are the only thing in this directory that has never been measured:
+
+| case | a whole DIP | a twenty-fourth | two per cent |
+|---|---:|---:|---:|
+| `mdl2-weight-100` | 101 | 104.17 | 102 |
+| `mdl2-weight-200` | 201 | 208.33 | 204 |
+
+Three distinct answers at each size, whichever way a fraction becomes a whole
+number, and two sizes rather than one so the surviving rule is confirmed instead
+of fitted. `mdl2-plain-100` and `mdl2-plain-200` measure the same glyph with no
+weight beside them, so the difference is read off two recordings rather than off
+this harvest's claim that the glyph is exactly one em wide. `mdl2-bold-100` asks
+the other half of it: Bold is 700 where Black is 900, so a rule that scales with
+the weight answers differently there and a rule that does not, does not.
+
+Until that run happens the refusal in [`icon.cpp`](../../layout/src/icon.cpp)
+stands, and the committed digest still records 147 level 4 cases against the 152
+the generator now emits — which is the corpus growing, and trips the digest gate
+on purpose. See [the database README](../README.md#using-the-measurements).
+
 Two things work differently for an icon font, and both are deliberate:
 
 **A missing glyph is a finding, not a failure.** The two icon families do not
@@ -110,6 +135,40 @@ To fill this directory in locally:
 
 and pass that to `measure_cases` as its third argument, or copy it here, which
 is where `measure_cases` looks by default.
+
+## The fourth family, which Terminal ships itself
+
+`L7-terminal-4edb490008` is a `ScrollViewer` around
+`<TextBlock FontFamily="Cascadia Mono"/>`, and the layout core used to refuse all
+three sizes of it with
+
+    no harvested metrics for the font family "Cascadia Mono"
+
+The oracle answered anyway, so the first thing to rule out is that the runner did
+not have the font either and the runtime fell back to one that *is* harvested. It
+did not. The `TextBlock` is empty, so its recorded height is one line box, and
+the recording says 16.2695 at font size 14 — a ratio of 1.162109. None of the
+three families above is anywhere near it:
+
+| family | line box ÷ em | at 14 |
+|---|---:|---:|
+| Segoe UI | 1.330078 | 18.6211 |
+| Segoe MDL2 Assets | 1.0 | 14 |
+| Segoe Fluent Icons | 1.0 | 14 |
+| **what was recorded** | **1.162109** | **16.2695** |
+
+1.162109 is 2380 ÷ 2048, and `res/fonts/CascadiaMono.ttf` in the Terminal
+checkout the level 7 cases are harvested from reads `hhea` 1900 / −480 at
+2048 units per em: 2380, to the digit. So the runtime measured in Cascadia Mono,
+and the only thing missing was a reading of a font file that the pinned checkout
+already contains.
+
+So it is read, from that checkout rather than from the runner image — the file
+the recording matches is the one Terminal ships, and its identity travels with
+the commit the whole level 7 harvest is pinned to. Nothing is solved out of the
+measurement: the recording is what the harvest is then checked against, and with
+the metrics in place the case reproduces every number in it, not only the line
+box that identified the font.
 
 ## The derived two, which are
 
