@@ -20,6 +20,10 @@
 #include "fonts.h"
 #include "json.h"
 #include "markup.h"
+// Walk and the number formatting live in a header because xbf_equivalence has
+// to format identically to this: it diffs the two markup paths, and a diff that
+// could be about formatting would be no gate at all.
+#include "measure_report.h"
 #include "resources.h"
 #include "resw_strings.h"
 #include "text.h"
@@ -34,45 +38,6 @@ std::string Slurp(const fs::path& path) {
     std::ostringstream buffer;
     buffer << in.rdbuf();
     return buffer.str();
-}
-
-// Fixed precision rather than shortest-round-trip, so two runs compare
-// byte-for-byte and a diff is readable.
-std::string Number(double value) {
-    if (std::isinf(value)) return "\"Infinity\"";
-    if (std::isnan(value)) return "\"NaN\"";
-    std::ostringstream out;
-    out << std::fixed << std::setprecision(4) << value;
-    return out.str();
-}
-
-// JSON cannot spell infinity, so the corpus carries it as a string.
-double ReadExtent(const JsonValue& value) {
-    if (value.kind == JsonValue::Kind::String) {
-        if (value.string == "Infinity") return kInfinity;
-        throw JsonError("unexpected available_size value \"" + value.string + "\"");
-    }
-    if (value.kind != JsonValue::Kind::Number) throw JsonError("available_size is not a number");
-    return value.number;
-}
-
-void Walk(const Element& element, const std::string& path, std::vector<std::string>& out) {
-    const Size desired = element.desired_size();
-    const Size actual = element.render_size();
-    const Rect slot = element.layout_slot();
-
-    std::ostringstream line;
-    line << "  {\"path\": \"" << JsonEscape(path) << "\""
-         << ", \"type\": \"" << JsonEscape(element.TypeName()) << "\""
-         << ", \"desired\": [" << Number(desired.width) << ", " << Number(desired.height) << "]"
-         << ", \"actual\": [" << Number(actual.width) << ", " << Number(actual.height) << "]"
-         << ", \"offset\": [" << Number(slot.x) << ", " << Number(slot.y) << "]}";
-    out.push_back(line.str());
-
-    int index = 0;
-    for (const Element* child : element.RecordedChildren()) {
-        Walk(*child, path + "/" + child->TypeName() + "[" + std::to_string(index++) + "]", out);
-    }
 }
 
 }  // namespace
@@ -192,7 +157,7 @@ int main(int argc, char** argv) {
             // would be arranged differently and none of them would compare.
             root->Arrange({0.0, 0.0, std::isinf(available.width) ? desired.width : available.width,
                            std::isinf(available.height) ? desired.height : available.height});
-            Walk(*root, "/" + root->TypeName(), tree);
+            WalkTree(*root, "/" + root->TypeName(), tree);
         } catch (const std::exception& e) {
             error = e.what();
         }

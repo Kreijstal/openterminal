@@ -498,6 +498,101 @@ Two checks need no oracle at all, and run from a bare checkout:
 files, so the two are directly diffable. A single `g++ -std=c++17 src/*.cpp`
 also works if CMake is not worth the trouble.
 
+## XBF: loading a compiled page
+
+Terminal ships its UI as `.xbf`, not as `.xaml`. The text markup is a build
+input; what the shipped binary hands the runtime is the SDK XAML compiler's
+output. A runtime that reads only text therefore reads nothing the real
+application feeds it, and that is what `src/xbf.h` and `src/xbf_markup.h` are
+for.
+
+`xbf.cpp` is the format: the container, the six metadata tables, and the node
+stream. `xbf_markup.cpp` is what the node stream *means* — XBF is not a
+serialized tree but a recording of the calls the object writer made while the
+compiler walked the markup ("create this type, push a scope, set that property,
+pop"), so loading a page is replaying that recording. It is replayed back into
+the document it came from and handed to the same markup engine the text path
+uses, which is why nothing here can move a corpus number: the text path is not
+touched.
+
+Version 2.1 is implemented and nothing else. It is what `genxbf.dll` from
+Windows SDK 10.0.26100.0 emits for WinUI 2.8.4 consumption, and it is the only
+version this reader has ever seen output from; 2.0, for instance, does not
+null-terminate its metadata strings, so accepting it would mis-read every string
+in the file. Other versions are refused by number.
+
+### The gate
+
+The same markup can reach the runtime both ways, and the corpus is ~1090
+documents whose layout is already verified against recorded oracle
+measurements. So the loader is held to producing *byte-identical* measurements
+to the text path over every case the real compiler accepts:
+
+    python3 -B phase3/scripts/generate_cases.py
+    cmake -S phase3/layout -B /tmp/layout-build -DCMAKE_BUILD_TYPE=Release
+    cmake --build /tmp/layout-build
+    python3 -B phase4/scripts/xbf_equivalence.py --tool /tmp/layout-build/xbf_equivalence
+
+That needs the harvested SDK compiler under Wine — `phase2/scripts/
+build_winui_xaml.py` puts it, and the MSBuild project this reuses, under `/tmp`.
+No `.xbf` is ever committed; they are produced under `/tmp` and thrown away.
+
+There is no new expectation anywhere in that gate. It cannot be satisfied by
+agreeing with a number someone wrote down, only by decoding the format
+correctly, and a case the compiler *rejects* is recorded with the compiler's own
+error rather than skipped.
+
+`phase3/layout/tests/xbf_test.cpp` covers what the gate structurally cannot: a
+malformed file is not something `genxbf` produces, so rejecting one has to be
+tested against a fixture. That fixture is assembled byte by byte in the test
+with a comment on every field, and when the compiled corpus is present the test
+checks it against the compiler's actual output for the same markup instead of
+believing it.
+
+### What the format says that the markup does not
+
+Two things the reconstruction has to get right that are easy to assume away, and
+both were found by the gate rather than reasoned out:
+
+* `<TextBlock>x</TextBlock>` and `<TextBlock Text="x"/>` are *not* the same
+  node stream. The first pushes a string and adds it to `TextBlock.Inlines`;
+  the second sets `TextBlock.Text`. The format keeps the distinction the corpus
+  measures, which was not obvious in advance.
+* Order is load-bearing. `<Border.Resources>` followed by
+  `<Border.Width>{StaticResource …}</Border.Width>` resolves and the same two
+  written the other way round does not — the corpus has both, one measuring and
+  one failing by name. So an assignment recorded after a property element is
+  written back as a property element, not hoisted onto the tag.
+
+### Where it stops, and why that is the next wave's work list
+
+Terminal's own 40 compiled pages all parse as containers and decode most of
+their node streams, and every one of them then stops at a named boundary rather
+than a guess. Those names are the work list:
+
+| boundary | pages | what it is |
+|---|---:|---|
+| `SetConnectionId` | 22 | `x:Bind` and event handlers, which need code-behind |
+| `CheckPeerType` | 4 | the page asserts its `x:Class` peer exists |
+| `DeferredElement v3` custom writer | 4 | `x:Load` deferral |
+| `VisualStateGroupCollection v5` custom writer | 2 | visual states, deferred |
+| a `Style` setter whose value lives in a deferred sub-stream | 1 | realising a value from the middle of a stream |
+| `GetResourcePropertyBag` | 1 | `x:Uid`, which needs a resource map |
+| a type only TerminalApp's metadata provider defines | 1 | `HighlightedTextControl` |
+| a stable index this runtime has no type for | 5 | `UserControl`, `ContentDialog` and friends |
+
+    python3 -B phase4/scripts/xbf_terminal_pages.py --tool /tmp/layout-build/xbf_dump
+
+prints that table from whatever `phase2/scripts/build_winui_xaml.py` last built.
+
+Two custom writers *are* decoded, because the corpus needs them: a deferred
+`ResourceDictionary` (v3) and a deferred `Style` (v1/v2). The rest are named and
+refused. `src/xbf_names.cpp` holds the stable index table, hand-transcribed for
+exactly the indexes the corpus and Terminal's pages use — copying all ~1800
+types and ~2900 properties out of the published header would be committing a
+generated file under another name, and an index that is not in the table is
+refused *by number*, which is a fact rather than a guess.
+
 ## What it is a port of
 
 `FrameworkElement`'s `MeasureCore`/`ArrangeCore`, and `Border`, `StackPanel` and
