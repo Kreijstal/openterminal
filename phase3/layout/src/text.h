@@ -8,6 +8,7 @@
 #define OPENXAML_TEXT_H
 
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -40,13 +41,20 @@ struct FontMetrics {
     // the pair. Absent means zero: a font with no kerning at all and a pair the
     // font does not kern are the same thing to a measurement.
     std::map<std::pair<char32_t, char32_t>, double> kerning;
+    // The subset the runtime applies wherever the pair occurs, which is the
+    // subset the font's GPOS carries. The rest -- pairs only the legacy `kern`
+    // table has -- move the run's first pair and nothing else. See rule 5 in
+    // text.cpp for the recordings that split them.
+    std::set<std::pair<char32_t, char32_t>> kerns_anywhere;
     FontProvenance provenance = FontProvenance::Harvested;
 
     // Baseline to baseline, which is what a line of text occupies.
     double LineSpacing() const { return ascender - descender + line_gap; }
 
-    double PairAdjustment(char32_t left, char32_t right) const {
-        const auto found = kerning.find({left, right});
+    double PairAdjustment(char32_t left, char32_t right, bool first_in_run) const {
+        const std::pair<char32_t, char32_t> pair{left, right};
+        if (!first_in_run && !kerns_anywhere.count(pair)) return 0.0;
+        const auto found = kerning.find(pair);
         return found == kerning.end() ? 0.0 : found->second;
     }
 };
@@ -68,8 +76,7 @@ public:
     // it, so the failure is "no advance for U+xxxx" and not "no such family".
     const FontMetrics* FindForText(const std::string& family, const std::string& text) const;
     // Replaces one family's pair adjustments, leaving its advances alone.
-    // False when no such family is loaded. See LoadImpliedKerning in fonts.h
-    // for why the two halves arrive separately.
+    // False when no such family is loaded.
     bool SetKerning(const std::string& family,
                     std::map<std::pair<char32_t, char32_t>, double> pairs);
     bool empty() const { return fonts_.empty(); }
@@ -112,6 +119,19 @@ public:
         SetValue(FontFamilyProperty(), std::move(value));
     }
 
+    // Whether the face the text asked for has to be simulated because the
+    // family only ships one weight. Not a dependency property: FontWeight is
+    // declared on the elements that have one, and what reaches the shaper is
+    // the decision they made about it. See icon.cpp.
+    void set_simulates_bold(bool value) { simulates_bold_ = value; }
+
+    // Whether the text arrived through the Text property rather than as inline
+    // content. The two are not the same measurement -- see rule 7 in text.cpp,
+    // which is what the L4-source twins were authored to find out. Inline
+    // content is the default because that is what everything building a
+    // TextBlock from a Content value is doing.
+    void set_text_from_property(bool value) { text_from_property_ = value; }
+
     static const DependencyProperty& TextProperty();
     static const DependencyProperty& TextWrappingProperty();
 
@@ -122,6 +142,9 @@ protected:
 private:
     // Lays the text out into `limit` DIPs of width and returns what it fills.
     Size LayoutText(double limit) const;
+
+    bool simulates_bold_ = false;
+    bool text_from_property_ = false;
 };
 
 // Thrown when a family is not in the library, or the text uses a codepoint the

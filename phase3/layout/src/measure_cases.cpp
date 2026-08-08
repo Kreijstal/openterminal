@@ -78,48 +78,28 @@ void Walk(const Element& element, const std::string& path, std::vector<std::stri
 }  // namespace
 
 int main(int argc, char** argv) {
-    // Pulled out of the positional list before anything else, because the rest
-    // of the command line matches the oracle probe's and this does not: the
-    // probe measures with the real runtime and has no metrics to be told about.
-    //
-    // It is a separate input rather than another file in the fonts directory
-    // because it is a different kind of claim. A harvest says what is in the
-    // font; this says which of those pairs the runtime was recorded applying,
-    // which only the measurements know. See phase3/xaml-db/fonts/README.md.
-    std::string implied_kerning;
-    std::vector<std::string> positional;
-    for (int index = 0; index < argc; ++index) {
-        const std::string argument = argv[index];
-        if (argument == "--kerning" && index + 1 < argc) {
-            implied_kerning = argv[++index];
-            continue;
-        }
-        positional.push_back(argument);
-    }
-    argc = static_cast<int>(positional.size());
-
     if (argc < 3) {
         std::cerr << "usage: measure_cases <cases-dir> <out-dir> [fonts-dir] [theme-resources]"
-                     " [strings.json] [--kerning <derived-metrics.json>]\n";
+                     " [strings.json]\n";
         return 2;
     }
-    const fs::path cases = positional[1];
-    const fs::path out_dir = positional[2];
+    const fs::path cases = argv[1];
+    const fs::path out_dir = argv[2];
     // Harvested font metrics sit beside the corpus, so the default needs no
     // argument and the layout of the database stays the only thing to know.
-    const fs::path fonts = argc >= 4 ? fs::path(positional[3]) : cases.parent_path() / "fonts";
+    const fs::path fonts = argc >= 4 ? fs::path(argv[3]) : cases.parent_path() / "fonts";
     // The application dictionary, on the same convention: generated output that
     // sits beside the corpus. Absent on a bare checkout, which is not an error
     // -- every lookup that needed it then fails naming its key.
     const fs::path theme_resources =
-        argc >= 5 ? fs::path(positional[4]) : cases.parent_path() / "theme-resources";
+        argc >= 5 ? fs::path(argv[4]) : cases.parent_path() / "theme-resources";
     // The x:Uid table, distilled out of a Terminal checkout's .resw files. No
     // default, unlike the fonts and the dictionary: the oracle probe has no
     // resource map, so a run that silently found a table would measure markup
     // the oracle cannot, and every x:Uid case would disagree for a reason
     // nothing reported. Last of the three because it is the only one with no
     // default, so nothing has to be spelled out to skip it.
-    const fs::path strings_file = argc >= 6 ? fs::path(positional[5]) : fs::path();
+    const fs::path strings_file = argc >= 6 ? fs::path(argv[5]) : fs::path();
 
     if (!fs::exists(cases)) {
         std::cerr << "no such directory: " << cases.string() << "\n";
@@ -150,21 +130,6 @@ int main(int argc, char** argv) {
         return 4;
     }
     std::cerr << "font metrics loaded: " << loaded << " from " << fonts.string() << "\n";
-
-    // Fatal when it was asked for and does not work, unlike the metrics
-    // themselves: naming a file is a statement that these measurements need it,
-    // and carrying on without it would measure every kerned run wrongly.
-    if (!implied_kerning.empty()) {
-        try {
-            const int pairs = LoadImpliedKerning(FontLibrary::Default(), implied_kerning);
-            std::cerr << "implied kerning: " << pairs << " pair(s) from " << implied_kerning
-                      << "\n";
-        } catch (const std::exception& e) {
-            std::cerr << "cannot load implied kerning from " << implied_kerning << ": " << e.what()
-                      << "\n";
-            return 4;
-        }
-    }
 
     // Same rule, and for the same reason: a database that is there but
     // unreadable is one fault, not one per case that looks up a key.

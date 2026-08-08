@@ -40,8 +40,61 @@ namespace {
 //    lands 1/300 of a DIP away at size 12, and the corpus records the first.
 //    Which pairs a font moves is harvested from it, not decided here.
 //
-// All 72 L4 cases agree with these rules on every number that does not depend
-// on a per-character advance.
+// 5. Which pairs move a run depends on where the font keeps them. A pair the
+//    font's GPOS carries moves the run wherever it occurs; a pair only the
+//    legacy `kern` table has moves the run's *first* pair and nothing else.
+//    The L4-kern series is what forced this, and the split falls exactly along
+//    the two tables:
+//
+//      * measured on its own, every one of twelve pairs moved by what the font
+//        says -- Te Ta To Wa Ya from GPOS, and ry vo yo ox rm ro ve, which
+//        only the legacy table has. So the runtime ignores no pair outright.
+//      * "Term" is short by Te and not by rm, and "Terminal" and the pangram
+//        agree: ro, ox, ve and rm never move anything away from the front.
+//        All four are legacy-only.
+//      * but "{StaticResource NotAKey}" is short by 153 units, which is
+//        St + Re + Ke at indices 1, 7 and 20 -- three GPOS pairs, deep in the
+//        run -- while rc at index 12, the one legacy-only pair it contains,
+//        does not move it.
+//
+//    Where the two tables disagree the GPOS value is the one measured, on all
+//    five pairs that disagree. What the corpus cannot say is why the legacy
+//    table is consulted at the front of a run at all: "the first pair" and
+//    "a run of exactly two glyphs" fit every recording equally, because no
+//    recorded run of three or more begins with a legacy-only pair. See
+//    phase3/xaml-db/fonts/README.md.
+//
+// 6. A weight the family does not ship is simulated, and the simulation adds
+//    a fixed fraction of the em to every advance. The fraction does not depend
+//    on how much heavier the weight asked for was: at size 100 a plain icon
+//    glyph is 100 wide and Bold and Black are both 103.
+//
+//    What the corpus does *not* do is pin the fraction. Black is 103 at 100,
+//    205 at 200 and 15 at 14, which bounds it to (0.02, 0.025] of the em --
+//    and no tighter, because a FontIcon's desired width is a ceiling, so every
+//    value in that interval produces those same three integers. The three
+//    rules the earlier two sizes admitted are all dead: a whole DIP gives
+//    101/201, a twenty-fourth of the em 104.17/208.33, two per cent 102/204.
+//    A TextBlock in an icon font at Black weight, written as Text= so the
+//    recording keeps the unsnapped width, would settle it.
+//
+// 7. The snap in rule 1 is inline content's alone. Text set through the Text
+//    property keeps the unsnapped metrics, glyph by glyph and in the line
+//    height too. The L4-source twins were authored to ask whether the two
+//    spellings are the same thing and the answer is that they are not:
+//
+//        <TextBlock Text="M"/>        12.5713 wide, 18.6211 tall
+//        <TextBlock>M</TextBlock>     12.57 wide,   18.62 tall
+//
+//    and the same split at "Terminal" (52.042 against 52.04) and at
+//    "{StaticResource NotAKey}" (156.2285 against 156.2167), which is where it
+//    stops being a rounding curiosity: by then the accumulated difference is
+//    wider than the corpus's tolerance. Content becomes an implicit Run in the
+//    Inlines collection and the property does not, so the two are different
+//    text sources in the runtime; that they are also different arithmetic is
+//    the finding.
+//
+// Every recorded lone-TextBlock case agrees with these rules.
 
 inline constexpr double kTextUnitsPerDip = 300.0;
 
@@ -126,13 +179,20 @@ std::string Describe(char32_t code) {
     return buffer;
 }
 
+// What simulating a bold face adds to every advance, as a fraction of the em.
+// See rule 6: the recordings bound it to (0.02, 0.025] and no further, and
+// every value in that interval produces the same number for every case the
+// corpus has, so which one is written here is not observable here.
+inline constexpr double kBoldSimulationEm = 0.025;
+
 // A pair adjustment joins the first glyph's advance in design units and snaps
 // with it, rather than snapping on its own and being added afterwards. The
 // corpus separates the two: Segoe UI kerns T before e by -200 units, and at
 // size 12 "Terminal" measures 44.6133, which is the first rule. Snapping the
 // -200 alone gives 44.61.
 std::vector<Glyph> Shape(const std::string& text, const std::string& family,
-                         const FontMetrics& font, double font_size) {
+                         const FontMetrics& font, double font_size, bool simulates_bold,
+                         bool snaps) {
     const std::vector<char32_t> codes = DecodeUtf8(text);
     std::vector<Glyph> glyphs;
     for (size_t index = 0; index < codes.size(); ++index) {
@@ -161,11 +221,16 @@ std::vector<Glyph> Shape(const std::string& text, const std::string& family,
                             "a FontFamily names and this corpus harvests only those");
         }
         const double pair = index + 1 < codes.size()
-                                ? font.PairAdjustment(code, codes[index + 1])
+                                ? font.PairAdjustment(code, codes[index + 1], index == 0)
                                 : 0.0;
+        // The emboldening is a pen width, so it is a fraction of the em rather
+        // than of the glyph. Every recorded case is one em wide, which is where
+        // the two readings coincide -- see rule 6.
+        const double embolden = simulates_bold ? kBoldSimulationEm * font.units_per_em : 0.0;
         Glyph glyph;
         glyph.code = code;
-        glyph.advance = SnapText((found->second + pair) * font_size / font.units_per_em);
+        const double advance = (found->second + pair + embolden) * font_size / font.units_per_em;
+        glyph.advance = snaps ? SnapText(advance) : advance;
         glyph.space = IsBreakSpace(code);
         glyphs.push_back(glyph);
     }
@@ -363,11 +428,15 @@ Size TextBlock::LayoutText(double limit) const {
     // records both: 15.9609 empty against 15.96 with text, at size 12.
     if (content.empty()) return {0.0, AsFloat(spacing)};
 
-    const std::vector<Glyph> glyphs = Shape(content, family, *font, size);
+    // Rule 7: text set through the Text property keeps the unsnapped
+    // metrics, inline content gets the snapped ones.
+    const bool snaps = !text_from_property_;
+    const std::vector<Glyph> glyphs =
+        Shape(content, family, *font, size, simulates_bold_, snaps);
     const double effective_limit = text_wrapping() == TextWrapping::Wrap ? limit : kInfinity;
     const std::vector<double> lines = BreakLines(glyphs, effective_limit);
 
-    const double line_height = SnapText(spacing);
+    const double line_height = snaps ? SnapText(spacing) : AsFloat(spacing);
     double width = 0.0;
     double height = 0.0;
     for (double line : lines) {

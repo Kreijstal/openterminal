@@ -469,8 +469,14 @@ void ApplyProperty(MarkupNode& node, const DependencyProperty& property,
     // The content property, so it can arrive as an attribute or as character
     // data between the tags. Both land in node.text, and BuildElement gives
     // the element whatever is there once the parse is done.
+    //
+    // Which of the two it was is remembered, because the runtime measures them
+    // differently: content becomes an implicit Run in the Inlines collection
+    // and the property does not, and the two are not the same arithmetic. See
+    // rule 7 in text.cpp.
     if (name == "Text") {
         node.text = value;
+        node.text_from_property = true;
         return;
     }
 
@@ -1110,6 +1116,9 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node, ObservableObject* 
         if (!node.children.empty())
             throw MarkupError("a TextBlock takes text, not child elements");
         if (!node.text.empty()) text->set_text(node.text);
+        // Which of the two spellings the markup used, because the runtime
+        // measures them differently -- see rule 7 in text.cpp.
+        text->set_text_from_property(node.text_from_property);
         element = std::move(text);
     } else if (node.type == "Page") {
         auto page = std::make_unique<Page>();

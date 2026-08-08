@@ -24,14 +24,14 @@ sys.path.insert(0, str(SCRIPT_DIRECTORY))
 
 from derive_font_metrics import (  # noqa: E402
     DerivationError, Sample, check_kerning, collect, derive, run_width,
-    solve_advances, solve_line_spacing, solve_pair_adjustments,
+    solve_advances, solve_line_spacing, solve_pairs,
 )
 
 # Segoe UI's, harvested. The pair solver needs advances it cannot itself derive
 # -- a word constrains their sum and not any one of them -- so it is given them,
 # which is exactly the direction the checked-not-trusted bargain runs in.
 SEGOE_UI_ADVANCES = {
-    ord(" "): 561, ord("T"): 1073, ord("a"): 1042, ord("b"): 1204, ord("c"): 946,
+    ord(" "): 561, ord("T"): 1073, ord("W"): 1913, ord("Y"): 1132, ord("a"): 1042, ord("b"): 1204, ord("c"): 946,
     ord("d"): 1206, ord("e"): 1071, ord("f"): 641, ord("g"): 1206, ord("h"): 1159,
     ord("i"): 496, ord("j"): 496, ord("k"): 1018, ord("l"): 496, ord("m"): 1764,
     ord("n"): 1159, ord("o"): 1200, ord("p"): 1204, ord("q"): 1206, ord("r"): 712,
@@ -114,11 +114,10 @@ class SolveFromRecordedTest(unittest.TestCase):
         self.assertEqual(derived["units_per_em"], 2048)
         self.assertEqual(hhea["ascender"] - hhea["descender"] + hhea["line_gap"], 2724)
         self.assertEqual(derived["advances"], {"77": 1839})
-        # The pair the recorded runs witness, and only that one. The font's own
-        # table has four more among these same characters and the recorded
-        # pangram shows the runtime did not apply them, which is why this list
-        # is committed here rather than read off the font.
-        self.assertEqual(derived["kerning"], {"84,101": -200})
+        # W and Y arrived with the L4-kern probes and the corpus still only
+        # ever measures them inside a pair, so they stay unsolved on purpose.
+        self.assertIn(87, derived["unsolved"])
+        self.assertIn(89, derived["unsolved"])
 
     def test_the_committed_file_is_labelled_as_not_harvested(self) -> None:
         # measure_cases and harvest_font_metrics both read this file. Nothing
@@ -129,143 +128,180 @@ class SolveFromRecordedTest(unittest.TestCase):
 
 
 class SolvePairsFromRecordedTest(unittest.TestCase):
-    """What the corpus says a pair of adjacent glyphs does to the advance.
+    """What the corpus says each pair of adjacent glyphs does to the advance.
 
-    This is the falsifiable half of the kerning rule. Nothing here reads a
-    font: it takes the advances the harvest found, asks which pair adjustment
-    reproduces every recorded run, and gets one answer. A harvest whose kern
-    table says something else fails the cross-check in CI, and that is the
-    point -- the number below is a statement about Segoe UI that the font
-    itself is allowed to contradict. It did: the runner's Segoe UI kerns four
-    more pairs among these very characters and the runtime applied none of
-    them. See KerningGateTest below.
+    These are the runner's real answers, written out as literals, and they are
+    the falsifiable half of the kerning rules: nothing here reads a font. It
+    takes the advances the harvest found, asks what each recorded
+    two-character run implies, and the values have to be the ones the font
+    turns out to carry.
     """
 
-    def samples(self) -> list[Sample]:
-        return [Sample(f"run-{index}", text, size, width, 0.0)
-                for index, ((text, size), width) in enumerate(RECORDED_RUNS.items())]
+    # Every isolated pair the L4-kern series recorded, at size 14, and what the
+    # runtime measured for it. Five come from Segoe UI's GPOS and seven only
+    # from its legacy kern table -- see PAIRS_BY_TABLE below.
+    RECORDED_PAIRS = {
+        "Te": 13.2867, "Ta": 12.8867, "To": 14.17, "Wa": 19.6533, "Ya": 13.63,
+        "ry": 12.2, "vo": 14.8267, "yo": 14.91, "ox": 14.46, "rm": 16.9,
+        "ro": 12.8867, "ve": 13.9433,
+        "nn": 15.8467, "wa": 17.24,          # the controls: no pair at all
+    }
+    EXPECTED = {
+        ("T", "e"): -200, ("T", "a"): -230, ("T", "o"): -200, ("W", "a"): -80,
+        ("Y", "a"): -180, ("r", "y"): 82, ("v", "o"): -12, ("y", "o"): -10,
+        ("o", "x"): -25, ("r", "m"): -4, ("r", "o"): -27, ("v", "e"): -12,
+    }
 
-    def test_one_pair_adjustment_explains_every_recorded_run(self) -> None:
-        self.assertEqual(solve_pair_adjustments(self.samples(), SEGOE_UI_ADVANCES, 2048),
-                         {("T", "e"): -200})
+    def samples(self):
+        return [Sample(f"L4-kern-{text}-14", text, 14.0, width, 0.0)
+                for text, width in self.RECORDED_PAIRS.items()]
 
-    def test_the_pangram_needs_no_adjustment_at_all(self) -> None:
-        # It is the corroboration: the same advances, summed the same way, land
-        # on the recorded number without any pair moving. So the 200 belongs to
-        # a pair "Terminal" has and it does not, rather than to the arithmetic.
-        pangram = [s for s in self.samples() if s.text == PANGRAM]
-        self.assertEqual(solve_pair_adjustments(pangram, SEGOE_UI_ADVANCES, 2048), {})
+    def test_every_recorded_pair_solves_to_one_integer(self) -> None:
+        self.assertEqual(solve_pairs(self.samples(), SEGOE_UI_ADVANCES, 2048),
+                         self.EXPECTED)
+
+    def test_a_pair_the_font_does_not_move_is_not_recorded(self) -> None:
+        # "nn" and "wa" measure the raw sum of their advances, so they solve to
+        # zero, and a zero is the absence of a pair rather than a finding.
+        solved = solve_pairs(self.samples(), SEGOE_UI_ADVANCES, 2048)
+        self.assertNotIn(("n", "n"), solved)
+        self.assertNotIn(("w", "a"), solved)
+
+    def test_a_pair_recorded_twice_at_different_values_is_refused(self) -> None:
+        samples = self.samples() + [Sample("contradiction", "Te", 14.0, 14.0, 0.0)]
+        with self.assertRaisesRegex(DerivationError, "contradict"):
+            solve_pairs(samples, SEGOE_UI_ADVANCES, 2048)
+
+    def test_a_longer_run_constrains_no_pair_on_its_own(self) -> None:
+        # It constrains the sum of everything in it, which is why the corpus
+        # grew a case per pair. Only the two-character runs are read.
+        only_words = [Sample("word", "Terminal", 14.0, 52.04, 0.0),
+                      Sample("pangram", PANGRAM, 14.0, 277.5133, 0.0)]
+        with self.assertRaisesRegex(DerivationError, "no recorded two-character run"):
+            solve_pairs(only_words, SEGOE_UI_ADVANCES, 2048)
 
     def test_the_adjustment_joins_the_advance_before_the_snap(self) -> None:
         # Snapping -200 on its own and adding it afterwards is a different
-        # computation, and at size 12 it lands 1/300 of a DIP away. The corpus
-        # records the first, which is why run_width folds it into the advance.
+        # computation, and at size 12 it lands 1/300 of a DIP away.
         kerned = run_width("Te", SEGOE_UI_ADVANCES, {("T", "e"): -200}, 2048, 12.0)
         separate = run_width("Te", SEGOE_UI_ADVANCES, {}, 2048, 12.0) + (
             round(-200 * 12.0 / 2048 * 300) / 300)
         self.assertNotAlmostEqual(kerned, separate, places=4)
+
+    def test_only_gpos_pairs_reach_past_the_front_of_a_run(self) -> None:
+        # "Terminal" is short by Te and not by rm, and rm is legacy-only.
+        gpos = {("T", "e")}
         self.assertAlmostEqual(
-            run_width("Terminal", SEGOE_UI_ADVANCES, {("T", "e"): -200}, 2048, 12.0),
-            44.6133, places=4)
+            run_width("Terminal", SEGOE_UI_ADVANCES,
+                      {("T", "e"): -200, ("r", "m"): -4}, 2048, 14.0, anywhere=gpos),
+            52.04, places=4)
+        # With rm allowed to reach, it lands 1/300 of a DIP low -- which is the
+        # difference the recording refuses.
+        self.assertAlmostEqual(
+            run_width("Terminal", SEGOE_UI_ADVANCES,
+                      {("T", "e"): -200, ("r", "m"): -4}, 2048, 14.0,
+                      anywhere=gpos | {("r", "m")}),
+            52.0133, places=4)
 
-    def test_a_run_that_needs_two_pairs_to_move_is_refused(self) -> None:
-        # One pair is the whole of what this can pin. A corpus that needed two
-        # has to say so rather than pick the pair it happens to try first.
-        samples = self.samples() + [
-            Sample("both", "Ta", 12.0,
-                   run_width("Ta", SEGOE_UI_ADVANCES, {("T", "a"): -150}, 2048, 12.0), 0.0)]
-        with self.assertRaisesRegex(DerivationError, "more than one pair"):
-            solve_pair_adjustments(samples, SEGOE_UI_ADVANCES, 2048)
+    def test_text_set_as_a_property_is_not_snapped(self) -> None:
+        # Rule 7. The same text, the same font, the same size, two spellings.
+        self.assertAlmostEqual(
+            run_width("Terminal", SEGOE_UI_ADVANCES, {("T", "e"): -200}, 2048, 14.0,
+                      snaps=True), 52.04, places=4)
+        self.assertAlmostEqual(
+            run_width("Terminal", SEGOE_UI_ADVANCES, {("T", "e"): -200}, 2048, 14.0,
+                      snaps=False), 52.042, places=4)
 
-    def test_a_run_with_an_unharvested_character_is_not_an_observation(self) -> None:
-        samples = self.samples() + [Sample("greek", "αβ", 12.0, 9.0, 0.0)]
-        self.assertEqual(solve_pair_adjustments(samples, SEGOE_UI_ADVANCES, 2048),
-                         {("T", "e"): -200})
-
-    def test_a_wrapped_run_says_nothing_about_its_pairs(self) -> None:
-        # A wrapped run's recorded width is its longest line, so the pairs that
-        # fell on another line are not in the number at all.
-        wrapped = [Sample("wrapped", "Terminal", 24.0, 57.61, 0.0, wraps=True)]
-        with self.assertRaisesRegex(DerivationError, "no unwrapped"):
-            solve_pair_adjustments(wrapped, SEGOE_UI_ADVANCES, 2048)
+    def test_the_committed_file_holds_every_pair_the_corpus_witnessed(self) -> None:
+        derived = json.loads(DERIVED.read_text(encoding="utf-8"))
+        committed = {tuple(chr(int(c)) for c in key.split(",")): value
+                     for key, value in derived["kerning"].items()}
+        self.assertEqual(committed, self.EXPECTED)
 
 
 class KerningGateTest(unittest.TestCase):
-    """What CI holds the committed pair adjustments to, in both directions.
+    """What CI holds the committed pair adjustments to, in both directions."""
 
-    The pairs below are the runner's real Segoe UI, read off it by the first
-    measurement run that harvested a kern table: Te -200, and ox -25, ro -27,
-    ve -12, rm -4. The recorded runs say the runtime applied the first and none
-    of the rest, so a metrics file carrying the font's table measures the
-    pangram too narrow. That run is the reason this gate exists, and these are
-    its numbers.
-    """
-
-    FONT_TABLE = {("T", "e"): -200, ("o", "x"): -25, ("r", "o"): -27,
-                  ("v", "e"): -12, ("r", "m"): -4}
-    IMPLIED = {("T", "e"): -200}
+    PAIRS_BY_TABLE = {
+        "gpos": {"84,101": -200, "84,97": -230, "84,111": -200, "87,97": -80,
+                 "89,97": -180},
+        # The legacy table disagrees about all five of those, and carries seven
+        # the GPOS does not. Both facts are the runner's real Segoe UI.
+        "kern": {"84,101": -211, "84,97": -217, "84,111": -211, "87,97": -76,
+                 "89,97": -199, "114,121": 82, "118,111": -12, "121,111": -10,
+                 "111,120": -25, "114,109": -4, "114,111": -27, "118,101": -12},
+    }
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.cases = self.root / "cases" / "L4-text"
+        self.cases = self.root / "cases" / "L4-kern"
         self.measurements = self.root / "measurements"
         self.cases.mkdir(parents=True)
         self.measurements.mkdir(parents=True)
+        for index, (text, width) in enumerate(
+                SolvePairsFromRecordedTest.RECORDED_PAIRS.items(), start=1):
+            self.write(f"L4-kern-{index:04d}", text, 14.0, width)
+        self.harvest = {
+            "family": "Segoe UI", "units_per_em": 2048,
+            "advances": {str(k): v for k, v in SEGOE_UI_ADVANCES.items()},
+            "font_kerning": self.PAIRS_BY_TABLE,
+        }
 
-        for index, ((text, size), width) in enumerate(RECORDED_RUNS.items(), start=1):
-            case_id = f"L4-text-{index:04d}"
-            markup = ('<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/'
-                      f'presentation" FontFamily="Segoe UI" FontSize="{size}" '
-                      f'TextWrapping="NoWrap">{text}</TextBlock>')
-            (self.cases / f"{case_id}.json").write_text(json.dumps({
-                "schema_version": 1, "id": case_id, "level": 4, "group": "text",
-                "markup": markup,
-                "environment": {"font_family": "Segoe UI", "font_size": size},
-            }), encoding="utf-8")
-            (self.measurements / f"{case_id}.json").write_text(json.dumps({
-                "schema_version": 1, "case_id": case_id,
-                "tree": [{"path": "/Windows.UI.Xaml.Controls.TextBlock",
-                          "type": "Windows.UI.Xaml.Controls.TextBlock",
-                          "desired": [width, 19.0], "actual": [width, 19.0],
-                          "offset": [0.0, 0.0]}],
-            }), encoding="utf-8")
+    def write(self, case_id: str, text: str, size: float, width: float) -> None:
+        markup = ('<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/'
+                  f'presentation" FontFamily="Segoe UI" FontSize="{size}" '
+                  f'TextWrapping="NoWrap">{text}</TextBlock>')
+        (self.cases / f"{case_id}.json").write_text(json.dumps({
+            "schema_version": 1, "id": case_id, "level": 4, "group": "kern",
+            "markup": markup,
+            "environment": {"font_family": "Segoe UI", "font_size": size},
+        }), encoding="utf-8")
+        (self.measurements / f"{case_id}.json").write_text(json.dumps({
+            "schema_version": 1, "case_id": case_id,
+            "tree": [{"path": "/Windows.UI.Xaml.Controls.TextBlock",
+                      "type": "Windows.UI.Xaml.Controls.TextBlock",
+                      "desired": [width, 19.0], "actual": [width, 19.0],
+                      "offset": [0.0, 0.0]}],
+        }), encoding="utf-8")
 
     def check(self, committed):
-        return check_kerning(self.root / "cases", self.measurements,
-                             SEGOE_UI_ADVANCES, "Segoe UI", 2048, committed)
+        return check_kerning(self.root / "cases", self.measurements, self.harvest,
+                             "Segoe UI", committed)
 
-    def test_the_implied_pair_passes(self) -> None:
-        self.assertEqual(self.check(self.IMPLIED), [])
-
-    def test_the_fonts_whole_table_is_refused(self) -> None:
-        # The exact failure the first CI run produced, reduced to a test. Both
-        # words move: the pangram by ox/ro/ve and "Terminal" by rm.
-        problems = self.check(self.FONT_TABLE)
-        self.assertTrue(any(PANGRAM in p for p in problems))
-        self.assertTrue(any("Terminal" in p for p in problems))
-        self.assertTrue(any("imply Te -200" in p for p in problems))
+    def test_the_committed_pairs_pass(self) -> None:
+        self.assertEqual(self.check(SolvePairsFromRecordedTest.EXPECTED), [])
 
     def test_a_missing_pair_is_caught(self) -> None:
-        problems = self.check({})
-        self.assertTrue(any("Terminal" in p for p in problems))
-        # The pangram is right without any adjustment, so it must not be named.
-        self.assertFalse(any(PANGRAM in p for p in problems))
+        short = dict(SolvePairsFromRecordedTest.EXPECTED)
+        del short[("o", "x")]
+        problems = self.check(short)
+        self.assertTrue(any("pair ox" in p for p in problems))
 
     def test_a_pair_with_the_wrong_value_is_caught(self) -> None:
-        self.assertTrue(self.check({("T", "e"): -100}))
+        wrong = dict(SolvePairsFromRecordedTest.EXPECTED)
+        wrong[("T", "e")] = -211      # what the legacy table says, not GPOS
+        problems = self.check(wrong)
+        self.assertTrue(any("pair Te" in p for p in problems))
 
-    def test_a_pair_no_recorded_run_witnesses_is_caught(self) -> None:
-        # Not refuted by anything -- no run contains "WA" -- but not implied
-        # either, and the committed file may only hold what the runs imply.
-        problems = self.check({("T", "e"): -200, ("W", "A"): -150})
-        self.assertEqual(len(problems), 1)
-        self.assertIn("do not witness it", problems[0])
+    def test_a_pair_no_run_witnesses_is_caught(self) -> None:
+        extra = dict(SolvePairsFromRecordedTest.EXPECTED)
+        extra[("W", "A")] = -150
+        problems = self.check(extra)
+        self.assertTrue(any("pair WA" in p for p in problems))
+
+    def test_a_run_the_model_gets_wrong_is_caught(self) -> None:
+        # The half of the gate that tests rule 5 rather than the values: a
+        # recording the whole model cannot reproduce is a failure even when
+        # every pair is right on its own.
+        self.write("L4-kern-9001", "Term", 14.0, 30.1867)   # rm allowed to reach
+        problems = self.check(SolvePairsFromRecordedTest.EXPECTED)
+        self.assertTrue(any("L4-kern-9001" in p for p in problems))
 
     def test_a_family_the_corpus_never_measured_is_an_error(self) -> None:
-        problems = check_kerning(self.root / "cases", self.measurements,
-                                 SEGOE_UI_ADVANCES, "Consolas", 2048, {})
+        problems = check_kerning(self.root / "cases", self.measurements, self.harvest,
+                                 "Consolas", {})
         self.assertEqual(len(problems), 1)
         self.assertIn("Consolas", problems[0])
 

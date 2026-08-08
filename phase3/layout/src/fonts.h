@@ -22,16 +22,6 @@ FontMetrics ParseFontMetrics(const std::string& json, const std::string& where);
 // measure, which names the actual problem instead of failing every case.
 int LoadFontDirectory(FontLibrary& library, const std::string& directory);
 
-// Installs the pair adjustments a *derived* metrics file states, onto a family
-// whose advances came from a harvest. Returns how many pairs were installed.
-//
-// Kerning is the one metric that cannot travel with the harvest. The runner's
-// Segoe UI kerns pairs the recorded runs prove the runtime did not apply, so
-// which pairs survive is a measurement rather than a reading, and the file that
-// states it is committed for the same reason the oracle digest is. See
-// phase3/xaml-db/fonts/README.md.
-int LoadImpliedKerning(FontLibrary& library, const std::string& path);
-
 }  // namespace openxaml
 
 #endif  // OPENXAML_FONTS_H
