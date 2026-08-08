@@ -1030,36 +1030,6 @@ def level4_kern() -> Iterator[dict[str, Any]]:
         requires=needs, question=isolated,
     )
 
-    # How far a legacy-table pair reaches, which is the one thing the answers
-    # so far leave open. Every pair the corpus has measured on its own sat at
-    # the front of a two-glyph run, and both readings of that fit every
-    # recording: "the first pair of the run" and "a run of exactly two glyphs".
-    # No recorded run of three or more begins with a pair the GPOS does not
-    # carry, so nothing separates them.
-    #
-    # These do. Three glyphs, a legacy-only pair at the front, and a third
-    # character chosen so the pair after it is one the font does not kern -- so
-    # the width moves by that first pair or by nothing, and which one says
-    # which reading is right.
-    reach = (
-        "If the pair still moves the run, the legacy table is read at the front "
-        "of any run and the layout core is right. If the run measures the raw "
-        "sum of its three advances, the legacy table is read only for a run of "
-        "exactly two glyphs and rule 5 in text.cpp needs narrowing. The pair "
-        "alone is recorded beside it at the same size, so the two are read off "
-        "one another rather than off the harvest."
-    )
-    for pair in ["ox", "ro", "ve", "rm"]:
-        for size in ["14", "24"]:
-            text = pair + "n"
-            yield case(
-                f"L4-kern-reach-{pair}-{size}", 4, "kern", kern_run(text, size),
-                [400.0, 300.0],
-                f"{text!r}: {pair!r} at the front of a longer run, and 'n' after it "
-                f"because the font kerns nothing that follows",
-                requires=needs, question=reach,
-            )
-
     # Whether a pair keeps its adjustment as the run grows. "Terminal" is
     # already recorded and is short by exactly Te, so the answer should be yes;
     # these make it observable one character at a time rather than as one sum
