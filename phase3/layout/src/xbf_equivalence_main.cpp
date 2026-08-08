@@ -113,6 +113,12 @@ int main(int argc, char** argv) {
 
     int considered = 0;
     int identical = 0;
+    // Of the cases that agreed, how many agreed on a *measurement* rather than
+    // on a refusal. Both are agreement and both are reported, because "the two
+    // paths refused identically" is a much weaker statement than "the two paths
+    // measured the same tree", and a summary that blurred them could hide a
+    // corpus that stopped measuring.
+    int identical_measured = 0;
     std::vector<std::string> mismatched;
     std::vector<std::string> refused;
 
@@ -175,6 +181,7 @@ int main(int argc, char** argv) {
         }
         if (from_text.tree == from_xbf.tree) {
             ++identical;
+            ++identical_measured;
             continue;
         }
         mismatched.push_back(id + ": the two paths measured differently");
@@ -191,6 +198,8 @@ int main(int argc, char** argv) {
     };
 
     std::cout << "{\n  \"cases\": " << considered << ",\n  \"identical\": " << identical
+              << ",\n  \"identical_measured\": " << identical_measured
+              << ",\n  \"identical_refusal\": " << (identical - identical_measured)
               << ",\n  \"mismatched\": " << array(mismatched)
               << ",\n  \"loader_refused\": " << array(refused) << "\n}\n";
 

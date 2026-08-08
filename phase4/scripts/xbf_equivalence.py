@@ -123,6 +123,8 @@ def main() -> int:
         "compiled_by_genxbf": len(compile_result["compiled"]),
         "rejected_by_genxbf": rejected,
         "identical": first["identical"],
+        "identical_measured": first["identical_measured"],
+        "identical_refusal": first["identical_refusal"],
         "mismatched": first["mismatched"],
         "loader_refused": first["loader_refused"],
         "deterministic": deterministic,

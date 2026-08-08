@@ -309,13 +309,7 @@ private:
         const xbf::SubStream& stream = document_.sub_streams[index];
         if (!stream.truncated_because.empty()) Refuse(stream.truncated_because);
         ++depth_;
-        for (std::size_t i = skip; i < stream.nodes.size(); ++i) {
-            Step(stream.nodes[i]);
-            // Only one instruction looks back at its predecessor -- the
-            // deferred-section repeat check -- but it has to look at the one in
-            // *this* stream, so the record is kept here rather than in Step.
-            last_node_type_ = stream.nodes[i].type;
-        }
+        for (std::size_t i = skip; i < stream.nodes.size(); ++i) Step(stream.nodes[i]);
         --depth_;
     }
 
@@ -378,10 +372,19 @@ private:
                 return;
             }
             case MemberKind::Attribute:
-            case MemberKind::Attached:
-                Refuse("the property '" + std::string(member.name) +
-                       "' was given an element, which this reconstruction writes only for "
-                       "content and property-element members");
+            case MemberKind::Attached: {
+                // A scalar property set from an element rather than an
+                // attribute: <Border.UseLayoutRounding><x:Boolean>False
+                // </x:Boolean></Border.UseLayoutRounding>. XAML spells that as
+                // a property element, and so does the reconstruction -- the
+                // attribute form would lose the type the markup named.
+                Part part;
+                part.kind = Part::Kind::Member;
+                part.name = member.name;
+                part.objects.push_back(std::move(pending_));
+                AddPart(owner, std::move(part));
+                return;
+            }
         }
     }
 
@@ -466,6 +469,70 @@ private:
         return object;
     }
 
+    // How many nodes at the head of a deferred sub-stream repeat what has
+    // already been done.
+    //
+    // A deferred section is written so it can stand on its own: the custom
+    // writer replays the namespace declarations and the instruction that opened
+    // the dictionary's scope before the entries themselves. A loader that does
+    // not defer is already standing in that scope, so the replay has to be
+    // skipped -- and skipped exactly, which means finding the instruction that
+    // matches the open scope rather than counting nodes. Not finding it means
+    // the stream is not shaped the way this reader believes, which is worth
+    // saying rather than working around.
+    std::size_t PrologueOf(std::uint32_t index) {
+        const xbf::SubStream& stream = SubStream(index);
+        const Frame& frame = Current("a deferred section");
+        for (std::size_t i = 0; i < stream.nodes.size(); ++i) {
+            const Node& candidate = stream.nodes[i];
+            if (frame.kind == Frame::Kind::Collection) {
+                if (candidate.type == NodeType::PushScopeGetValue &&
+                    MemberOf(document_, candidate.property).name == frame.collection) {
+                    return i + 1;
+                }
+                continue;
+            }
+            if (!frame.created) continue;
+            if ((candidate.type == NodeType::CreateTypeBeginInit ||
+                 candidate.type == NodeType::PushScopeCreateTypeBeginInit) &&
+                TypeNameOf(document_, candidate.type_ref) == frame.object.type) {
+                return i + 1;
+            }
+        }
+        Refuse("the deferred sub-stream " + std::to_string(index) +
+               " never repeats the instruction that opened the scope it belongs to (" +
+               (frame.kind == Frame::Kind::Collection ? frame.collection : frame.object.type) +
+               ")");
+    }
+
+    // A setter whose value is a resource reference does not carry the key: it
+    // carries the offset of the node that would have set it, in the deferred
+    // sub-stream. That node is a single instruction, so reading exactly it is
+    // enough -- and anything else at that offset is refused rather than
+    // interpreted, because a run of nodes has no end this reader can find.
+    std::string ResourceSetterValue(const Node& node, const xbf::StyleSetter& setter,
+                                    const std::string& target) {
+        if (!node.has_sub_stream) {
+            Refuse("a deferred style names no sub-stream for its setter values");
+        }
+        const xbf::SubStream& stream = SubStream(node.sub_stream);
+        for (const Node& candidate : stream.nodes) {
+            if (candidate.offset != setter.token) continue;
+            if (candidate.type == NodeType::SetValueFromStaticResource) {
+                return "{StaticResource " + ConstantText(candidate.constant) + "}";
+            }
+            if (candidate.type == NodeType::SetValueFromThemeResource) {
+                return "{ThemeResource " + ConstantText(candidate.constant) + "}";
+            }
+            Refuse("the style's setter for '" + target + "' points at " +
+                   xbf::NodeTypeName(candidate.type) + " in a deferred sub-stream, which this "
+                   "reader does not realise as a value");
+        }
+        Refuse("the style's setter for '" + target + "' points at offset " +
+               std::to_string(setter.token) + " of sub-stream " +
+               std::to_string(node.sub_stream) + ", where no node begins");
+    }
+
     // A deferred <Style>'s setters, written back as the <Setter> elements they
     // were compiled from. The style writer boils each one down to a property
     // and a value, so nothing is left of the elements but this -- which is
@@ -500,15 +567,18 @@ private:
                     break;
                 case xbf::StyleSetter::ValueKind::StaticResource:
                 case xbf::StyleSetter::ValueKind::ThemeResource:
+                    value.value = ResourceSetterValue(node, setter, target);
+                    break;
                 case xbf::StyleSetter::ValueKind::Object:
                 case xbf::StyleSetter::ValueKind::Self:
-                    // The value is built by nodes in the deferred sub-stream at
-                    // a recorded offset. Realising it means interpreting from
-                    // the middle of a stream, which this reader does not do --
-                    // and the property it would have set is named, because that
-                    // is the useful part of saying no.
+                    // The value is a whole object built by a run of nodes in the
+                    // deferred sub-stream. Realising it means interpreting from
+                    // the middle of a stream and knowing where to stop, which
+                    // this reader does not do -- and the property it would have
+                    // set is named, because that is the useful part of saying
+                    // no.
                     Refuse("the style's setter for '" + target +
-                           "' takes its value from offset " + std::to_string(setter.token) +
+                           "' builds its value from offset " + std::to_string(setter.token) +
                            " of a deferred sub-stream, which this reader does not realise");
                 case xbf::StyleSetter::ValueKind::None:
                     Refuse("the style's setter for '" + target +
@@ -751,17 +821,7 @@ private:
                     Refuse("the " + xbf::CustomDataKindName(node.custom_data_kind) +
                            " custom writer's runtime data is not one this reader realises");
                 }
-                if (last_node_type_ != NodeType::PushScopeGetValue &&
-                    last_node_type_ != NodeType::PushScopeCreateTypeBeginInit) {
-                    Refuse("a deferred resource dictionary does not follow the instruction that "
-                           "opened its scope");
-                }
-                const xbf::SubStream& target = SubStream(node.sub_stream);
-                if (target.nodes.empty() || target.nodes.front().type != last_node_type_) {
-                    Refuse("the deferred sub-stream " + std::to_string(node.sub_stream) +
-                           " does not repeat the instruction that opened its scope");
-                }
-                Interpret(node.sub_stream, 1);
+                Interpret(node.sub_stream, PrologueOf(node.sub_stream));
                 return;
             }
 
@@ -782,9 +842,20 @@ private:
             case NodeType::CheckPeerType:
                 Refuse("the page has code-behind: it checks for the peer type '" + node.peer_type +
                        "'");
-            case NodeType::GetResourcePropertyBag:
-                Refuse("the page reads a resource property bag (x:Uid '" +
-                       ConstantText(node.constant) + "'), which needs a resource map");
+            case NodeType::GetResourcePropertyBag: {
+                // x:Uid. The compiler turns it into "look this element's
+                // properties up in the resource map"; the directive itself is
+                // what the markup engine takes, and it resolves the uid against
+                // whatever table it was given -- an empty one here, exactly as
+                // the text path has.
+                Object& owner = CurrentObject("GetResourcePropertyBag").object;
+                Part part;
+                part.kind = Part::Kind::Attribute;
+                part.name = XamlPrefix() + ":Uid";
+                part.value = ConstantText(node.constant);
+                AddPart(owner, std::move(part));
+                return;
+            }
             case NodeType::BeginConditionalScope:
             case NodeType::EndConditionalScope:
                 Refuse("the page uses conditional XAML, which this reader does not evaluate");
@@ -825,7 +896,6 @@ private:
     bool pending_is_text_ = false;
     bool has_pending_ = false;
     std::optional<std::string> xaml_prefix_;
-    NodeType last_node_type_ = NodeType::None;
     int depth_ = 0;
 };
 

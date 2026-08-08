@@ -542,6 +542,31 @@ agreeing with a number someone wrote down, only by decoding the format
 correctly, and a case the compiler *rejects* is recorded with the compiler's own
 error rather than skipped.
 
+Where it stands: **1081 of 1087** corpus documents compiled by `genxbf`
+10.0.26100.0, and **1081 of 1081 are identical** through both paths — 929
+agreeing on a measured tree and 152 on the same refusal (the metrics the corpus
+derived cover only the characters it measures alone, so both paths decline the
+same text cases for the same reason). Twice, byte for byte.
+
+The six the compiler itself rejects are an exclusion list, not a gap, and each
+carries the compiler's message:
+
+| case | `genxbf` said |
+|---|---|
+| `L5-xdirectives-defer-load-strategy-lazy` | `WMC0907: Element must have x:Name attribute specified since it uses x:DeferLoadStrategy.` |
+| `L5-xdirectives-load-false-only-child` | `WMC0907: Element must have x:Name attribute specified since it uses x:Load.` |
+| `L5-xdirectives-load-false-sibling` | the same |
+| `L5-xdirectives-load-true` | the same |
+| `L5-xprimitives-int32-width` | `WMC0015: Cannot assign 'Int32' into property 'Width', type must be assignable to 'Double'` |
+| `L5-xprimitives-string-into-enum` | `WMC0015: Cannot assign 'String' into property 'HorizontalAlignment', type must be assignable to 'HorizontalAlignment'` |
+
+Both groups are findings rather than accidents. The first says `x:Load` is a
+*compiler* feature that `XamlReader.Load` accepts and `genxbf` will not compile
+without an `x:Name` — so those four cases can only ever exist on the text path.
+The second is the compiler agreeing statically with what the oracle recorded the
+runtime doing at load time, which is a second, independent witness for two cases
+the corpus records as errors.
+
 `phase3/layout/tests/xbf_test.cpp` covers what the gate structurally cannot: a
 malformed file is not something `genxbf` produces, so rejecting one has to be
 tested against a fixture. That fixture is assembled byte by byte in the test
@@ -572,14 +597,12 @@ than a guess. Those names are the work list:
 
 | boundary | pages | what it is |
 |---|---:|---|
-| `SetConnectionId` | 22 | `x:Bind` and event handlers, which need code-behind |
-| `CheckPeerType` | 4 | the page asserts its `x:Class` peer exists |
+| `SetConnectionId` | 27 | `x:Bind` and event handlers, which need code-behind |
 | `DeferredElement v3` custom writer | 4 | `x:Load` deferral |
+| `CheckPeerType` | 4 | the page asserts its `x:Class` peer exists |
 | `VisualStateGroupCollection v5` custom writer | 2 | visual states, deferred |
-| a `Style` setter whose value lives in a deferred sub-stream | 1 | realising a value from the middle of a stream |
-| `GetResourcePropertyBag` | 1 | `x:Uid`, which needs a resource map |
+| a stable property index this runtime has no name for | 2 | `CommonResources` and `SettingContainerStyle` reach further into the framework's property surface than the corpus does |
 | a type only TerminalApp's metadata provider defines | 1 | `HighlightedTextControl` |
-| a stable index this runtime has no type for | 5 | `UserControl`, `ContentDialog` and friends |
 
     python3 -B phase4/scripts/xbf_terminal_pages.py --tool /tmp/layout-build/xbf_dump
 

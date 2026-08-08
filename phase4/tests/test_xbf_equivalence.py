@@ -135,6 +135,11 @@ class Equivalence(unittest.TestCase):
                          "the gate saw a different number of cases than the compiler produced")
         self.assertGreater(report["cases"], 900,
                            "too few cases compiled for this to be a corpus-wide gate")
+        # Agreeing on a refusal is agreement, but it is not a measurement. A run
+        # where most of the corpus stopped measuring would still show an empty
+        # mismatch list, so the measured half is asserted separately.
+        self.assertGreater(report["identical_measured"], 800,
+                           "most of the corpus agreed on a refusal rather than on a measurement")
 
     def test_the_gate_is_deterministic(self):
         compiled, _ = self._requirements()
