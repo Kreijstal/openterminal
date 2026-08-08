@@ -722,3 +722,106 @@ jobs:
         with:
           name: layout-report
           path: layout-report.json
+
+  # The first pixels. Separate from the layout job because it answers a
+  # different question with the same corpus: not "what size is everything" but
+  # "which pixels does that turn into", and it has no oracle of its own -- wave
+  # 6 is where rendered-output probes get recorded. So it is gated on the round
+  # trip instead: paint the corpus, recover every rectangle back out of the
+  # dumps, and demand it be exactly the one the already-verified measurement
+  # path reports. See phase3/render/README.md.
+  #
+  # On ubuntu, and with no Wine: the render core is plain C++17 and only the
+  # glyph backend needs a platform. The dumps are a quarter of a gigabyte and
+  # go to the runner's temp, never to an artifact.
+  render:
+    needs: measure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.measure.outputs.fonts }}
+          path: fonts
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.measure.outputs.cases }}
+          path: phase3/xaml-db/cases
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.measure.outputs.theme }}
+          path: phase3/xaml-db/theme-resources
+
+      - name: Build the render core
+        run: |
+          cmake -S phase3/render -B "$RUNNER_TEMP/render-build" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/render-build" --parallel
+
+      # What a dump cannot say. A refused case paints nothing, so its pixels
+      # cannot show that refusing was the right answer rather than a renderer
+      # that quietly did nothing.
+      - name: What no dump can check
+        run: ctest --test-dir "$RUNNER_TEMP/render-build" --output-on-failure
+
+      # And what no dump can check on the checker itself: a gate that passed
+      # everything would report the render pass as exact without looking.
+      - name: The round-trip checker catches what it claims to
+        run: python3 -m unittest discover -s phase4/tests -v
+
+      # Twice, into separate directories, for the same reason the measurements
+      # are: a render that moves between runs cannot be compared to anything.
+      - name: Renders are deterministic
+        run: |
+          for run in 1 2; do
+            "$RUNNER_TEMP/render-build/render_cases" \
+              phase3/xaml-db/cases "$RUNNER_TEMP/render$run" fonts
+          done
+          if ! diff -r "$RUNNER_TEMP/render1" "$RUNNER_TEMP/render2" > "$RUNNER_TEMP/nondet.txt"; then
+            echo "::error::renders differ between two runs on the same machine"
+            head -40 "$RUNNER_TEMP/nondet.txt"
+            exit 1
+          fi
+
+      # The render pass arranges the tree itself, so it has to arrange it the
+      # way the verified measurement path does. Byte for byte, or the pixels
+      # below are pixels of something else.
+      - name: The render pass arranges what the measurement path arranges
+        run: |
+          cmake -S phase3/layout -B "$RUNNER_TEMP/layout-build" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/layout-build" --parallel
+          "$RUNNER_TEMP/layout-build/measure_cases" \
+            phase3/xaml-db/cases "$RUNNER_TEMP/measured" fonts
+          # measure_cases writes a file for a case that failed to load; the
+          # render harness puts that in the dump's sidecar instead, so the
+          # trees directory is the measured one minus exactly those.
+          missing=$(diff -r "$RUNNER_TEMP/render1/trees" "$RUNNER_TEMP/measured" \
+                    | grep -c '^Only in' || true)
+          content=$(diff -r "$RUNNER_TEMP/render1/trees" "$RUNNER_TEMP/measured" \
+                    | grep -c '^[<>]' || true)
+          errors=$(grep -l '"error"' "$RUNNER_TEMP"/measured/*.json | wc -l)
+          echo "trees: $missing only-in, $content content diffs, $errors cases did not load"
+          if [ "$content" -ne 0 ] || [ "$missing" -ne "$errors" ]; then
+            echo "::error::the render pass does not arrange what the measurement path does"
+            diff -r "$RUNNER_TEMP/render1/trees" "$RUNNER_TEMP/measured" | head -20
+            exit 1
+          fi
+
+      - name: The round trip is pixel-exact
+        run: |
+          python3 -B phase4/scripts/check_render.py \
+            --dumps "$RUNNER_TEMP/render1" \
+            --output render-report.json \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('render-report.json') != ''
+        with:
+          name: render-report
+          path: render-report.json

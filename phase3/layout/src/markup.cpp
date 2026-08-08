@@ -410,16 +410,23 @@ void ApplyProperty(MarkupNode& node, const DependencyProperty& property,
         return assign(node.border_thickness = ParseThickness(value, name));
     if (name == "Padding") return assign(node.padding = ParseThickness(value, name));
     // The attribute shorthand for a brush is always a colour, and a colour is
-    // always a SolidColorBrush. The colour is validated and dropped: a typo in
-    // a page must not load silently, and nothing here paints.
+    // always a SolidColorBrush. The property store still receives the type
+    // name and not the colour -- that is what the corpus and the twin checks
+    // have always seen -- while the colour itself travels on the node for the
+    // render pass. A typo still fails here rather than loading silently.
     if (name == "Background") {
-        ValidateColor(value, name);
+        node.background_brush = BrushValue{true, true, ParseColor(value, name)};
         return assign(node.background = "SolidColorBrush");
     }
     if (name == "Fill") {
-        ValidateColor(value, name);
+        node.fill_brush = BrushValue{true, true, ParseColor(value, name)};
         return assign(std::string("SolidColorBrush"));
     }
+    // No BorderBrush here on purpose. No type registers one, so the three
+    // corpus cases that set it fail at load naming the property -- which is
+    // what the oracle answers for them too. The render pass can paint a border
+    // brush (see phase3/render) and no markup can currently give it one; when
+    // the property is registered, this is where its colour joins the node.
     if (name == "RadiusX" || name == "RadiusY") return assign(ParseDouble(value, name));
     if (name == "Orientation") {
         node.orientation = ParseEnum(value, kOrientations, name);
@@ -1245,6 +1252,12 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node, ObservableObject* 
     if (node.style)
         ApplyStyle(*element, *node.style, node.type, OwnersFor(node.type));
 
+    // The brushes, which go beside the property store rather than into it --
+    // see brush.h. Nothing in layout reads them; the render pass does.
+    element->set_background_brush(node.background_brush);
+    element->set_border_brush(node.border_brush);
+    element->set_fill_brush(node.fill_brush);
+
     // Only what the markup wrote, which is not the same as every property the
     // element has. An inherited property left alone must stay unset so that it
     // reads its parent's value; assigning the default here instead would give
@@ -1562,6 +1575,12 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
                 if (tag.self_closing) throw MarkupError("<" + tag.name + "> is empty");
                 const std::string brush = ParseBrushPropertyElement(scanner, tag.name);
                 open.back().background = brush;
+                // Declared, and colourless: the property-element form carries
+                // the colour on the brush's own Color attribute, which that
+                // parser drops along with everything else inside the brush.
+                // The render pass turns this into a named no-draw rather than
+                // painting a colour nothing supplied.
+                open.back().background_brush = BrushValue{true, false, Color{}};
                 open.back().properties.push_back(MarkupProperty{found, brush});
                 continue;
             } else {

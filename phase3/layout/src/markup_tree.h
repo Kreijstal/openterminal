@@ -126,6 +126,13 @@ struct MarkupNode {
     // Recorded rather than realised: it decides nothing about layout, and
     // keeping it makes the parse round-trippable for a consumer that draws.
     std::string background;
+    // The same three brushes as the render pass needs them: set at all, and
+    // reducible to a colour or not. A brush written as a property element is
+    // declared and colourless here, which is a no-draw the renderer names --
+    // see brush.h.
+    BrushValue background_brush;
+    BrushValue border_brush;
+    BrushValue fill_brush;
 
     // StackPanel.
     Orientation orientation = Orientation::Vertical;
