@@ -21,6 +21,9 @@ class ControlTemplate;
 // subclass, and a bare Control has no layout of its own to model.
 class Control : public Element {
 public:
+    // Every Control is a layout element, template or no template.
+    bool IsLayoutElement() const override { return true; }
+
     // Inherited, and shared with TextBlock -- see element.h.
     double font_size() const { return GetDouble(FontSizeProperty()); }
     void set_font_size(double value) { SetValue(FontSizeProperty(), value); }

@@ -40,31 +40,25 @@ Size Canvas::MeasureOverride(Size) {
     return Size{};
 }
 
-Size Canvas::ArrangeOverride(Size) {
+Size Canvas::ArrangeOverride(Size final_size) {
     for (Element* child : Children()) {
         const Size desired = child->desired_size();
         child->Arrange({GetLeft(*child), GetTop(*child), desired.width, desired.height});
     }
 
-    // Zero, not the arrange size -- and this is the one place in this file
-    // worth arguing about.
+    // The arrange size, as `CCanvas::ArrangeOverride` returns, and not the
+    // zero this used to return.
     //
-    // The published WinUI source (microsoft-ui-xaml, `CCanvas::ArrangeOverride`)
-    // returns `finalSize`, which would make a stretched Canvas report its
-    // slot as its ActualWidth. The recorded oracle says otherwise: all three
-    // sizes of the `SelectionCanvas` case measure a Canvas whose ActualWidth
-    // and ActualHeight are zero, including the two where the slot is finite
-    // and non-empty (400x300 and 100x50). Two of those three disagree with
-    // `finalSize` in both axes, so this is not a rounding difference or an
-    // artefact of one odd constraint.
-    //
-    // Windows.UI.Xaml is the arbiter here, as it is for the two divergences
-    // already recorded in the README, and this is the answer it gives. It is
-    // also the self-consistent one: a Canvas that reports nothing in measure
-    // reporting nothing in arrange is the same statement twice. See the
-    // pending L3-canvas cases for the cross product that will confirm it, or
-    // narrow it, on the next oracle run.
-    return Size{};
+    // The zero was inferred from a Canvas whose recorded ActualWidth and
+    // ActualHeight were zero in a 400x300 slot, which looked like a straight
+    // contradiction of the published source. It was not: that Canvas was the
+    // root of its tree, so it was never a layout element's child, never
+    // arranged at all, and its ActualWidth came from the specified-size
+    // fallback rather than from here. The whole L3-canvas cross product agrees
+    // -- every unsized Canvas reports zero and every Canvas with Width="200"
+    // reports 200, in the same 400x300 slot -- which is the fallback's
+    // signature and not this function's.
+    return final_size;
 }
 
 }  // namespace openxaml

@@ -129,6 +129,15 @@ add_executable(layout_rules_tests
 target_link_libraries(layout_rules_tests PRIVATE openxaml_layout)
 add_test(NAME layout_rules COMMAND layout_rules_tests)
 
+# Which elements take part in layout, and what the ones that do not report
+# instead. A recorded tree cannot tell "reports nothing but renders its
+# specified size" from "was never measured": both are zeros in the desired
+# column, and only one of them is zero in the actual column for a reason the
+# markup shows.
+add_executable(layout_participation_tests tests/layout_participation_test.cpp)
+target_link_libraries(layout_participation_tests PRIVATE openxaml_layout)
+add_test(NAME layout_participation COMMAND layout_participation_tests)
+
 add_executable(wave3_tests tests/wave3_test.cpp src/markup.cpp)
 target_link_libraries(wave3_tests PRIVATE openxaml_layout)
 add_test(NAME wave3 COMMAND wave3_tests)
@@ -165,6 +174,7 @@ if(MSVC)
     target_compile_options(error_hygiene_test PRIVATE /W4)
     target_compile_options(xdirective_tests PRIVATE /W4)
     target_compile_options(layout_rules_tests PRIVATE /W4)
+    target_compile_options(layout_participation_tests PRIVATE /W4)
     target_compile_options(wave3_tests PRIVATE /W4)
     target_compile_options(wave4_tests PRIVATE /W4)
     target_compile_options(scroll_viewer_tests PRIVATE /W4)
@@ -179,6 +189,7 @@ else()
     target_compile_options(error_hygiene_test PRIVATE -Wall -Wextra)
     target_compile_options(xdirective_tests PRIVATE -Wall -Wextra)
     target_compile_options(layout_rules_tests PRIVATE -Wall -Wextra)
+    target_compile_options(layout_participation_tests PRIVATE -Wall -Wextra)
     target_compile_options(wave3_tests PRIVATE -Wall -Wextra)
     target_compile_options(wave4_tests PRIVATE -Wall -Wextra)
     target_compile_options(scroll_viewer_tests PRIVATE -Wall -Wextra)

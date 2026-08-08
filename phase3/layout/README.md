@@ -503,7 +503,7 @@ written one is. Where they differ is in the *shape* of the store rather than in
 its answers — the core has no inherited slot and reaches the same result with a
 read-time walk — and this follows the core, because the walk was already here.
 
-Three places where the ported source and the recorded oracle disagree, all
+Two places where the ported source and the recorded oracle disagree, both
 found by running the corpus rather than by reading:
 
 **Layout rounding is on.** WPF leaves `UseLayoutRounding` off unless asked;
@@ -518,13 +518,43 @@ whose columns are all `Auto` or fixed — which legitimately leave the Grid part
 empty — and grew them by a pixel each. Sixteen L3 cases said otherwise, all of
 them star-free.
 
-**`Canvas` reports no arranged size.** `CCanvas::ArrangeOverride` returns
-`finalSize`, which would make a stretched Canvas report its slot as its
-`ActualWidth`. All three recorded sizes of Terminal's `SelectionCanvas` say the
-Canvas is zero by zero, including the two whose slot is finite and non-empty —
-so it is not a rounding difference or an artefact of one odd constraint. This
-is the one divergence with a single witness, and the 63 pending `L3-canvas`
-cases exist to confirm it or narrow it.
+A third was withdrawn. **`Canvas` reports no arranged size** was recorded here
+as a divergence from `CCanvas::ArrangeOverride`, on the strength of Terminal's
+`SelectionCanvas` measuring zero by zero in a 400x300 slot. The 63 `L3-canvas`
+cases that were pending to confirm it refuted it instead: an unsized Canvas
+reports zero in that slot but one with `Width="200"` reports 200, which is not
+an `ArrangeOverride` returning zero — it is an element that was never arranged
+at all reading the fallback below. The source was right and the inference was
+wrong.
+
+### Not every element takes part in layout
+
+The rule that replaced it, and the one that explains four groups at once:
+Windows.UI.Xaml gives an element layout storage only when the element is a
+*layout element* or its parent is one — the condition guarding
+`EnsureLayoutStorage` in `CUIElement::Measure` and `CUIElement::Arrange`.
+Everything else is measured and arranged by nobody, and the two numbers the
+probe records come from elsewhere:
+
+- `DesiredSize` reads that storage and reports nothing without it
+  (`CoreImports::UIElement_GetDesiredSize`). An explicit `Width` never reaches
+  it.
+- `ActualWidth`/`ActualHeight` read the render size from that storage, and
+  without it fall back to the size the markup specified — or to zero while the
+  element is still measure-dirty, which it stays if no parent ever measured it
+  (`CFrameworkElement::GetActualWidth`).
+
+`Border`, `Control`, `ContentPresenter`, `IconElement`, `TextBlock` and `Panel`
+are layout elements; `Canvas` is the `Panel` that is not, and `Shape` and
+`Image` never were. So a root `Path` with `Width="40"` desires nothing and
+renders 40x40, an empty root `Canvas` desires nothing and renders nothing while
+one with `Width="200"` renders 200 wide, and a `Border` with `Width="30"` inside
+a root `Canvas` renders *zero* — the Canvas above it is not a layout element,
+so it never ran its own measure and never reached the child at all. All 39
+`L1-shape`, 57 `L3-canvas` and the shape and image nodes in `L7-terminal` agree,
+and the 93 `L1-shape` cases that always passed are the `PathIcon` ones, because
+an `IconElement` is a layout element even though the `Path` it draws with is
+not.
 
 ## Deliberate omissions
 
@@ -610,10 +640,7 @@ neither passing nor failing:
 
 | group | cases | the question |
 |---|---:|---|
-| `L2-content` | 72 | what does `ContentPresenter`'s content alignment default to? |
 | `L4-icon` | 69 | does a `FontIcon` measure its glyph or report a `FontSize` square? |
-| `L3-canvas` | 63 | does a `Canvas` report its slot or nothing? |
-| `L1-shape` | 60 | are a shape's bounds tight, and is its desired size the right edge or the width? |
 | `L5-styles` | 50 | the level has no measurement at all either, and six of them ask a question outright — see below |
 | `L5-resources` | 40 | every one of them: the level has no measurement at all |
 | `L7-terminal` | 21 | does a bare `XamlReader.Load` reach `Application.Resources` — the cases the dictionary unblocked depend on the answer |
@@ -623,13 +650,15 @@ neither passing nor failing:
 | `L4-source` | 6 | is `Text="x"` the same thing as `<TextBlock>x</TextBlock>`? |
 | `L5-xdirectives` | 6 | does a runtime load honour `x:Load` at all, and does it tolerate an `x:Uid` with no resource map? |
 
-`L4-icon` is a different kind of open from the rest. `L3-canvas`, `L1-shape`,
-`L2-content`, `L0-props`, `L4-source` and all five L5 groups check answers this
-code already gives; that one measures a type it refuses to give one for at all,
-so it cannot fail on a number — only on the refusal — and it exists so that the
-next version of this file can move it out of this table entirely. `L3-scroll`
-left the table that way: its 166 cases are recorded and all 166 pass, and what
-they settled is written up [above](#what-a-scrollviewer-does-with-its-scroll-bars).
+`L1-shape`, `L2-content`, `L3-canvas` and `L3-scroll` have left this table:
+they were measured, and they are answered by the layout-participation rule and
+the `ContentPresenter` alignment default above, and by the scroll-bar rules
+written up [above](#what-a-scrollviewer-does-with-its-scroll-bars). `L4-icon`
+is a different kind of open from the rest. `L0-props`, `L4-source` and the L5
+groups check answers this code already gives; that one measures a type it
+refuses to give one for at all, so it cannot fail on a number — only on the
+refusal — and it exists so that the next version of this file can move it out
+of this table entirely.
 
 The six `L5-styles` cases that carry `oracle_decides` are the ones neither
 reference settles for a `XamlReader.Load` with no `Application`:

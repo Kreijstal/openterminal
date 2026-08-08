@@ -1,5 +1,10 @@
 // Image: sized by its source, and there is no source.
 //
+// An Image is not a layout element, so a root one is never measured and never
+// arranged: it reports no desired size and renders at whatever Width and
+// Height say. Everything below describes the pass it does run -- under a
+// parent that is a layout element.
+//
 // Both passes run the same computation -- scale the source's natural bounds by
 // whatever the Stretch mode makes of the constraint -- which is why an Image
 // reports the size of its content rather than the slot it was given, even when
@@ -35,24 +40,11 @@ public:
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
 
 protected:
-    Size MeasureOverride(Size) override { return Specified(); }
-    Size ArrangeOverride(Size) override { return Specified(); }
-
-private:
-    // The size the markup asked for: Width if it is set, otherwise MinWidth,
-    // clamped into the min/max range either way. An unbounded result means
-    // nothing was asked for and becomes zero -- an infinite desired size is
-    // not a legal answer.
-    static double Resolve(double explicit_size, double minimum, double maximum) {
-        const double asked = IsAuto(explicit_size) ? std::min(minimum, kInfinity) : explicit_size;
-        const double clamped = std::max(std::min(asked, maximum), minimum);
-        return std::isinf(clamped) ? 0.0 : clamped;
-    }
-
-    Size Specified() const {
-        return {Resolve(width(), min_width(), max_width()),
-                Resolve(height(), min_height(), max_height())};
-    }
+    // Both passes answer with the size the markup asked for -- see
+    // Element::specified_size, which is also what an Image reports when it
+    // takes no part in layout and has no storage to read.
+    Size MeasureOverride(Size) override { return specified_size(); }
+    Size ArrangeOverride(Size) override { return specified_size(); }
 };
 
 }  // namespace openxaml

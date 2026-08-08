@@ -62,8 +62,36 @@ public:
     void Measure(Size available);
     void Arrange(Rect final_rect);
 
-    Size desired_size() const { return desired_size_; }
-    Size render_size() const { return render_size_; }
+    // Whether the element takes part in layout on its own account.
+    //
+    // The runtime gives layout storage -- which is where both recorded sizes
+    // live -- only to an element that is a layout element or whose parent is
+    // one, and measures and arranges only those. The list is the runtime's:
+    // Border, Control, ContentPresenter, IconElement, TextBlock and Panel say
+    // yes, Canvas is the Panel that says no, and Shape and Image never did.
+    // A Border under a Canvas is therefore never measured at all, because the
+    // Canvas above it is not a layout element and never runs its own measure.
+    virtual bool IsLayoutElement() const { return false; }
+
+    // What UIElement.DesiredSize reports. An element with no layout storage
+    // has no desired size to report and answers with nothing, whatever its
+    // Width says -- the explicit size never reaches this number.
+    Size desired_size() const {
+        if (!has_layout_storage_ || visibility() == Visibility::Collapsed) return Size{};
+        return desired_size_;
+    }
+    // What ActualWidth and ActualHeight report. Without layout storage there
+    // is no render size to read: an element that was measured answers with the
+    // size the markup specified, and one that was never measured at all -- so
+    // is still measure-dirty -- answers with zero.
+    Size render_size() const {
+        if (has_layout_storage_) return render_size_;
+        return needs_measure_ ? Size{} : specified_size();
+    }
+    // The size the markup asked for, with no reference to any constraint:
+    // Width if it is set, otherwise MinWidth, clamped into the min/max range
+    // either way. Unbounded means nothing was asked for, which is zero.
+    Size specified_size() const;
     // The rect the parent arranged this element into. This is what
     // LayoutInformation::GetLayoutSlot reports, and it is not the same as the
     // element's rendered position -- alignment moves the render offset inside
@@ -72,11 +100,11 @@ public:
 
     virtual std::vector<Element*> Children() const { return {}; }
 
-    // Set when a property that affects measure moves, cleared by Measure.
-    // Nothing consults it: the corpus measures each tree once, and a Measure
-    // that skipped clean elements would be an optimisation no measurement can
-    // check. It is here because the invalidation it records is the observable
-    // half of an inherited value changing under an element.
+    // Set when a property that affects measure moves, cleared by Measure --
+    // including the Measure of an element that takes no part in layout, which
+    // does nothing else. That is the whole difference between the two zeros an
+    // element without layout storage can render at: measured, so answer with
+    // the specified size; never measured, so answer with nothing.
     bool needs_measure() const { return needs_measure_; }
 
     void KeepBinding(std::unique_ptr<BindingExpression> binding) {
@@ -173,6 +201,11 @@ protected:
     void Adopt(Element& child) { child.SetInheritanceParent(this); }
 
 private:
+    // True once the element has been given layout storage, which happens on
+    // the first Measure that it takes part in. Both recorded sizes read it.
+    bool TakesPartInLayout() const;
+
+    bool has_layout_storage_ = false;
     Size desired_size_;
     Size render_size_;
     // Desired size before max-clamping and before the parent's available size
@@ -191,6 +224,10 @@ private:
 // it has a single Child, and the distinction shows up in the measured tree.
 class Panel : public Element {
 public:
+    // Every Panel lays its children out, so every Panel is a layout element --
+    // except Canvas, which overrides this back to false.
+    bool IsLayoutElement() const override { return true; }
+
     void AddChild(std::unique_ptr<Element> child) {
         Adopt(*child);
         children_.push_back(std::move(child));
