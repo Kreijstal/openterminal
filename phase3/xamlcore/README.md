@@ -230,8 +230,14 @@ call, which is why the smoke grew an outer object rather than another
 - **Not named `windows.ui.xaml.dll`.** It registers the real class names but
   ships as `openxaml.dll`, so it sits alongside Wine's builtin rather than
   replacing it. Dropping it in under the real name is a later, separate step.
-- **No `XamlReader`.** Terminal ships compiled XBF, and text XAML parsing is
-  the client's job here. Nothing in this DLL reads markup.
+- **No `XamlReader`.** Text XAML parsing stays the client's job; nothing in
+  this DLL reads markup as text. Compiled XBF it does read: `src/xbf.cpp`
+  (the portable reader `Application.LoadComponent` materializes through) is
+  what the shipped application actually hands the runtime. The layout core
+  carries its own pair — `LoadMarkup` in `phase3/layout/src/markup.h` for
+  text and `LoadXbf` in `phase3/layout/src/xbf_markup.h`, held to the text
+  path by the genxbf equivalence gate — and unifying the two XBF readers is
+  an open item, not an accident to preserve.
 - **No font fallback, no shaping, no kerning.** `TextBlock` sums per-character
   advances out of the harvested metrics. That is what the corpus measures and
   no more: a script needing glyph substitution, or a pair the font kerns, is

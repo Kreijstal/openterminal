@@ -50,6 +50,12 @@ add_library(openxaml_layout STATIC
     src/visual_state.cpp
     src/default_styles.cpp
     src/advanced_controls.cpp
+    # XBF: the binary form the SDK's XAML compiler emits and the shipped
+    # application actually loads. The container and node stream are decoded
+    # here; xbf_markup turns that node stream back into the document it was
+    # compiled from and hands it to the same markup engine the text path uses.
+    src/xbf.cpp
+    src/xbf_names.cpp
 )
 target_include_directories(openxaml_layout PUBLIC src)
 
@@ -195,6 +201,37 @@ add_executable(terminal_subtree_tests
 target_link_libraries(terminal_subtree_tests PRIVATE openxaml_layout)
 add_test(NAME terminal_subtree COMMAND terminal_subtree_tests)
 
+# What the XBF container and node stream actually say, on inputs whose every
+# byte is accounted for in the test itself. The corpus gate proves the loader
+# agrees with the text path; it cannot prove the reader rejects a malformed
+# file, because a malformed file is not something genxbf produces.
+add_executable(xbf_tests
+    tests/xbf_test.cpp
+    src/xbf_markup.cpp
+    src/markup.cpp
+)
+target_link_libraries(xbf_tests PRIVATE openxaml_layout)
+add_test(NAME xbf COMMAND xbf_tests)
+
+# The whole-corpus equivalence gate. Not an add_test: it needs .xbf files that
+# only the harvested SDK compiler under Wine can produce, so it is driven by
+# phase4/scripts/xbf_equivalence.py, which skips by name when they are absent.
+add_executable(xbf_equivalence
+    src/xbf_equivalence_main.cpp
+    src/xbf_markup.cpp
+    src/markup.cpp
+)
+target_link_libraries(xbf_equivalence PRIVATE openxaml_layout)
+
+# Reads Terminal's own compiled pages and reports, per file, what the loader
+# made of them. Driven by phase4/scripts/xbf_terminal_pages.py.
+add_executable(xbf_dump
+    src/xbf_dump_main.cpp
+    src/xbf_markup.cpp
+    src/markup.cpp
+)
+target_link_libraries(xbf_dump PRIVATE openxaml_layout)
+
 if(MSVC)
     target_compile_options(openxaml_layout PRIVATE /W4)
     target_compile_options(measure_cases PRIVATE /W4)
@@ -213,6 +250,9 @@ if(MSVC)
     target_compile_options(l4_composition_tests PRIVATE /W4)
     target_compile_options(windows_xaml_completion_tests PRIVATE /W4)
     target_compile_options(terminal_subtree_tests PRIVATE /W4)
+    target_compile_options(xbf_tests PRIVATE /W4)
+    target_compile_options(xbf_equivalence PRIVATE /W4)
+    target_compile_options(xbf_dump PRIVATE /W4)
 else()
     target_compile_options(openxaml_layout PRIVATE -Wall -Wextra)
     target_compile_options(measure_cases PRIVATE -Wall -Wextra)
@@ -231,4 +271,7 @@ else()
     target_compile_options(l4_composition_tests PRIVATE -Wall -Wextra)
     target_compile_options(windows_xaml_completion_tests PRIVATE -Wall -Wextra)
     target_compile_options(terminal_subtree_tests PRIVATE -Wall -Wextra)
+    target_compile_options(xbf_tests PRIVATE -Wall -Wextra)
+    target_compile_options(xbf_equivalence PRIVATE -Wall -Wextra)
+    target_compile_options(xbf_dump PRIVATE -Wall -Wextra)
 endif()

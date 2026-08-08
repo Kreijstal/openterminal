@@ -515,6 +515,14 @@ jobs:
       - name: What no measurement can check
         run: ctest --test-dir "$RUNNER_TEMP/layout-build" --output-on-failure
 
+      # The XBF loader's driver and gate. The gate itself needs the harvested
+      # SDK XAML compiler under Wine, which this runner does not have, so it
+      # skips by name here -- but the driver's project generation and its
+      # diagnostic parsing are pure text, and a mistake in either would turn
+      # "the compiler rejected this page" into "no page was ever compiled".
+      - name: The XBF loader's driver says what it did
+        run: python3 -m unittest discover -s phase4/tests -v
+
       # Twice, into separate directories. The oracle is held to determinism and
       # so is the implementation -- a layout that moves between runs cannot be
       # compared against anything.
