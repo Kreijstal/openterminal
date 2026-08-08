@@ -248,6 +248,14 @@ void FontLibrary::Add(std::string family, FontMetrics metrics) {
     fonts_[std::move(family)] = std::move(metrics);
 }
 
+bool FontLibrary::SetKerning(const std::string& family,
+                             std::map<std::pair<char32_t, char32_t>, double> pairs) {
+    const auto found = fonts_.find(family);
+    if (found == fonts_.end()) return false;
+    found->second.kerning = std::move(pairs);
+    return true;
+}
+
 const FontMetrics* FontLibrary::Find(const std::string& family) const {
     const auto found = fonts_.find(family);
     if (found != fonts_.end()) return &found->second;

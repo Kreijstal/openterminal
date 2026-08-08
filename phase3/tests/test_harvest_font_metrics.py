@@ -246,81 +246,81 @@ class HarvestFontMetricsTest(unittest.TestCase):
             advances=[500, 600], ranges=[(0x41, 0x41, 1)]))
         self.assertEqual(harvest(path, "Synthetic", [0x41])["missing"], [])
 
+    def kerning(self, **tables: bytes) -> dict[str, dict[str, int]]:
+        path = self.write(build_font(
+            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
+            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)], extra=tables))
+        return harvest(path, "Synthetic", [0x41, 0x42])["font_kerning"]
+
     def test_a_font_with_no_kerning_at_all_says_so(self) -> None:
         # Neither table is required, and an absent one is a font that kerns
         # nothing rather than a harvest that failed to look.
-        path = self.write(build_font(
-            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
-            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)]))
-        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"], {})
+        self.assertEqual(self.kerning(), {"gpos": {}, "kern": {}})
+
+    def test_the_two_tables_are_recorded_apart(self) -> None:
+        # The reason the split exists. The first run to read a real font found
+        # the runtime applying some of what it says and not the rest, and which
+        # table a pair came from is the first thing anyone will want to check.
+        # Merging them would have thrown that away before it could be asked.
+        found = self.kerning(kern=kern_table({(1, 2): -75}),
+                             GPOS=gpos_table([(2, pair_pos_format1({(2, 1): -200}))]))
+        self.assertEqual(found, {"gpos": {"66,65": -200}, "kern": {"65,66": -75}})
+
+    def test_a_pair_in_both_tables_is_reported_in_both(self) -> None:
+        found = self.kerning(kern=kern_table({(1, 2): -75}),
+                             GPOS=gpos_table([(2, pair_pos_format1({(1, 2): -75}))]))
+        self.assertEqual(found, {"gpos": {"65,66": -75}, "kern": {"65,66": -75}})
 
     def test_reads_the_legacy_kern_table(self) -> None:
         # 'A' and 'B' are glyphs 1 and 2; the pair moves by -75.
-        path = self.write(build_font(
-            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
-            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
-            extra={"kern": kern_table({(1, 2): -75})}))
-        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"],
+        self.assertEqual(self.kerning(kern=kern_table({(1, 2): -75}))["kern"],
                          {"65,66": -75})
 
     def test_reads_a_gpos_pair_adjustment(self) -> None:
-        path = self.write(build_font(
-            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
-            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
-            extra={"GPOS": gpos_table([(2, pair_pos_format1({(1, 2): -200}))])}))
-        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"],
-                         {"65,66": -200})
+        found = self.kerning(GPOS=gpos_table([(2, pair_pos_format1({(1, 2): -200}))]))
+        self.assertEqual(found["gpos"], {"65,66": -200})
 
     def test_reads_a_class_based_pair_adjustment(self) -> None:
         # Format 2 is how a real font stores most of its kerning: a value per
         # pair of classes rather than per pair of glyphs.
         subtable = pair_pos_format2({1: 1}, {2: 1}, {(1, 1): -120}, 2, 2)
-        path = self.write(build_font(
-            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
-            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
-            extra={"GPOS": gpos_table([(2, subtable)])}))
-        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"],
+        self.assertEqual(self.kerning(GPOS=gpos_table([(2, subtable)]))["gpos"],
                          {"65,66": -120})
 
     def test_reads_through_an_extension_lookup(self) -> None:
         # A font whose GPOS is over 64k puts its lookups behind type 9, which
         # is every font this project actually harvests.
         wrapped = extension(2, pair_pos_format1({(1, 2): -40}))
-        path = self.write(build_font(
-            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
-            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
-            extra={"GPOS": gpos_table([(9, wrapped)])}))
-        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"],
+        self.assertEqual(self.kerning(GPOS=gpos_table([(9, wrapped)]))["gpos"],
                          {"65,66": -40})
 
     def test_only_the_kern_feature_is_read(self) -> None:
         # A GPOS holds many features. Capital spacing is a pair adjustment too
         # and is off by default, so taking every PairPos in the table would
-        # widen text the runtime does not widen.
-        path = self.write(build_font(
-            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
-            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
-            extra={"GPOS": gpos_table([(2, pair_pos_format1({(1, 2): -200}))],
-                                      feature="cpsp")}))
-        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"], {})
+        # record spacing the kern feature never asked for.
+        found = self.kerning(GPOS=gpos_table(
+            [(2, pair_pos_format1({(1, 2): -200}))], feature="cpsp"))
+        self.assertEqual(found["gpos"], {})
 
     def test_a_pair_outside_the_harvested_set_is_not_recorded(self) -> None:
         # The harvest asks for the codepoints the corpus uses. A pair reaching
         # a glyph outside that set is a fact about the font and not about
         # anything this repository measures, so it stays out of the file.
-        path = self.write(build_font(
-            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
-            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
-            extra={"kern": kern_table({(1, 2): -75, (2, 3): -10})}))
-        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"],
+        self.assertEqual(self.kerning(kern=kern_table({(1, 2): -75, (2, 3): -10}))["kern"],
                          {"65,66": -75})
 
     def test_a_zero_adjustment_is_not_a_pair(self) -> None:
-        path = self.write(build_font(
+        self.assertEqual(self.kerning(kern=kern_table({(1, 2): 0}))["kern"], {})
+
+    def test_the_harvest_never_claims_which_pairs_apply(self) -> None:
+        # "kerning" is what the layout core reads and it is solved from the
+        # measurements, so a harvest must not write it. fonts.cpp refuses a
+        # harvested file that does; this is the other end of the same rule.
+        metrics = harvest(self.write(build_font(
             units_per_em=1000, ascender=800, descender=-200, line_gap=0,
             advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
-            extra={"kern": kern_table({(1, 2): 0})}))
-        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"], {})
+            extra={"kern": kern_table({(1, 2): -75})})), "Synthetic", [0x41, 0x42])
+        self.assertNotIn("kerning", metrics)
 
     def test_reports_a_missing_table(self) -> None:
         data = build_font(units_per_em=1000, ascender=800, descender=-200, line_gap=0,

@@ -23,8 +23,8 @@ SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIRECTORY))
 
 from derive_font_metrics import (  # noqa: E402
-    DerivationError, Sample, collect, derive, run_width, solve_advances,
-    solve_line_spacing, solve_pair_adjustments,
+    DerivationError, Sample, check_kerning, collect, derive, run_width,
+    solve_advances, solve_line_spacing, solve_pair_adjustments,
 )
 
 # Segoe UI's, harvested. The pair solver needs advances it cannot itself derive
@@ -114,6 +114,11 @@ class SolveFromRecordedTest(unittest.TestCase):
         self.assertEqual(derived["units_per_em"], 2048)
         self.assertEqual(hhea["ascender"] - hhea["descender"] + hhea["line_gap"], 2724)
         self.assertEqual(derived["advances"], {"77": 1839})
+        # The pair the recorded runs witness, and only that one. The font's own
+        # table has four more among these same characters and the recorded
+        # pangram shows the runtime did not apply them, which is why this list
+        # is committed here rather than read off the font.
+        self.assertEqual(derived["kerning"], {"84,101": -200})
 
     def test_the_committed_file_is_labelled_as_not_harvested(self) -> None:
         # measure_cases and harvest_font_metrics both read this file. Nothing
@@ -131,7 +136,9 @@ class SolvePairsFromRecordedTest(unittest.TestCase):
     reproduces every recorded run, and gets one answer. A harvest whose kern
     table says something else fails the cross-check in CI, and that is the
     point -- the number below is a statement about Segoe UI that the font
-    itself is allowed to contradict.
+    itself is allowed to contradict. It did: the runner's Segoe UI kerns four
+    more pairs among these very characters and the runtime applied none of
+    them. See KerningGateTest below.
     """
 
     def samples(self) -> list[Sample]:
@@ -181,6 +188,86 @@ class SolvePairsFromRecordedTest(unittest.TestCase):
         wrapped = [Sample("wrapped", "Terminal", 24.0, 57.61, 0.0, wraps=True)]
         with self.assertRaisesRegex(DerivationError, "no unwrapped"):
             solve_pair_adjustments(wrapped, SEGOE_UI_ADVANCES, 2048)
+
+
+class KerningGateTest(unittest.TestCase):
+    """What CI holds the committed pair adjustments to, in both directions.
+
+    The pairs below are the runner's real Segoe UI, read off it by the first
+    measurement run that harvested a kern table: Te -200, and ox -25, ro -27,
+    ve -12, rm -4. The recorded runs say the runtime applied the first and none
+    of the rest, so a metrics file carrying the font's table measures the
+    pangram too narrow. That run is the reason this gate exists, and these are
+    its numbers.
+    """
+
+    FONT_TABLE = {("T", "e"): -200, ("o", "x"): -25, ("r", "o"): -27,
+                  ("v", "e"): -12, ("r", "m"): -4}
+    IMPLIED = {("T", "e"): -200}
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.cases = self.root / "cases" / "L4-text"
+        self.measurements = self.root / "measurements"
+        self.cases.mkdir(parents=True)
+        self.measurements.mkdir(parents=True)
+
+        for index, ((text, size), width) in enumerate(RECORDED_RUNS.items(), start=1):
+            case_id = f"L4-text-{index:04d}"
+            markup = ('<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/'
+                      f'presentation" FontFamily="Segoe UI" FontSize="{size}" '
+                      f'TextWrapping="NoWrap">{text}</TextBlock>')
+            (self.cases / f"{case_id}.json").write_text(json.dumps({
+                "schema_version": 1, "id": case_id, "level": 4, "group": "text",
+                "markup": markup,
+                "environment": {"font_family": "Segoe UI", "font_size": size},
+            }), encoding="utf-8")
+            (self.measurements / f"{case_id}.json").write_text(json.dumps({
+                "schema_version": 1, "case_id": case_id,
+                "tree": [{"path": "/Windows.UI.Xaml.Controls.TextBlock",
+                          "type": "Windows.UI.Xaml.Controls.TextBlock",
+                          "desired": [width, 19.0], "actual": [width, 19.0],
+                          "offset": [0.0, 0.0]}],
+            }), encoding="utf-8")
+
+    def check(self, committed):
+        return check_kerning(self.root / "cases", self.measurements,
+                             SEGOE_UI_ADVANCES, "Segoe UI", 2048, committed)
+
+    def test_the_implied_pair_passes(self) -> None:
+        self.assertEqual(self.check(self.IMPLIED), [])
+
+    def test_the_fonts_whole_table_is_refused(self) -> None:
+        # The exact failure the first CI run produced, reduced to a test. Both
+        # words move: the pangram by ox/ro/ve and "Terminal" by rm.
+        problems = self.check(self.FONT_TABLE)
+        self.assertTrue(any(PANGRAM in p for p in problems))
+        self.assertTrue(any("Terminal" in p for p in problems))
+        self.assertTrue(any("imply Te -200" in p for p in problems))
+
+    def test_a_missing_pair_is_caught(self) -> None:
+        problems = self.check({})
+        self.assertTrue(any("Terminal" in p for p in problems))
+        # The pangram is right without any adjustment, so it must not be named.
+        self.assertFalse(any(PANGRAM in p for p in problems))
+
+    def test_a_pair_with_the_wrong_value_is_caught(self) -> None:
+        self.assertTrue(self.check({("T", "e"): -100}))
+
+    def test_a_pair_no_recorded_run_witnesses_is_caught(self) -> None:
+        # Not refuted by anything -- no run contains "WA" -- but not implied
+        # either, and the committed file may only hold what the runs imply.
+        problems = self.check({("T", "e"): -200, ("W", "A"): -150})
+        self.assertEqual(len(problems), 1)
+        self.assertIn("do not witness it", problems[0])
+
+    def test_a_family_the_corpus_never_measured_is_an_error(self) -> None:
+        problems = check_kerning(self.root / "cases", self.measurements,
+                                 SEGOE_UI_ADVANCES, "Consolas", 2048, {})
+        self.assertEqual(len(problems), 1)
+        self.assertIn("Consolas", problems[0])
 
 
 class SolveSyntheticTest(unittest.TestCase):

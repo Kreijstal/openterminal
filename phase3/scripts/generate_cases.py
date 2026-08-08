@@ -906,6 +906,115 @@ def level4_source() -> Iterator[dict[str, Any]]:
         )
 
 
+# --- L4: which kern pairs the runtime actually applies -------------------------
+# The corpus already knows the runtime kerns *something*: "Terminal" measures
+# 200 design units narrower than its advances add up to, at all three recorded
+# sizes. It also knows the runtime does not kern everything the font does. Segoe
+# UI on 10.0.26100.33158 carries five pairs among the characters already
+# measured -- Te -200, ro -27, ox -25, ve -12, rm -4 -- and the pangram, which
+# holds three of them, measures the raw sum of its advances at all three sizes.
+#
+# So a rule picks the survivors and nothing recorded says which. Three
+# candidates fit equally well: the table a pair lives in (GPOS against the
+# legacy `kern`), the size of the adjustment, or the classes of the two glyphs --
+# Te is the only uppercase-then-lowercase pair of the five.
+#
+# The trouble with the evidence so far is that every pair was measured inside a
+# word with six others, so what is recorded is a sum. These are the unconfounded
+# version: two characters, one candidate pair, nothing else in the run. The
+# harvest supplies both advances and what the font says about the pair, so each
+# recorded width answers "was this one applied" on its own.
+#
+# See phase3/xaml-db/fonts/README.md for the table these are meant to fill in.
+
+# The five the corpus has already argued about, each now on its own. Three sizes
+# because the 1/300 DIP snap can swallow a small adjustment at one size and not
+# another, and rm is only -4.
+KERN_WITNESSED = ["Te", "ro", "ox", "ve", "rm"]
+
+# The class probe, split down the middle of the one hypothesis the five cannot
+# test. Te is the only uppercase-then-lowercase pair among them and the only one
+# applied; if that is the rule, these four go one way and those four the other.
+# Which of them the font kerns at all, and by how much, arrives in the same run
+# as `font_kerning` -- so a pair the font leaves alone costs a case and answers
+# nothing rather than misleading.
+KERN_UPPER_LOWER = ["Ta", "To", "Wa", "Ya"]
+KERN_LOWER_LOWER = ["vo", "wa", "ry", "yo"]
+
+# Two stems side by side, which no Latin font kerns. The control: if this one
+# comes back narrower than its advances, the difference is not kerning at all
+# and every reading above is wrong.
+KERN_CONTROL = "nn"
+
+
+def kern_run(text: str, size: str) -> str:
+    return (f'<TextBlock xmlns="{XMLNS}" FontFamily="Segoe UI" FontSize="{size}" '
+            f'TextWrapping="NoWrap">{text}</TextBlock>')
+
+
+def level4_kern() -> Iterator[dict[str, Any]]:
+    needs = ["L4-text"]
+    isolated = (
+        "The layout core applies exactly the pairs the recorded runs witness, "
+        "which today is Te -200 and nothing else, so it predicts this run at the "
+        "sum of its two advances plus that pair's adjustment if it is Te and the "
+        "raw sum otherwise. What the font says about the pair is in the same "
+        "run's font_kerning. If a pair the font kerns comes back at the raw sum, "
+        "the runtime did not apply it; if it comes back short by what the font "
+        "says, it did. Either answer is one row of the table in "
+        "phase3/xaml-db/fonts/README.md, and enough of them separate the three "
+        "candidate rules -- source table, magnitude, glyph class."
+    )
+
+    for text in KERN_WITNESSED:
+        for size in ["12", "14", "24"]:
+            yield case(
+                f"L4-kern-{text}-{size}", 4, "kern", kern_run(text, size),
+                [400.0, 300.0],
+                f"the pair {text!r} on its own at {size}, which the corpus has so "
+                f"far only measured inside a word",
+                requires=needs, question=isolated,
+            )
+
+    for group, pairs in [("upper", KERN_UPPER_LOWER), ("lower", KERN_LOWER_LOWER)]:
+        for text in pairs:
+            for size in ["14", "24"]:
+                yield case(
+                    f"L4-kern-{group}-{text}-{size}", 4, "kern", kern_run(text, size),
+                    [400.0, 300.0],
+                    f"the pair {text!r} at {size}: "
+                    f"{'uppercase then lowercase, like Te' if group == 'upper' else 'lowercase, like the four that were not applied'}",
+                    requires=needs, question=isolated,
+                )
+
+    yield case(
+        f"L4-kern-control-{KERN_CONTROL}-14", 4, "kern", kern_run(KERN_CONTROL, "14"),
+        [400.0, 300.0],
+        f"{KERN_CONTROL!r}, a pair no Latin font kerns: the control for every "
+        f"reading above",
+        requires=needs, question=isolated,
+    )
+
+    # Whether a pair keeps its adjustment as the run grows. "Terminal" is
+    # already recorded and is short by exactly Te, so the answer should be yes;
+    # these make it observable one character at a time rather than as one sum
+    # eight characters long.
+    context = (
+        "Terminal is recorded short by exactly Te at every size, so a pair "
+        "applied in isolation should still be applied here. If Te on its own "
+        "and Te inside a longer run disagree, the adjustment depends on what "
+        "follows it and the whole model in text.cpp -- one pass, left to right, "
+        "each pair folded into the first glyph's advance -- is wrong."
+    )
+    for text in ["Ten", "Term"]:
+        yield case(
+            f"L4-kern-context-{text}-14", 4, "kern", kern_run(text, "14"),
+            [400.0, 300.0],
+            f"{text!r}: the same Te pair with more of the word after it",
+            requires=needs, question=context,
+        )
+
+
 # --- L5: resources ------------------------------------------------------------
 # Authored, not crossed. Resource lookup has rules rather than axes: a
 # {StaticResource} resolves to the same literal whatever the available size is,
@@ -2136,7 +2245,7 @@ LEVELS = {
     1: [level1, level1_shape],
     2: [level2, level2_content],
     3: [level3, level3_canvas, level3_scroll],
-    4: [level4, level4_icon, level4_source],
+    4: [level4, level4_icon, level4_source, level4_kern],
     5: [level5, level5_styles, level5_theme, level5_x_primitives, level5_x_directives],
 }
 

@@ -9,6 +9,9 @@
   "descender": 0,
   "line_gap": 0
  },
+ "kerning": {
+  "84,101": -200
+ },
  "provenance": "derived",
  "schema_version": 1,
  "units_per_em": 2048,

@@ -341,20 +341,29 @@ jobs:
             --output phase3/xaml-db/fonts/derived/segoe-ui.json \
             --check
 
-      # The one metric the derived file cannot carry, checked the same way. A
-      # pair adjustment needs the advances before the corpus can say anything
-      # about it -- a word constrains their sum, not any one of them -- so this
-      # reads them out of the harvest and asks the measurements what is left
-      # over. "Terminal" in Segoe UI measures 200 design units narrower than
-      # its advances add up to, at every recorded size, and the pangram beside
-      # it needs nothing; a kern table that does not say the same about T
-      # before e means the rules in text.cpp and the font have parted company.
-      - name: The kern table matches what the recorded runs imply
+      # The pair adjustments, which the same file carries and the step above
+      # deliberately skips: they cannot be derived without the harvest, because
+      # a word constrains the sum of its advances and not any one of them. So
+      # this hands over the advances just read off the font and asks the fresh
+      # measurements whether the committed pairs are still exactly right.
+      #
+      # Both directions, because both have been wrong. The committed list has
+      # to reproduce every recorded run -- which catches a pair that is missing
+      # or has drifted -- and every pair in it has to be load-bearing, which
+      # catches one the runs do not witness. The first run to read a real kern
+      # table put all of Segoe UI's pairs into the metrics and four of them,
+      # ox ro ve rm, are ones the recorded pangram proves the runtime did not
+      # apply. Which rule picks the survivors is an open question; see
+      # phase3/xaml-db/fonts/README.md. What is not open is that the font's
+      # table is not the answer, and this is the step that says so.
+      - name: The committed kerning is what the recorded runs imply
         shell: bash
         run: |
           python3 -B phase3/scripts/derive_font_metrics.py \
             --measurements "phase3/xaml-db/measurements/${os_build}" \
-            --check-kerning phase3/xaml-db/fonts/segoe-ui.json
+            --advances-from phase3/xaml-db/fonts/segoe-ui.json \
+            --output phase3/xaml-db/fonts/derived/segoe-ui.json \
+            --check-kerning
 
       # The measurements are not committed -- they are this job's artifact. The
       # digest of them is, so that a servicing update to Windows shows up as a
@@ -485,11 +494,20 @@ jobs:
       # Twice, into separate directories. The oracle is held to determinism and
       # so is the implementation -- a layout that moves between runs cannot be
       # compared against anything.
+      #
+      # The metrics come from the artifact and the kerning does not, because
+      # they are different kinds of claim. The harvest says what is in the
+      # font; which of those pairs the runtime applies is only knowable from
+      # the measurements, and Segoe UI is the proof -- it kerns four pairs the
+      # recorded runs show were never applied. So the pairs come from the
+      # committed derived file, which the step above holds to these very
+      # measurements.
       - name: Results are deterministic
         run: |
           for run in 1 2; do
             "$RUNNER_TEMP/layout-build/measure_cases" \
-              phase3/xaml-db/cases "$RUNNER_TEMP/run$run" fonts
+              phase3/xaml-db/cases "$RUNNER_TEMP/run$run" fonts \
+              --kerning phase3/xaml-db/fonts/derived/segoe-ui.json
           done
           if ! diff -r "$RUNNER_TEMP/run1" "$RUNNER_TEMP/run2" > "$RUNNER_TEMP/nondet.txt"; then
             echo "::error::layout results differ between two runs on the same machine"
