@@ -48,8 +48,26 @@ const std::vector<std::string>& FontIcon::Owners() { return kFontIconOwners; }
 const DependencyProperty& FontIcon::GlyphProperty() { return *kGlyph; }
 const DependencyProperty& FontIcon::FontSizeProperty() { return *kIconFontSize; }
 const DependencyProperty& FontIcon::FontFamilyProperty() { return *kIconFontFamily; }
+const DependencyProperty& FontIcon::FontWeightProperty() { return *kFontWeight; }
+
+// The metrics are harvested from one file per family, which is one weight. A
+// heavier one is a different face, and the corpus says the runtime measures it
+// wider -- FontWeight="Black" on a square icon reports 11 at size 10 and 15 at
+// size 14, where the unweighted glyph reports 10 and 14. Two observations, and
+// more than one rule reproduces both: a whole extra DIP, a twenty-fourth of the
+// em and two percent of it all land there. So this refuses rather than picking
+// one; see phase3/xaml-db/fonts/README.md.
+void FontIcon::RequireHarvestedWeight() const {
+    const std::string& weight = font_weight();
+    if (weight.empty() || weight == "Normal") return;
+    throw TextError("the harvested metrics for \"" + font_family() +
+                    "\" were read at Normal weight; FontWeight=\"" + weight +
+                    "\" is a face this corpus has no metrics for, and the two sizes "
+                    "that measure it do not pin what the weight adds");
+}
 
 Size FontIcon::MeasureOverride(Size available) {
+    RequireHarvestedWeight();
     content_.set_text(glyph());
     content_.set_font_size(font_size());
     content_.set_font_family(font_family());
@@ -58,8 +76,12 @@ Size FontIcon::MeasureOverride(Size available) {
 }
 
 Size FontIcon::ArrangeOverride(Size final_size) {
+    // The slot, not the glyph. A FontIcon is a FrameworkElement and stretches
+    // like one: the corpus arranges a root FontIcon into 400x300 and records
+    // 400x300, and into nothing and records nothing. The glyph inside it is
+    // what the icon draws, not what the icon occupies.
     content_.Arrange({0, 0, final_size.width, final_size.height});
-    return content_.render_size();
+    return final_size;
 }
 
 }  // namespace openxaml

@@ -127,6 +127,19 @@ add_executable(wave4_tests tests/wave4_test.cpp src/markup.cpp)
 target_link_libraries(wave4_tests PRIVATE openxaml_layout)
 add_test(NAME wave4 COMMAND wave4_tests)
 
+# Which rule produced a level 4 number. The corpus pins the numbers and cannot
+# pin the rules: a line height read off the wrong family and one read off the
+# right one agree whenever the two fonts happen to match, and Segoe UI's
+# fallback list is full of families that do not. These hold each composition
+# rule against metrics invented for the purpose, where they disagree by
+# construction.
+add_executable(l4_composition_tests
+    tests/l4_composition_test.cpp
+    src/markup.cpp
+)
+target_link_libraries(l4_composition_tests PRIVATE openxaml_layout)
+add_test(NAME l4_composition COMMAND l4_composition_tests)
+
 add_executable(windows_xaml_completion_tests
     tests/windows_xaml_completion_test.cpp
     src/markup.cpp
@@ -145,6 +158,7 @@ if(MSVC)
     target_compile_options(xdirective_tests PRIVATE /W4)
     target_compile_options(wave3_tests PRIVATE /W4)
     target_compile_options(wave4_tests PRIVATE /W4)
+    target_compile_options(l4_composition_tests PRIVATE /W4)
     target_compile_options(windows_xaml_completion_tests PRIVATE /W4)
 else()
     target_compile_options(openxaml_layout PRIVATE -Wall -Wextra)
@@ -157,5 +171,6 @@ else()
     target_compile_options(xdirective_tests PRIVATE -Wall -Wextra)
     target_compile_options(wave3_tests PRIVATE -Wall -Wextra)
     target_compile_options(wave4_tests PRIVATE -Wall -Wextra)
+    target_compile_options(l4_composition_tests PRIVATE -Wall -Wextra)
     target_compile_options(windows_xaml_completion_tests PRIVATE -Wall -Wextra)
 endif()

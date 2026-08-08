@@ -21,6 +21,15 @@ double Number(const JsonValue& parent, const std::string& key, const std::string
     return value.number;
 }
 
+// Keys are decimal codepoints. Rejecting anything else keeps a mangled file
+// from loading as a font with a few odd characters.
+char32_t Codepoint(const std::string& text, const std::string& where) {
+    size_t consumed = 0;
+    const unsigned long value = std::stoul(text, &consumed);
+    if (consumed != text.size()) throw JsonError(where + ": \"" + text + "\" is not a codepoint");
+    return static_cast<char32_t>(value);
+}
+
 }  // namespace
 
 FontMetrics ParseFontMetrics(const std::string& json, const std::string& where) {
@@ -57,15 +66,32 @@ FontMetrics ParseFontMetrics(const std::string& json, const std::string& where) 
     for (const auto& entry : advances.object) {
         if (entry.second.kind != JsonValue::Kind::Number)
             throw JsonError(where + ": the advance for " + entry.first + " is not a number");
-        // Keys are decimal codepoints. Rejecting anything else keeps a
-        // mangled file from loading as a font with a few odd characters.
-        size_t consumed = 0;
-        const unsigned long codepoint = std::stoul(entry.first, &consumed);
-        if (consumed != entry.first.size())
-            throw JsonError(where + ": \"" + entry.first + "\" is not a codepoint");
-        metrics.advances[static_cast<char32_t>(codepoint)] = entry.second.number;
+        metrics.advances[Codepoint(entry.first, where)] = entry.second.number;
     }
     if (metrics.advances.empty()) throw JsonError(where + ": the metrics have no advances");
+
+    // Optional, and absent means a font that kerns nothing rather than a file
+    // that forgot to say. Every metrics file written before the harvester read
+    // a kern table is the first of those and must keep loading.
+    if (document.Has("kerning")) {
+        const JsonValue& kerning = document.At("kerning");
+        if (kerning.kind != JsonValue::Kind::Object)
+            throw JsonError(where + ": \"kerning\" is not an object");
+        for (const auto& entry : kerning.object) {
+            if (entry.second.kind != JsonValue::Kind::Number)
+                throw JsonError(where + ": the kerning for " + entry.first + " is not a number");
+            // "left,right", the two decimal codepoints the adjustment sits
+            // between. One key rather than nested objects so the block sorts
+            // and diffs the way the advances do.
+            const size_t comma = entry.first.find(',');
+            if (comma == std::string::npos)
+                throw JsonError(where + ": \"" + entry.first +
+                                "\" is not a codepoint pair; expected \"left,right\"");
+            const char32_t left = Codepoint(entry.first.substr(0, comma), where);
+            const char32_t right = Codepoint(entry.first.substr(comma + 1), where);
+            metrics.kerning[{left, right}] = entry.second.number;
+        }
+    }
     return metrics;
 }
 

@@ -115,9 +115,16 @@ std::string Describe(char32_t code) {
     return buffer;
 }
 
+// A pair adjustment joins the first glyph's advance in design units and snaps
+// with it, rather than snapping on its own and being added afterwards. The
+// corpus separates the two: Segoe UI kerns T before e by -200 units, and at
+// size 12 "Terminal" measures 44.6133, which is the first rule. Snapping the
+// -200 alone gives 44.61.
 std::vector<Glyph> Shape(const std::string& text, const FontMetrics& font, double font_size) {
+    const std::vector<char32_t> codes = DecodeUtf8(text);
     std::vector<Glyph> glyphs;
-    for (char32_t code : DecodeUtf8(text)) {
+    for (size_t index = 0; index < codes.size(); ++index) {
+        const char32_t code = codes[index];
         const auto found = font.advances.find(code);
         if (found == font.advances.end()) {
             // Which metrics are loaded decides what the reader has to do about
@@ -132,9 +139,12 @@ std::vector<Glyph> Shape(const std::string& text, const FontMetrics& font, doubl
             }
             throw TextError("the harvested font metrics have no advance for " + Describe(code));
         }
+        const double pair = index + 1 < codes.size()
+                                ? font.PairAdjustment(code, codes[index + 1])
+                                : 0.0;
         Glyph glyph;
         glyph.code = code;
-        glyph.advance = SnapText(found->second * font_size / font.units_per_em);
+        glyph.advance = SnapText((found->second + pair) * font_size / font.units_per_em);
         glyph.space = IsBreakSpace(code);
         glyphs.push_back(glyph);
     }
@@ -303,14 +313,21 @@ Size TextBlock::LayoutText(double limit) const {
     const double size = font_size();
     const std::string& content = text();
 
+    // Two families, because a fallback list splits the answer. The line box
+    // belongs to the family that was named first -- a FontIcon in Terminal's
+    // "Segoe UI, Segoe Fluent Icons, Segoe MDL2 Assets" is 12 wide and 16 tall
+    // at size 12, which is one em of an icon font inside one line of Segoe UI --
+    // while the advances belong to whichever family has the glyph.
+    const FontMetrics* line_font = FontLibrary::Default().Find(family);
     const FontMetrics* font = FontLibrary::Default().FindForText(family, content);
-    if (!font) {
+    if (!line_font || !font) {
         throw TextError("no harvested metrics for the font family \"" + family +
                         "\"; see phase3/xaml-db/fonts");
     }
-    if (font->units_per_em <= 0.0) throw TextError("the font metrics have no units per em");
+    if (font->units_per_em <= 0.0 || line_font->units_per_em <= 0.0)
+        throw TextError("the font metrics have no units per em");
 
-    const double spacing = font->LineSpacing() * size / font->units_per_em;
+    const double spacing = line_font->LineSpacing() * size / line_font->units_per_em;
 
     // An empty TextBlock still occupies a line, and that line keeps the
     // unsnapped height. This is the one place the two differ, and the corpus
