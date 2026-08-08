@@ -23,8 +23,30 @@ SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIRECTORY))
 
 from derive_font_metrics import (  # noqa: E402
-    DerivationError, Sample, collect, derive, solve_advances, solve_line_spacing,
+    DerivationError, Sample, collect, derive, run_width, solve_advances,
+    solve_line_spacing, solve_pair_adjustments,
 )
+
+# Segoe UI's, harvested. The pair solver needs advances it cannot itself derive
+# -- a word constrains their sum and not any one of them -- so it is given them,
+# which is exactly the direction the checked-not-trusted bargain runs in.
+SEGOE_UI_ADVANCES = {
+    ord(" "): 561, ord("T"): 1073, ord("a"): 1042, ord("b"): 1204, ord("c"): 946,
+    ord("d"): 1206, ord("e"): 1071, ord("f"): 641, ord("g"): 1206, ord("h"): 1159,
+    ord("i"): 496, ord("j"): 496, ord("k"): 1018, ord("l"): 496, ord("m"): 1764,
+    ord("n"): 1159, ord("o"): 1200, ord("p"): 1204, ord("q"): 1206, ord("r"): 712,
+    ord("s"): 869, ord("t"): 694, ord("u"): 1159, ord("v"): 981, ord("w"): 1480,
+    ord("x"): 940, ord("y"): 991, ord("z"): 926,
+}
+
+# What the runtime answered for the unwrapped runs, at the three sizes the
+# corpus records. "Terminal" is 200 design units narrower than its advances add
+# up to; the pangram is exactly what they add up to.
+PANGRAM = "The quick brown fox jumps over the lazy dog"
+RECORDED_RUNS = {
+    ("Terminal", 12.0): 44.6133, ("Terminal", 14.0): 52.04, ("Terminal", 24.0): 89.2167,
+    (PANGRAM, 12.0): 237.88, (PANGRAM, 14.0): 277.5133, (PANGRAM, 24.0): 475.7767,
+}
 
 DERIVED = (Path(__file__).resolve().parents[1]
            / "xaml-db" / "fonts" / "derived" / "segoe-ui.json")
@@ -99,6 +121,66 @@ class SolveFromRecordedTest(unittest.TestCase):
         derived = json.loads(DERIVED.read_text(encoding="utf-8"))
         self.assertEqual(derived["provenance"], "derived")
         self.assertIn("NOT harvested", derived["derivation"])
+
+
+class SolvePairsFromRecordedTest(unittest.TestCase):
+    """What the corpus says a pair of adjacent glyphs does to the advance.
+
+    This is the falsifiable half of the kerning rule. Nothing here reads a
+    font: it takes the advances the harvest found, asks which pair adjustment
+    reproduces every recorded run, and gets one answer. A harvest whose kern
+    table says something else fails the cross-check in CI, and that is the
+    point -- the number below is a statement about Segoe UI that the font
+    itself is allowed to contradict.
+    """
+
+    def samples(self) -> list[Sample]:
+        return [Sample(f"run-{index}", text, size, width, 0.0)
+                for index, ((text, size), width) in enumerate(RECORDED_RUNS.items())]
+
+    def test_one_pair_adjustment_explains_every_recorded_run(self) -> None:
+        self.assertEqual(solve_pair_adjustments(self.samples(), SEGOE_UI_ADVANCES, 2048),
+                         {("T", "e"): -200})
+
+    def test_the_pangram_needs_no_adjustment_at_all(self) -> None:
+        # It is the corroboration: the same advances, summed the same way, land
+        # on the recorded number without any pair moving. So the 200 belongs to
+        # a pair "Terminal" has and it does not, rather than to the arithmetic.
+        pangram = [s for s in self.samples() if s.text == PANGRAM]
+        self.assertEqual(solve_pair_adjustments(pangram, SEGOE_UI_ADVANCES, 2048), {})
+
+    def test_the_adjustment_joins_the_advance_before_the_snap(self) -> None:
+        # Snapping -200 on its own and adding it afterwards is a different
+        # computation, and at size 12 it lands 1/300 of a DIP away. The corpus
+        # records the first, which is why run_width folds it into the advance.
+        kerned = run_width("Te", SEGOE_UI_ADVANCES, {("T", "e"): -200}, 2048, 12.0)
+        separate = run_width("Te", SEGOE_UI_ADVANCES, {}, 2048, 12.0) + (
+            round(-200 * 12.0 / 2048 * 300) / 300)
+        self.assertNotAlmostEqual(kerned, separate, places=4)
+        self.assertAlmostEqual(
+            run_width("Terminal", SEGOE_UI_ADVANCES, {("T", "e"): -200}, 2048, 12.0),
+            44.6133, places=4)
+
+    def test_a_run_that_needs_two_pairs_to_move_is_refused(self) -> None:
+        # One pair is the whole of what this can pin. A corpus that needed two
+        # has to say so rather than pick the pair it happens to try first.
+        samples = self.samples() + [
+            Sample("both", "Ta", 12.0,
+                   run_width("Ta", SEGOE_UI_ADVANCES, {("T", "a"): -150}, 2048, 12.0), 0.0)]
+        with self.assertRaisesRegex(DerivationError, "more than one pair"):
+            solve_pair_adjustments(samples, SEGOE_UI_ADVANCES, 2048)
+
+    def test_a_run_with_an_unharvested_character_is_not_an_observation(self) -> None:
+        samples = self.samples() + [Sample("greek", "αβ", 12.0, 9.0, 0.0)]
+        self.assertEqual(solve_pair_adjustments(samples, SEGOE_UI_ADVANCES, 2048),
+                         {("T", "e"): -200})
+
+    def test_a_wrapped_run_says_nothing_about_its_pairs(self) -> None:
+        # A wrapped run's recorded width is its longest line, so the pairs that
+        # fell on another line are not in the number at all.
+        wrapped = [Sample("wrapped", "Terminal", 24.0, 57.61, 0.0, wraps=True)]
+        with self.assertRaisesRegex(DerivationError, "no unwrapped"):
+            solve_pair_adjustments(wrapped, SEGOE_UI_ADVANCES, 2048)
 
 
 class SolveSyntheticTest(unittest.TestCase):

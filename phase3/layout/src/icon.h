@@ -64,13 +64,18 @@ public:
     void set_font_size(double value) { SetValue(FontSizeProperty(), value); }
     const std::string& font_family() const { return GetString(FontFamilyProperty()); }
     void set_font_family(std::string value) { SetValue(FontFamilyProperty(), std::move(value)); }
+    const std::string& font_weight() const { return GetString(FontWeightProperty()); }
+    void set_font_weight(std::string value) { SetValue(FontWeightProperty(), std::move(value)); }
     static const DependencyProperty& GlyphProperty();
     static const DependencyProperty& FontSizeProperty();
     static const DependencyProperty& FontFamilyProperty();
+    static const DependencyProperty& FontWeightProperty();
 protected:
     Size MeasureOverride(Size available) override;
     Size ArrangeOverride(Size final_size) override;
 private:
+    void RequireHarvestedWeight() const;
+
     TextBlock content_;
 };
 

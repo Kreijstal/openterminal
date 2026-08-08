@@ -21,9 +21,19 @@ directory or the other, never a mixture.
 
 Segoe UI is not ours to redistribute and a `.ttf` is a binary either way, so the
 font never leaves the machine that has it. Only the metrics travel:
-`harvest_font_metrics.py` reads `head`, `hhea`, `OS/2`, `hmtx` and `cmap` on the
-Windows runner — the same runner, in the same job, as the oracle those metrics
-are checked against — and writes one JSON file per family.
+`harvest_font_metrics.py` reads `head`, `hhea`, `OS/2`, `hmtx`, `cmap` and the
+pair kerning in `kern` and `GPOS` on the Windows runner — the same runner, in
+the same job, as the oracle those metrics are checked against — and writes one
+JSON file per family.
+
+Kerning is read because the corpus says the runtime honours it: `Terminal` in
+Segoe UI measures 200 design units narrower than its advances add up to, at
+every size recorded, while the pangram beside it measures exactly what they add
+up to. Only the `kern` feature is taken out of `GPOS` — a font keeps pair
+adjustments there for other purposes, capital spacing among them, and those are
+off unless a shaper asks — and only for pairs of codepoints that were asked for,
+so the block stays as reviewable as the advances. An icon font's is empty, which
+is a reading and not a gap.
 
 Those files are CI output, on the same terms as `../measurements/`: they are a
 reading taken off the runner's copy of a font we do not own, they are
@@ -55,6 +65,23 @@ inventory, at
 That file is committed and CI holds it to reproducing, exactly like the
 inventory: the set is research data about Terminal, and a hand-typed list would
 be wrong the first time Terminal changed an icon.
+
+Two of the `L4-icon` cases are open questions rather than gaps in the harvest,
+and both are refusals in the layout core rather than numbers:
+
+**Where the runtime goes when no named family has the glyph.**
+`L4-icon-rule-mdl2-latin-14` asks Segoe MDL2 Assets for `M`, which it does not
+have, and the oracle answers 10 wide by 14 tall. The 14 is the icon font's line
+box, so that half is settled; the 10 is neither its em nor Segoe UI's `M` at
+that size, which is 12.57. So the runtime fell back past every family the markup
+names, to one chosen by rules nothing here records. Harvesting more families
+would not answer it — knowing *which* font it picked is the missing measurement.
+
+**What a weight the metrics were not read at adds.** `FontWeight="Black"` on a
+square icon is recorded 11 wide at size 10 and 15 at size 14, where the
+unweighted glyph is 10 and 14. More than one rule reproduces both — a whole DIP,
+a twenty-fourth of the em, two percent of it — so two observations do not pin it.
+A third size, or a harvest of the bold face, would.
 
 Two things work differently for an icon font, and both are deliberate:
 
@@ -104,8 +131,10 @@ checks the harvest. So this half is committed and the harvest is not.
     phase3/layout/build/measure_cases phase3/xaml-db/cases /tmp/results \
         phase3/xaml-db/fonts/derived
 
-That gets 36 of the 72 level 4 cases — every one whose answer needs only a line
-height and the advance of `M`. The other 36 measure `Terminal` and a pangram,
+That gets 46 of the 147 level 4 cases — every one whose answer needs only a line
+height and the advance of `M`, including the six `FontIcon` cases deliberately
+written in Segoe UI so the icon sizing rule could be pinned before any icon
+metric was trusted. The text cases that remain measure `Terminal` and a pangram,
 which constrain the *sum* of several advances and not any one of them, so those
 characters are absent from the derived file on purpose and the cases that need
 them fail by name:
@@ -130,6 +159,21 @@ than turning into pixel widths that are slightly off everywhere.
 The check runs in both directions. CI also re-derives the file from the
 measurements it has just recorded (`derive_font_metrics.py --check`), so the
 committed numbers cannot drift away from the measurements they were solved from.
+
+Kerning is checked the same way and cannot be committed the same way, because a
+pair adjustment is not solvable from the corpus alone: a word constrains the sum
+of its advances and not any one of them, so there is nothing to solve against
+until the harvest supplies them. So the check reads the advances back out of the
+harvest and asks the measurements what is left over:
+
+    python3 phase3/scripts/derive_font_metrics.py \
+        --measurements "$(python3 phase3/scripts/fetch_measurements.py)" \
+        --check-kerning phase3/xaml-db/fonts/segoe-ui.json
+
+One pair adjustment reproduces every recorded run and no other does — `T` before
+`e`, −200 design units — and CI fails if the font's kern table says otherwise.
+Only one pair is ever solved for: a corpus that needed two at once could not
+separate them from the sums it records, and it says so rather than choosing.
 
 Both directions are Segoe UI's alone. The icon families have neither half yet,
 and the section above says so rather than letting three harvested files look

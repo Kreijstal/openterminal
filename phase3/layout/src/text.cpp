@@ -31,6 +31,15 @@ namespace {
 //    lines at size 24 measure 319.2334; ten times the line height is
 //    319.2333, and only repeated float addition produces the recorded value.
 //
+// 4. A pair of adjacent glyphs can move the first one's advance, and the move
+//    happens in design units, before that advance snaps. "Terminal" measures
+//    200 units narrower than its advances add up to, at all three recorded
+//    sizes, and the pangram beside it measures exactly what they add up to --
+//    so the 200 belongs to a pair rather than to the arithmetic. Where the
+//    move joins matters: snapping it on its own and adding it afterwards
+//    lands 1/300 of a DIP away at size 12, and the corpus records the first.
+//    Which pairs a font moves is harvested from it, not decided here.
+//
 // All 72 L4 cases agree with these rules on every number that does not depend
 // on a per-character advance.
 
@@ -117,9 +126,17 @@ std::string Describe(char32_t code) {
     return buffer;
 }
 
-std::vector<Glyph> Shape(const std::string& text, const FontMetrics& font, double font_size) {
+// A pair adjustment joins the first glyph's advance in design units and snaps
+// with it, rather than snapping on its own and being added afterwards. The
+// corpus separates the two: Segoe UI kerns T before e by -200 units, and at
+// size 12 "Terminal" measures 44.6133, which is the first rule. Snapping the
+// -200 alone gives 44.61.
+std::vector<Glyph> Shape(const std::string& text, const std::string& family,
+                         const FontMetrics& font, double font_size) {
+    const std::vector<char32_t> codes = DecodeUtf8(text);
     std::vector<Glyph> glyphs;
-    for (char32_t code : DecodeUtf8(text)) {
+    for (size_t index = 0; index < codes.size(); ++index) {
+        const char32_t code = codes[index];
         const auto found = font.advances.find(code);
         if (found == font.advances.end()) {
             // Which metrics are loaded decides what the reader has to do about
@@ -132,11 +149,23 @@ std::vector<Glyph> Shape(const std::string& text, const FontMetrics& font, doubl
                     Describe(code) + "; only characters the corpus measures alone are "
                     "solvable, so this case needs the harvested metrics");
             }
-            throw TextError("the harvested font metrics have no advance for " + Describe(code));
+            // No family in the list has the character, and the runtime does not
+            // stop there: L4-icon-rule-mdl2-latin-14 asks Segoe MDL2 Assets for
+            // 'M' and the oracle answers 10 wide, which is neither the icon
+            // font's em (14) nor Segoe UI's M at that size (12.57). So it fell
+            // back past every family the markup names, to a font chosen by
+            // rules this corpus records nothing about. Refusing is the only
+            // honest answer until a case measures which font that is.
+            throw TextError("no family in \"" + family + "\" has an advance for " +
+                            Describe(code) + "; the runtime falls back past the families "
+                            "a FontFamily names and this corpus harvests only those");
         }
+        const double pair = index + 1 < codes.size()
+                                ? font.PairAdjustment(code, codes[index + 1])
+                                : 0.0;
         Glyph glyph;
         glyph.code = code;
-        glyph.advance = SnapText(found->second * font_size / font.units_per_em);
+        glyph.advance = SnapText((found->second + pair) * font_size / font.units_per_em);
         glyph.space = IsBreakSpace(code);
         glyphs.push_back(glyph);
     }
@@ -305,21 +334,28 @@ Size TextBlock::LayoutText(double limit) const {
     const double size = font_size();
     const std::string& content = text();
 
+    // Two families, because a fallback list splits the answer. The line box
+    // belongs to the family that was named first -- a FontIcon in Terminal's
+    // "Segoe UI, Segoe Fluent Icons, Segoe MDL2 Assets" is 12 wide and 16 tall
+    // at size 12, which is one em of an icon font inside one line of Segoe UI --
+    // while the advances belong to whichever family has the glyph.
+    const FontMetrics* line_font = FontLibrary::Default().Find(family);
     const FontMetrics* font = FontLibrary::Default().FindForText(family, content);
-    if (!font) {
+    if (!line_font || !font) {
         throw TextError("no harvested metrics for the font family \"" + family +
                         "\"; see phase3/xaml-db/fonts");
     }
-    if (font->units_per_em <= 0.0) throw TextError("the font metrics have no units per em");
+    if (font->units_per_em <= 0.0 || line_font->units_per_em <= 0.0)
+        throw TextError("the font metrics have no units per em");
 
-    const double spacing = font->LineSpacing() * size / font->units_per_em;
+    const double spacing = line_font->LineSpacing() * size / line_font->units_per_em;
 
     // An empty TextBlock still occupies a line, and that line keeps the
     // unsnapped height. This is the one place the two differ, and the corpus
     // records both: 15.9609 empty against 15.96 with text, at size 12.
     if (content.empty()) return {0.0, AsFloat(spacing)};
 
-    const std::vector<Glyph> glyphs = Shape(content, *font, size);
+    const std::vector<Glyph> glyphs = Shape(content, family, *font, size);
     const double effective_limit = text_wrapping() == TextWrapping::Wrap ? limit : kInfinity;
     const std::vector<double> lines = BreakLines(glyphs, effective_limit);
 

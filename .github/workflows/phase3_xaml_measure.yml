@@ -341,6 +341,21 @@ jobs:
             --output phase3/xaml-db/fonts/derived/segoe-ui.json \
             --check
 
+      # The one metric the derived file cannot carry, checked the same way. A
+      # pair adjustment needs the advances before the corpus can say anything
+      # about it -- a word constrains their sum, not any one of them -- so this
+      # reads them out of the harvest and asks the measurements what is left
+      # over. "Terminal" in Segoe UI measures 200 design units narrower than
+      # its advances add up to, at every recorded size, and the pangram beside
+      # it needs nothing; a kern table that does not say the same about T
+      # before e means the rules in text.cpp and the font have parted company.
+      - name: The kern table matches what the recorded runs imply
+        shell: bash
+        run: |
+          python3 -B phase3/scripts/derive_font_metrics.py \
+            --measurements "phase3/xaml-db/measurements/${os_build}" \
+            --check-kerning phase3/xaml-db/fonts/segoe-ui.json
+
       # The measurements are not committed -- they are this job's artifact. The
       # digest of them is, so that a servicing update to Windows shows up as a
       # reviewable diff rather than quietly re-baselining every expectation.
@@ -554,8 +569,11 @@ jobs:
       #
       #  * L4-text and L4-source are the TextBlock cases. The rule above is
       #    theirs and is unchanged: match, or name the advance you have not got.
-      #  * L4-icon is FontIcon, which the layout core does not implement at all.
-      #    Those must fail by name too, but by a different name, and holding
+      #  * L4-icon is FontIcon. Six of those measure an icon in Segoe UI, whose
+      #    advance the corpus already knows, and they match here -- which is
+      #    what they were authored for: the sizing rule is pinned before any
+      #    icon metric is trusted. The rest name a family this directory has no
+      #    metrics for, and must fail by name rather than by number. Holding
       #    them to the text rule would have failed this step for saying exactly
       #    what it is supposed to say.
       - name: The derived metrics match or say why not

@@ -44,9 +44,110 @@ def cmap_format4(ranges: list[tuple[int, int, int]]) -> bytes:
     return body[:2] + struct.pack(">H", len(body)) + body[4:]
 
 
+def kern_table(pairs: dict[tuple[int, int], int]) -> bytes:
+    """A `kern` table, version 0, one format 0 subtable."""
+    body = struct.pack(">HHHH", len(pairs), 0, 0, 0)  # nPairs, and the unused search hints
+    for (left, right), value in sorted(pairs.items()):
+        body += struct.pack(">HHh", left, right, value)
+    subtable = struct.pack(">HHH", 0, 6 + len(body), 0x0001) + body  # horizontal, format 0
+    return struct.pack(">HH", 0, 1) + subtable
+
+
+def coverage(glyphs: list[int]) -> bytes:
+    """Coverage format 1: the glyphs a lookup applies to, in order."""
+    return struct.pack(">HH", 1, len(glyphs)) + struct.pack(f">{len(glyphs)}H", *glyphs)
+
+
+def class_def(assignments: dict[int, int]) -> bytes:
+    """ClassDef format 2, one range per glyph, which needs no contiguity."""
+    ranges = sorted(assignments.items())
+    body = struct.pack(">HH", 2, len(ranges))
+    for glyph, klass in ranges:
+        body += struct.pack(">HHH", glyph, glyph, klass)
+    return body
+
+
+def pair_pos_format1(pairs: dict[tuple[int, int], int]) -> bytes:
+    """PairPos format 1: a pair set per first glyph, XAdvance only."""
+    firsts = sorted({left for left, _ in pairs})
+    sets = []
+    for first in firsts:
+        seconds = sorted((right, value) for (left, right), value in pairs.items()
+                         if left == first)
+        body = struct.pack(">H", len(seconds))
+        for right, value in seconds:
+            body += struct.pack(">Hh", right, value)
+        sets.append(body)
+
+    offset = 10 + len(firsts) * 2
+    offsets = b""
+    for body in sets:
+        offsets += struct.pack(">H", offset)
+        offset += len(body)
+    # Coverage goes after the pair sets, so its offset is where they end.
+    header = struct.pack(">HHHHH", 1, offset, 0x0004, 0, len(firsts))
+    return header + offsets + b"".join(sets) + coverage(firsts)
+
+
+def pair_pos_format2(classes1: dict[int, int], classes2: dict[int, int],
+                     values: dict[tuple[int, int], int],
+                     class1_count: int, class2_count: int) -> bytes:
+    """PairPos format 2: a value per pair of glyph classes."""
+    records = b""
+    for first in range(class1_count):
+        for second in range(class2_count):
+            records += struct.pack(">h", values.get((first, second), 0))
+    header = struct.pack(">HHHHHHHH", 2, 0, 0x0004, 0, 0, 0, class1_count, class2_count)
+    covered = coverage(sorted(classes1))
+    first_def = class_def(classes1)
+    second_def = class_def(classes2)
+
+    coverage_at = len(header) + len(records)
+    first_at = coverage_at + len(covered)
+    second_at = first_at + len(first_def)
+    header = struct.pack(">HHHHHHHH", 2, coverage_at, 0x0004, 0,
+                         first_at, second_at, class1_count, class2_count)
+    return header + records + covered + first_def + second_def
+
+
+def gpos_table(lookups: list[tuple[int, bytes]], *, feature: str = "kern") -> bytes:
+    """A GPOS carrying one feature and the lookups it names."""
+    script_list = struct.pack(">H", 0)
+
+    feature_table = struct.pack(">HH", 0, len(lookups))
+    feature_table += struct.pack(f">{len(lookups)}H", *range(len(lookups)))
+    feature_list = struct.pack(">H", 1) + struct.pack(
+        ">4sH", feature.encode("latin-1"), 2 + 6)
+    feature_list += feature_table
+
+    tables = []
+    for lookup_type, subtable in lookups:
+        body = struct.pack(">HHH", lookup_type, 0, 1) + struct.pack(">H", 8)
+        tables.append(body + subtable)
+    lookup_list = struct.pack(">H", len(tables))
+    offset = 2 + len(tables) * 2
+    for table in tables:
+        lookup_list += struct.pack(">H", offset)
+        offset += len(table)
+    lookup_list += b"".join(tables)
+
+    header_size = 10
+    script_at = header_size
+    feature_at = script_at + len(script_list)
+    lookup_at = feature_at + len(feature_list)
+    return (struct.pack(">HHHHH", 1, 0, script_at, feature_at, lookup_at)
+            + script_list + feature_list + lookup_list)
+
+
+def extension(lookup_type: int, subtable: bytes) -> bytes:
+    """A type 9 lookup wrapping another one, as a large font does."""
+    return struct.pack(">HHI", 1, lookup_type, 8) + subtable
+
+
 def build_font(*, units_per_em: int, ascender: int, descender: int, line_gap: int,
                advances: list[int], ranges: list[tuple[int, int, int]],
-               long_metrics: int | None = None) -> bytes:
+               long_metrics: int | None = None,
+               extra: dict[str, bytes] | None = None) -> bytes:
     """A minimal sfnt carrying only the five tables the harvester reads."""
     long_metrics = len(advances) if long_metrics is None else long_metrics
 
@@ -68,6 +169,7 @@ def build_font(*, units_per_em: int, ascender: int, descender: int, line_gap: in
 
     tables = {"OS/2": bytes(os2), "cmap": cmap, "head": bytes(head),
               "hhea": bytes(hhea), "hmtx": hmtx}
+    tables.update(extra or {})
 
     offset = 12 + len(tables) * 16
     directory = b""
@@ -143,6 +245,82 @@ class HarvestFontMetricsTest(unittest.TestCase):
             units_per_em=1000, ascender=800, descender=-200, line_gap=0,
             advances=[500, 600], ranges=[(0x41, 0x41, 1)]))
         self.assertEqual(harvest(path, "Synthetic", [0x41])["missing"], [])
+
+    def test_a_font_with_no_kerning_at_all_says_so(self) -> None:
+        # Neither table is required, and an absent one is a font that kerns
+        # nothing rather than a harvest that failed to look.
+        path = self.write(build_font(
+            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
+            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)]))
+        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"], {})
+
+    def test_reads_the_legacy_kern_table(self) -> None:
+        # 'A' and 'B' are glyphs 1 and 2; the pair moves by -75.
+        path = self.write(build_font(
+            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
+            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
+            extra={"kern": kern_table({(1, 2): -75})}))
+        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"],
+                         {"65,66": -75})
+
+    def test_reads_a_gpos_pair_adjustment(self) -> None:
+        path = self.write(build_font(
+            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
+            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
+            extra={"GPOS": gpos_table([(2, pair_pos_format1({(1, 2): -200}))])}))
+        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"],
+                         {"65,66": -200})
+
+    def test_reads_a_class_based_pair_adjustment(self) -> None:
+        # Format 2 is how a real font stores most of its kerning: a value per
+        # pair of classes rather than per pair of glyphs.
+        subtable = pair_pos_format2({1: 1}, {2: 1}, {(1, 1): -120}, 2, 2)
+        path = self.write(build_font(
+            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
+            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
+            extra={"GPOS": gpos_table([(2, subtable)])}))
+        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"],
+                         {"65,66": -120})
+
+    def test_reads_through_an_extension_lookup(self) -> None:
+        # A font whose GPOS is over 64k puts its lookups behind type 9, which
+        # is every font this project actually harvests.
+        wrapped = extension(2, pair_pos_format1({(1, 2): -40}))
+        path = self.write(build_font(
+            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
+            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
+            extra={"GPOS": gpos_table([(9, wrapped)])}))
+        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"],
+                         {"65,66": -40})
+
+    def test_only_the_kern_feature_is_read(self) -> None:
+        # A GPOS holds many features. Capital spacing is a pair adjustment too
+        # and is off by default, so taking every PairPos in the table would
+        # widen text the runtime does not widen.
+        path = self.write(build_font(
+            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
+            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
+            extra={"GPOS": gpos_table([(2, pair_pos_format1({(1, 2): -200}))],
+                                      feature="cpsp")}))
+        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"], {})
+
+    def test_a_pair_outside_the_harvested_set_is_not_recorded(self) -> None:
+        # The harvest asks for the codepoints the corpus uses. A pair reaching
+        # a glyph outside that set is a fact about the font and not about
+        # anything this repository measures, so it stays out of the file.
+        path = self.write(build_font(
+            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
+            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
+            extra={"kern": kern_table({(1, 2): -75, (2, 3): -10})}))
+        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"],
+                         {"65,66": -75})
+
+    def test_a_zero_adjustment_is_not_a_pair(self) -> None:
+        path = self.write(build_font(
+            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
+            advances=[500, 600, 700], ranges=[(0x41, 0x42, 1)],
+            extra={"kern": kern_table({(1, 2): 0})}))
+        self.assertEqual(harvest(path, "Synthetic", [0x41, 0x42])["kerning"], {})
 
     def test_reports_a_missing_table(self) -> None:
         data = build_font(units_per_em=1000, ascender=800, descender=-200, line_gap=0,
