@@ -13,13 +13,14 @@
 // animation, triggers, styles, template parents. Every source beyond the four
 // below is still a level of the corpus that has not been reached yet.
 //
-// Four of them are here now, in this order, highest first:
+// Five of them are here now, in this order, highest first:
 //
-//   animation active storyboards and VisualState setters
-//   local     what the markup wrote on the element itself
-//   style     what the element's Style says, BasedOn already merged
-//   inherited the nearest ancestor's effective value
-//   default   what the property was registered with
+//   animation  active storyboards and VisualState setters
+//   local      what the markup wrote on the element itself
+//   style      what the element's Style says, BasedOn already merged
+//   built-in   what the framework's own generic.xaml says for this type
+//   inherited  the nearest ancestor's effective value
+//   default    what the property was registered with
 //
 // That order is WPF's `BaseValueSourceInternal`, where Local outranks Style and
 // Style outranks Inherited. The consequence worth stating, because it is the
@@ -27,6 +28,18 @@
 // so a TextBlock under a FontSize="22" control measures at whatever its style
 // says and not at 22. Inheritance reads the ancestor's *effective* value, so a
 // FontSize a style set does flow down to elements that have neither.
+//
+// The built-in slot is the newest and the one with the sharpest justification.
+// microsoft-ui-xaml (MIT, 188f602b) carries `docs/design-notes/styles.md`,
+// which states the rule plainly: the property system has a
+// `BaseValueSourceStyle` layer and a `BaseValueSourceBuiltInStyle` layer, the
+// two coexist, and where both set the same property the `Style` layer wins.
+// `CControl::ApplyBuiltInStyle` is the only thing that ever writes the lower
+// one, and it writes the style `Control.DefaultStyleKey` names in
+// generic.xaml. Two layers rather than one is not an optimisation: a control
+// whose application-level implicit style sets only `Padding` still gets its
+// `Template` from generic.xaml, and a single slot would have the narrower
+// style erase the wider one.
 //
 // The whole chain is looked up in one place, so the next source -- a trigger
 // or coercion -- slots in beside these rather than being threaded through
@@ -191,6 +204,16 @@ public:
 
     bool HasStyleValue(const DependencyProperty& property) const;
 
+    // What the framework's own default style for this type writes -- the
+    // `BaseValueSourceBuiltInStyle` layer. Below the style slot, so an
+    // application's implicit or explicit Style overrides it property by
+    // property and leaves the rest of it standing. Only a Control ever has
+    // one: `docs/design-notes/styles.md` says CControl is the only caller,
+    // and giving a Border one would invent a layer the runtime has not got.
+    void SetBuiltInStyleValue(const DependencyProperty& property, PropertyValue value);
+    void ClearBuiltInStyleValues();
+    bool HasBuiltInStyleValue(const DependencyProperty& property) const;
+
     // Active animations sit above local values in the WinUI precedence
     // chain. VisualState setters use the same slot: leaving a state removes
     // its value and reveals the local/style/inherited value underneath.
@@ -254,6 +277,10 @@ private:
     // than a tagged one: the two are read in a fixed order and never merged,
     // and keeping them apart is what makes clearing one of them possible.
     std::map<size_t, PropertyValue> style_;
+    // And again for the framework's own style, for the same reason: the three
+    // are read in a fixed order and never merged, so replacing an element's
+    // Style cannot disturb what generic.xaml put underneath it.
+    std::map<size_t, PropertyValue> built_in_style_;
     std::map<size_t, PropertyValue> animated_;
     std::map<PropertyChangedToken, PropertyChangedHandler> property_changed_handlers_;
     PropertyChangedToken next_property_changed_token_ = 1;

@@ -85,6 +85,9 @@ public:
     const ResourceValue* Find(const std::string& key) const;
     bool empty() const { return entries_.empty(); }
     size_t size() const { return entries_.size(); }
+    // Every key, so that a layered dictionary can be counted without the
+    // counter having to know how entries are stored.
+    std::vector<std::string> keys() const;
 
 private:
     std::map<std::string, ResourceValue> entries_;
@@ -94,41 +97,141 @@ private:
 // ancestor, then Application.Resources.
 using ResourceScope = std::vector<const ResourceDictionary*>;
 
+// Which of the application dictionary's layers an entry came from.
+//
+// `Application.Resources` is not one dictionary, and the difference decides
+// which value a key has. Bottom to top, as a running WinUI 2 application
+// stacks them:
+//
+//   GlobalThemeResources   the framework's own generic.xaml -- the theme
+//                          dictionaries `Windows.UI.Xaml.Controls.dll`
+//                          carries. Nothing in the markup mentions it and
+//                          nothing can remove it; it is the floor every
+//                          lookup ends on.
+//   XamlControlsResources  what `<XamlControlsResources/>` merges in.
+//                          `dev/dll/XamlControlsResources.cpp` (MIT, 2.8.4)
+//                          shows exactly what that is: a ResourceDictionary
+//                          whose Source is
+//                          `ms-appx:///Microsoft.UI.Xaml/Themes/21h1_themeresources.xaml`
+//                          for ControlsResourcesVersion2 on a current
+//                          Windows, which is the file
+//                          `extract_winui_theme_resources.py` reconstructs.
+//
+// A merged dictionary shadows what is under it and does not replace it: WinUI
+// 2 redefines most of the `SystemControl*` family and leaves three of them
+// alone, and those three have to keep resolving to the OS's. Loading the two
+// halves into one flat dictionary would have made that indistinguishable from
+// a key nobody defines.
+enum class ResourceLayer {
+    GlobalThemeResources = 0,
+    XamlControlsResources = 1,
+};
+
 // The application-level dictionary -- the tail of every lookup chain, and the
 // one no markup declares.
 //
-// In a running Terminal this is what `<XamlControlsResources/>` puts in
-// `Application.Resources`: WinUI 2's theme dictionary, merged over the OS's own
-// `Windows.UI.Xaml` one. Only the first of those two is open source, so only
-// the first is here; `phase3/scripts/extract_winui_theme_resources.py` builds
-// it out of the pinned WinUI 2.8.4 tree, and the OS half is still missing. A
-// key from the missing half fails by name exactly as it did before, which is
-// the point of loading a real dictionary rather than a permissive one.
+// Both layers are now reconstructed from pinned MIT source: the WinUI 2 half by
+// `phase3/scripts/extract_winui_theme_resources.py` out of the 2.8.4 tree, and
+// the framework half by `phase3/scripts/extract_default_styles.py` out of the
+// system `generic.xaml` the XAML core publishes at 188f602b. What remains
+// missing is only what no source tree can hold -- the signed-in user's accent
+// colour and the OS's `SystemColor*` palette -- and a key from that set still
+// fails by name, which is the point of loading a real dictionary rather than a
+// permissive one.
 //
-// One dictionary per theme, each already merged with the theme-independent
-// entries, because that is the only shape a lookup needs. The theme is set per
-// case: the corpus declares one, and Default and Light really do differ -- in
-// 106 colours and in one x:Double.
+// One dictionary per theme per layer, each already merged with that layer's
+// theme-independent entries, because that is the only shape a lookup needs. The
+// theme is set per case: the corpus declares one, and Default and Light really
+// do differ -- in 106 colours and in one x:Double.
 class ThemeResourceLibrary {
 public:
     static ThemeResourceLibrary& Default();
 
-    void Add(const std::string& theme, ResourceDictionary dictionary);
+    // Adds `dictionary` as `theme`'s entry for `layer`. Two dictionaries
+    // claiming one theme *and* one layer is still refused: that is a
+    // duplicate, not a merge, and it has no defensible resolution.
+    void Add(const std::string& theme, ResourceDictionary dictionary,
+             ResourceLayer layer = ResourceLayer::XamlControlsResources);
     // Throws naming the themes that are loaded, so a case asking for one that
     // is not says which are.
     void SetActiveTheme(const std::string& theme);
     const std::string& active_theme() const { return active_; }
 
-    // Null when nothing is loaded, which is a bare checkout and not an error:
-    // every lookup that would have needed it then fails naming its key, the
-    // way it did before there was a dictionary at all.
+    // The active theme's layers, highest precedence first, for the scope a
+    // lookup walks. Empty when nothing is loaded, which is a bare checkout and
+    // not an error: every lookup that would have needed it then fails naming
+    // its key, the way it did before there was a dictionary at all.
+    std::vector<const ResourceDictionary*> ActiveLayers() const;
+
+    // The highest layer that has a dictionary for the active theme, or null.
+    // Kept for the callers that only want to know whether anything is loaded
+    // and how big it is; a lookup must use ActiveLayers().
     const ResourceDictionary* Active() const;
+
+    // How many distinct keys the active theme resolves, across every layer --
+    // which is what "the application dictionary has N keys" means once the
+    // dictionary has more than one layer in it.
+    size_t ActiveKeyCount() const;
+
     bool empty() const { return themes_.empty(); }
     std::vector<std::string> themes() const;
 
 private:
-    std::map<std::string, ResourceDictionary> themes_;
+    // theme -> layer -> dictionary. An ordered map on the layer so that
+    // iterating it is the stacking order and the walk cannot get it wrong.
+    std::map<std::string, std::map<ResourceLayer, ResourceDictionary>> themes_;
     std::string active_ = "Default";
+};
+
+// `Microsoft.UI.Xaml.Controls.XamlControlsResources`, as far as resolution goes.
+//
+// The first thing Terminal's `App.xaml` merges, and the reason a WinUI 2
+// application resolves anything at all. It is not a dictionary of its own: it
+// is a `ResourceDictionary` whose `Source` it computes at construction and
+// then loads, and everything about which file that is is decided by
+// `dev/dll/XamlControlsResources.cpp` (MIT, 2.8.4) in one expression --
+//
+//     packagePrefix + releasePrefix + compactPrefix + postfix
+//
+// -- over `ms-appx:///Microsoft.UI.Xaml/Themes/`, a release prefix chosen by
+// the running OS version, `compact_` when `UseCompactResources` is set, and
+// `themeresources.xaml` unless `ControlsResourcesVersion` is `Version1`.
+//
+// It is here rather than in the DLL because the resolution is what a
+// measurement can see. The class exists to say *which* dictionary an
+// application gets and to put it in the right layer -- the two facts that
+// decide what a key resolves to -- and to be checkable without a WinRT
+// activation. Registering it as an activatable runtime class is a separate
+// step and is not done: see the README.
+class XamlControlsResources {
+public:
+    enum class Version { Version1, Version2 };
+
+    // Version2 from WinUI 2.6 on, which is what Terminal gets: the property
+    // defaults to it and Terminal's App.xaml does not set it.
+    void set_controls_resources_version(Version version) { version_ = version; }
+    Version controls_resources_version() const { return version_; }
+    void set_use_compact_resources(bool value) { compact_ = value; }
+    bool use_compact_resources() const { return compact_; }
+
+    // `UpdateSource`'s answer, for a current Windows and a package that is
+    // neither a framework package nor a CBS one -- which is how Terminal ships
+    // WinUI 2. Every other branch of that expression is an OS or packaging
+    // fact this project has no way to be in, and returning a URI for one would
+    // claim a file that is not the one being reconstructed.
+    std::string SourceUri() const;
+
+    // Puts `dictionaries` into `library` at the XamlControlsResources layer --
+    // the merged-dictionary semantics, which is the whole of what this class
+    // does to a lookup. `dictionaries` are the entries of the file SourceUri()
+    // names, one per theme, which is what
+    // `extract_winui_theme_resources.py` reconstructs.
+    void Merge(ThemeResourceLibrary& library,
+               std::map<std::string, ResourceDictionary> dictionaries) const;
+
+private:
+    Version version_ = Version::Version2;
+    bool compact_ = false;
 };
 
 // Loads the extracted database into `library`, and returns how many keys the

@@ -4,6 +4,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <sstream>
 
 #include "json.h"
@@ -84,6 +85,13 @@ void ResourceDictionary::Add(const std::string& key, ResourceValue value) {
 const ResourceValue* ResourceDictionary::Find(const std::string& key) const {
     const auto found = entries_.find(key);
     return found == entries_.end() ? nullptr : &found->second;
+}
+
+std::vector<std::string> ResourceDictionary::keys() const {
+    std::vector<std::string> names;
+    names.reserve(entries_.size());
+    for (const auto& entry : entries_) names.push_back(entry.first);
+    return names;
 }
 
 bool IsResourceType(const std::string& type) { return ResourceTypes().count(type) != 0; }
@@ -362,15 +370,42 @@ bool ReadEntry(const JsonValue& entry, const std::string& key, ResourceValue& ou
     return true;
 }
 
+// Which layer of the application dictionary a database describes.
+//
+// Read out of the document rather than guessed from the filename, because the
+// two halves are loaded from one directory and a lookup that got the order
+// wrong would silently return the framework's value for a key WinUI 2
+// redefines -- a wrong number with nothing to explain it.
+//
+// `extract_default_styles.py` writes `"layer"` explicitly.
+// `extract_winui_theme_resources.py` predates the distinction and writes none;
+// its output is XamlControlsResources by construction -- its own docstring
+// says so, and `dev/dll/XamlControlsResources.cpp` confirms it by pointing
+// `Source` at exactly the file that extractor reconstructs -- so that is the
+// default, and it is the safe one: a database of unknown provenance ends up
+// above the framework's floor rather than silently underneath it.
+ResourceLayer LayerOf(const JsonValue& document, const std::string& where) {
+    const JsonValue* layer = Member(document, "layer");
+    if (!layer) return ResourceLayer::XamlControlsResources;
+    if (layer->kind != JsonValue::Kind::String)
+        throw JsonError(where + ": \"layer\" is not a string");
+    if (layer->string == "GlobalThemeResources") return ResourceLayer::GlobalThemeResources;
+    if (layer->string == "XamlControlsResources") return ResourceLayer::XamlControlsResources;
+    throw JsonError(where + ": unknown resource layer \"" + layer->string + "\"");
+}
+
 void ReadDatabase(const std::string& json, const std::string& where, ThemeResourceLibrary& library) {
     const JsonValue document = ParseJson(json);
     const JsonValue* themes = Member(document, "themes");
     if (!themes || themes->kind != JsonValue::Kind::Object)
         throw JsonError(where + ": no \"themes\" object");
 
+    const ResourceLayer layer = LayerOf(document, where);
     // Recorded so a database that silently came from somewhere else is visible
-    // in the one place a reader looks.
-    Text(document.At("source"), "commit", where);
+    // in the one place a reader looks. The two extractors spell the provenance
+    // differently -- one source, or one per half -- so either satisfies it.
+    if (Member(document, "source")) Text(document.At("source"), "commit", where);
+    else if (!Member(document, "sources")) throw JsonError(where + ": no provenance recorded");
 
     const JsonValue* shared = Member(*themes, "Shared");
     for (const auto& [name, entries] : themes->object) {
@@ -390,9 +425,31 @@ void ReadDatabase(const std::string& json, const std::string& where, ThemeResour
             }
         }
         for (const auto& [key, entry] : entries.object) {
-            if (ReadEntry(entry, key, value)) dictionary.Add(key, value);
+            if (!ReadEntry(entry, key, value)) continue;
+            const ResourceValue* already = dictionary.Find(key);
+            if (!already) {
+                dictionary.Add(key, value);
+                continue;
+            }
+            // The key is in the theme-independent part *and* in this theme.
+            // Both are real: the system generic.xaml declares
+            // `AppBarThemeMinHeight` at the root of the dictionary and again
+            // inside every theme dictionary, which the runtime allows because
+            // they are two dictionaries. Flattening them into one is this
+            // reader's doing, so this is where the collision has to be
+            // answered -- and the only answer that cannot be wrong is to
+            // accept it when the two agree and refuse it when they do not.
+            // Silently preferring either one would decide a question the
+            // corpus has not been asked.
+            if (already->type != value.type || already->text != value.text ||
+                already->kind != value.kind) {
+                throw JsonError(where + ": '" + key + "' is declared in the theme-independent "
+                                "entries as " + already->type + " '" + already->text + "' and in "
+                                "theme '" + name + "' as " + value.type + " '" + value.text +
+                                "'; which one a lookup sees is not decided here");
+            }
         }
-        library.Add(name, std::move(dictionary));
+        library.Add(name, std::move(dictionary), layer);
     }
 }
 
@@ -403,11 +460,13 @@ ThemeResourceLibrary& ThemeResourceLibrary::Default() {
     return library;
 }
 
-void ThemeResourceLibrary::Add(const std::string& theme, ResourceDictionary dictionary) {
-    if (themes_.count(theme))
-        throw JsonError("the theme '" + theme + "' is already loaded; two dictionaries claiming "
-                        "one theme have no defensible resolution");
-    themes_.emplace(theme, std::move(dictionary));
+void ThemeResourceLibrary::Add(const std::string& theme, ResourceDictionary dictionary,
+                               ResourceLayer layer) {
+    std::map<ResourceLayer, ResourceDictionary>& layers = themes_[theme];
+    if (layers.count(layer))
+        throw JsonError("the theme '" + theme + "' is already loaded at this layer; two "
+                        "dictionaries claiming one layer have no defensible resolution");
+    layers.emplace(layer, std::move(dictionary));
 }
 
 void ThemeResourceLibrary::SetActiveTheme(const std::string& theme) {
@@ -419,15 +478,60 @@ void ThemeResourceLibrary::SetActiveTheme(const std::string& theme) {
     active_ = theme;
 }
 
-const ResourceDictionary* ThemeResourceLibrary::Active() const {
+std::vector<const ResourceDictionary*> ThemeResourceLibrary::ActiveLayers() const {
+    std::vector<const ResourceDictionary*> layers;
     const auto found = themes_.find(active_);
-    return found == themes_.end() ? nullptr : &found->second;
+    if (found == themes_.end()) return layers;
+    // Highest layer first, which is the order a lookup takes them in: a key
+    // XamlControlsResources defines shadows the framework's own, and a key it
+    // does not define falls through to it. The map is ordered by the enum, so
+    // reversing the iteration is the whole of the precedence rule.
+    for (auto layer = found->second.rbegin(); layer != found->second.rend(); ++layer)
+        layers.push_back(&layer->second);
+    return layers;
+}
+
+const ResourceDictionary* ThemeResourceLibrary::Active() const {
+    const std::vector<const ResourceDictionary*> layers = ActiveLayers();
+    return layers.empty() ? nullptr : layers.front();
+}
+
+size_t ThemeResourceLibrary::ActiveKeyCount() const {
+    // Distinct keys, not the sum: a key both layers define is one key the
+    // application can resolve, and reporting two would overstate the
+    // dictionary by however much the two halves overlap.
+    std::set<std::string> keys;
+    for (const ResourceDictionary* layer : ActiveLayers())
+        for (const std::string& key : layer->keys()) keys.insert(key);
+    return keys.size();
 }
 
 std::vector<std::string> ThemeResourceLibrary::themes() const {
     std::vector<std::string> names;
     for (const auto& entry : themes_) names.push_back(entry.first);
     return names;
+}
+
+std::string XamlControlsResources::SourceUri() const {
+    // MUXCONTROLSROOT_NAMESPACE_STR is "Microsoft.UI.Xaml" in a shipping
+    // build; the framework- and CBS-package prefixes are the other two
+    // branches and neither applies to how Terminal ships.
+    const std::string package_prefix = "ms-appx:///Microsoft.UI.Xaml/Themes/";
+    // `Is21H1OrHigher()` on any Windows this project targets. The five older
+    // prefixes exist for OS versions the pinned corpus is not recorded on, and
+    // naming one here would claim a reconstruction of a file that was never
+    // read.
+    const std::string release_prefix = "21h1_";
+    const std::string compact_prefix = compact_ ? "compact_" : "";
+    const std::string postfix =
+        version_ == Version::Version1 ? "themeresources_v1.xaml" : "themeresources.xaml";
+    return package_prefix + release_prefix + compact_prefix + postfix;
+}
+
+void XamlControlsResources::Merge(ThemeResourceLibrary& library,
+                                  std::map<std::string, ResourceDictionary> dictionaries) const {
+    for (auto& [theme, dictionary] : dictionaries)
+        library.Add(theme, std::move(dictionary), ResourceLayer::XamlControlsResources);
 }
 
 int LoadThemeResources(ThemeResourceLibrary& library, const std::string& path) {
@@ -453,8 +557,7 @@ int LoadThemeResources(ThemeResourceLibrary& library, const std::string& path) {
         ReadDatabase(buffer.str(), file.filename().string(), library);
     }
 
-    const ResourceDictionary* active = library.Active();
-    return static_cast<int>(active ? active->size() : 0);
+    return static_cast<int>(library.ActiveKeyCount());
 }
 
 }  // namespace openxaml

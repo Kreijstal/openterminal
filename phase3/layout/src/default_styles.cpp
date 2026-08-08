@@ -45,8 +45,16 @@ bool DefaultStyleRegistry::Apply(Control& control, const std::string& type,
                                  const std::vector<std::string>& owners) const {
     const DefaultControlStyle* found = Find(type);
     if (!found) return false;
-    ApplyStyle(control, found->style, type, owners);
-    control.SetTemplate(found->control_template);
+    // Into the built-in slot, never the style slot: this *is* the built-in
+    // style, and an application's own Style has to be able to override it
+    // property by property without erasing the rest of it.
+    ApplyBuiltInStyle(control, found->style, type, owners);
+    // Only when there is one. A reconstructed default style carries setters
+    // and no template -- a ControlTemplate has no textual form, so the
+    // extraction records that the style sets one and cannot record what it
+    // sets. Assigning null here would clear a template the control already
+    // has, which is a loss rather than a gap.
+    if (found->control_template) control.SetTemplate(found->control_template);
     return true;
 }
 

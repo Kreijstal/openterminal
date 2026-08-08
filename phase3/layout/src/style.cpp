@@ -295,4 +295,21 @@ void ApplyStyle(DependencyObject& target, const Style& style, const std::string&
         target.SetStyleValue(*setter.property, setter.value);
 }
 
+void ApplyBuiltInStyle(DependencyObject& target, const Style& style, const std::string& type,
+                       const std::vector<std::string>& owners) {
+    // The same target-type check, because the same thing can go wrong: a
+    // built-in style table keyed by the wrong name would write a Button's
+    // setters onto a TextBox and produce numbers with nothing to explain them.
+    // The lookup that reaches here is an exact match on the concrete type, so
+    // in practice this only ever fires for a malformed table -- which is
+    // exactly when it is worth having.
+    if (style.target_type != type &&
+        std::find(owners.begin(), owners.end(), style.target_type) == owners.end()) {
+        throw MarkupError("cannot apply a built-in Style with TargetType '" + style.target_type +
+                          "' to an object of type '" + type + "'");
+    }
+    for (const StyleSetter& setter : style.setters)
+        target.SetBuiltInStyleValue(*setter.property, setter.value);
+}
+
 }  // namespace openxaml

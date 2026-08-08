@@ -189,6 +189,23 @@ journal, round-trips ListView selection mode, and opens a Popup.
   until that native identity is projected as a WinRT DependencyProperty.
 - **No `IXamlMetadataProvider`, no XBF, no text, no rendering, no input.** This
   is the layer those sit on, not a shortcut past them.
+- **No `Microsoft.UI.Xaml` DLL, and so no activatable
+  `XamlControlsResources`.** Terminal's binary asks for 57
+  `Microsoft.UI.Xaml.*` names (`strings -el WindowsTerminal.exe`), and what
+  those names *mean* is now reconstructed -- the theme resources, the default
+  styles, and `XamlControlsResources`' merge semantics all live in the layout
+  core and are gated by `default_styles_tests`. What is not here is a second
+  DLL registering them as runtime classes.
+
+  That is a deliberate order, not an oversight. `XamlControlsResources`
+  decides which dictionary an application resolves against, and that decision
+  is measurable through the corpus; activating it is measurable only through a
+  boot, which is track H's gate and not this one's. Registering a class whose
+  resolution had not been checked would be the wrong way round. The pieces the
+  step needs are all in place: the muxc WinMD projections at
+  `/tmp/openterminal-mingw/cppwinrt-winui`, `generate_abi_stubs.py`, and this
+  script's own build/register/measure pipeline, which is where the second DLL
+  should be grown rather than beside it.
 - **The client uses the raw C ABI, not C++/WinRT.** Both sides therefore take
   their vtable layouts from the same SDK headers, so a header that was itself
   wrong would cancel out. The IIDs are independent — they come from the IDL —

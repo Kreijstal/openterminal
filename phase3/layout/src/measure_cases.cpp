@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "default_styles.h"
 #include "element.h"
 #include "fonts.h"
 #include "json.h"
@@ -143,6 +144,27 @@ int main(int argc, char** argv) {
     }
     std::cerr << "theme resources loaded: " << keys << " key(s) from " << theme_resources.string()
               << "\n";
+
+    // The framework's own default styles, out of the same directory. Same rule
+    // again -- generated rather than committed, absent is not an error -- and
+    // deliberately the same directory rather than a fourth argument: the two
+    // databases are two halves of the same reconstruction and a run that had
+    // one without the other would resolve a `{ThemeResource}` in a default
+    // style against a dictionary that is missing its floor.
+    DefaultStyleReport style_report;
+    int default_styles = 0;
+    try {
+        default_styles = LoadDefaultStyles(DefaultStyleRegistry::Default(),
+                                           theme_resources.string(), &style_report);
+    } catch (const std::exception& e) {
+        std::cerr << "cannot load default styles from " << theme_resources.string() << ": "
+                  << e.what() << "\n";
+        return 4;
+    }
+    std::cerr << "default styles loaded: " << default_styles << " built-in style(s), "
+              << style_report.dropped_setters.size() << " setter(s) dropped, "
+              << style_report.unknown_types.size() << " type(s) not implemented, "
+              << style_report.held.size() << " setter(s) held\n";
 
     // Asked for and unreadable is fatal, for the reason the fonts are not: a
     // table names what every x:Uid in the run resolves to, so half a table is

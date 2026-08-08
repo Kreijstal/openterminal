@@ -185,6 +185,14 @@ std::shared_ptr<const Style> ParseStyle(const std::map<std::string, std::string>
 void ApplyStyle(DependencyObject& target, const Style& style, const std::string& type,
                 const std::vector<std::string>& owners);
 
+// The same, into the built-in slot -- the `BaseValueSourceBuiltInStyle` layer
+// that only a Control's own default style writes. Separate from ApplyStyle
+// rather than a flag on it, because the two are separate layers that coexist:
+// applying one must not disturb the other, and a caller that could pick the
+// layer by argument would eventually pick the wrong one silently.
+void ApplyBuiltInStyle(DependencyObject& target, const Style& style, const std::string& type,
+                       const std::vector<std::string>& owners);
+
 }  // namespace openxaml
 
 #endif  // OPENXAML_STYLE_H

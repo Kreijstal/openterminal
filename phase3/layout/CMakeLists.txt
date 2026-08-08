@@ -145,6 +145,18 @@ add_executable(text_measure_tests tests/text_measure_test.cpp)
 target_link_libraries(text_measure_tests PRIVATE openxaml_layout)
 add_test(NAME text_measure COMMAND text_measure_tests)
 
+# Which layer of the application dictionary answered, and which slot a default
+# style's value landed in. Both are invisible to a tree of numbers: flattening
+# the two dictionary layers measures identically until the first key WinUI 2
+# redefines, and writing the framework's setters into the style slot measures
+# identically until an application style sets one property of a control.
+add_executable(default_styles_tests
+    tests/default_styles_test.cpp
+    src/markup.cpp
+)
+target_link_libraries(default_styles_tests PRIVATE openxaml_layout)
+add_test(NAME default_styles COMMAND default_styles_tests)
+
 add_executable(wave3_tests tests/wave3_test.cpp src/markup.cpp)
 target_link_libraries(wave3_tests PRIVATE openxaml_layout)
 add_test(NAME wave3 COMMAND wave3_tests)
@@ -207,6 +219,7 @@ if(MSVC)
     target_compile_options(layout_rules_tests PRIVATE /W4)
     target_compile_options(layout_participation_tests PRIVATE /W4)
     target_compile_options(text_measure_tests PRIVATE /W4)
+    target_compile_options(default_styles_tests PRIVATE /W4)
     target_compile_options(wave3_tests PRIVATE /W4)
     target_compile_options(wave4_tests PRIVATE /W4)
     target_compile_options(scroll_viewer_tests PRIVATE /W4)
@@ -225,6 +238,7 @@ else()
     target_compile_options(layout_rules_tests PRIVATE -Wall -Wextra)
     target_compile_options(layout_participation_tests PRIVATE -Wall -Wextra)
     target_compile_options(text_measure_tests PRIVATE -Wall -Wextra)
+    target_compile_options(default_styles_tests PRIVATE -Wall -Wextra)
     target_compile_options(wave3_tests PRIVATE -Wall -Wextra)
     target_compile_options(wave4_tests PRIVATE -Wall -Wextra)
     target_compile_options(scroll_viewer_tests PRIVATE -Wall -Wextra)

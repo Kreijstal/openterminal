@@ -2275,13 +2275,200 @@ def level5_theme() -> Iterator[dict[str, Any]]:
 # A list per level rather than one generator, because a level is a question
 # and not a file: level 1 asks what a lone element does, and a Path is as much
 # a lone element as a Border is.
+# --- L5: the default-style universe -------------------------------------------
+# What an application resolves against before it has said anything at all. The
+# reconstruction (phase3/scripts/extract_default_styles.py) reads the two open
+# halves of it -- the framework's own generic.xaml at 188f602b and WinUI 2.8.4's
+# default styles -- and every case here is a question the two sources cannot
+# settle between them, because the answer is a fact about the runtime rather
+# than about either file.
+
+
+def level5_defaults() -> Iterator[dict[str, Any]]:
+    # 1. Whether a built-in style is applied at all in the probe's environment.
+    #
+    # `CControl::EnsureBuiltInStyle` runs `ApplyBuiltInStyle` only when the
+    # control `IsActive()` -- when it is in a live tree -- or when the caller
+    # forces it (dxaml/xcp/core/core/elements/Control.cpp, MIT 188f602b). The
+    # probe loads markup with XamlReader.Load and measures it without ever
+    # putting it in a window, so on a plain reading of that source no built-in
+    # style is applied and a bare Button measures as an untemplated Control.
+    # The level 7 subtrees are consistent with exactly that -- a recorded
+    # Button desires [20, 32] and the reconstructed padding would make it 42 --
+    # but they are consistent with several other things too, and this asks the
+    # question with nothing else in the tree to explain the answer.
+    yield case(
+        "L5-defaults-builtin-reachability", 5, "defaults",
+        l5_document("Grid", '<Button/>'), [400.0, 300.0],
+        "a bare Button with no content, no style and nothing around it",
+        requires=["L2-content"],
+        question=(
+            "Whether the framework's own generic.xaml style reaches a control "
+            "loaded by XamlReader.Load and measured outside a live tree. A "
+            "desired size of [0, 0] says no built-in style was applied; "
+            "anything else says one was, and pins what it is worth. Everything "
+            "this project does with default styles hangs on the answer: a "
+            "reconstruction that is never applied in the recorded environment "
+            "must not be applied here either, however faithful it is."))
+
+    # 2. Which layer wins where the two halves disagree.
+    #
+    # 56 layout-visible keys are defined by both the framework's generic.xaml
+    # and WinUI 2.8.4, with different values. `ButtonPadding` is the clearest:
+    # 8,4,8,5 in the framework and 11,5,11,6 in WinUI 2.
+    # `dev/dll/XamlControlsResources.cpp` says XamlControlsResources is a
+    # ResourceDictionary merged into Application.Resources, which makes it the
+    # higher layer and WinUI 2's value the answer -- but that is a reading of a
+    # merge, not a measurement of one, and the probe's host may not merge
+    # XamlControlsResources at all.
+    yield case(
+        "L5-defaults-layer-order", 5, "defaults",
+        l5_document("Grid", '<Border Padding="{ThemeResource ButtonPadding}">'
+                            '<Border Width="20" Height="20"/></Border>'),
+        [400.0, 300.0],
+        "ButtonPadding, which the framework's generic.xaml and WinUI 2.8.4 both "
+        "define and disagree about",
+        requires=["L2-align"],
+        twin="L5-defaults-layer-order-winui-inline",
+        question=(
+            "Which layer of Application.Resources answers a key both halves "
+            "define. A padded size of [42, 31] is WinUI 2's 11,5,11,6 and says "
+            "XamlControlsResources is merged over the framework's dictionary; "
+            "[36, 29] is the framework's 8,4,8,5 and says it is not. A "
+            "rejection says the key does not resolve in the probe's host at "
+            "all, which is the L5-theme finding restated for a key the OS "
+            "half also carries."))
+    yield case(
+        "L5-defaults-layer-order-winui-inline", 5, "defaults",
+        l5_document("Grid", '<Border Padding="11,5,11,6">'
+                            '<Border Width="20" Height="20"/></Border>'),
+        [400.0, 300.0],
+        "inline twin of L5-defaults-layer-order: Padding=\"11,5,11,6\", WinUI 2.8.4's "
+        "value for ButtonPadding",
+        requires=["L2-align"])
+    yield case(
+        "L5-defaults-layer-order-framework-inline", 5, "defaults",
+        l5_document("Grid", '<Border Padding="8,4,8,5">'
+                            '<Border Width="20" Height="20"/></Border>'),
+        [400.0, 300.0],
+        "the other half of L5-defaults-layer-order: Padding=\"8,4,8,5\", the value the "
+        "framework's own generic.xaml holds for ButtonPadding",
+        requires=["L2-align"])
+
+    # 3. A key only the framework half defines.
+    #
+    # `ControlContentThemeFontSize` is 14 in the system generic.xaml and is not
+    # in the WinUI 2.8.4 source at all -- it was one of the 28 keys
+    # research/microsoft-ui-xaml/.../README.md recorded as unreachable. It is
+    # reachable now, from MIT source, and this is what says whether the
+    # recorded runtime agrees that it is there.
+    yield case(
+        "L5-defaults-framework-only-key", 5, "defaults",
+        l5_document("Grid", '<Border Width="{ThemeResource ControlContentThemeFontSize}" '
+                            'Height="30"/>'),
+        [400.0, 300.0],
+        "ControlContentThemeFontSize, a key only the framework's own generic.xaml defines",
+        requires=["L1-sizing"],
+        twin="L5-defaults-framework-only-key-inline",
+        question=(
+            "Whether the half of the application dictionary that WinUI 2 does "
+            "not supply is reachable. A width of 14 says the framework's own "
+            "generic.xaml is in the probe's Application.Resources; a rejection "
+            "says the only dictionary there is the one an app merges, and that "
+            "the 651 keys this reconstruction adds are unmeasurable however "
+            "correct they are."))
+    yield case(
+        "L5-defaults-framework-only-key-inline", 5, "defaults",
+        l5_document("Grid", '<Border Width="14" Height="30"/>'), [400.0, 300.0],
+        "inline twin of L5-defaults-framework-only-key: Width=\"14\", the value the "
+        "framework's generic.xaml holds for ControlContentThemeFontSize",
+        requires=["L1-sizing"])
+
+    # 4. What XamlAutoFontFamily measures as.
+    #
+    # `ContentControlThemeFontFamily` is the literal string
+    # `XamlAutoFontFamily`, which is not a family: it is the framework's
+    # sentinel for the system UI font, resolved inside the text stack against
+    # the running system. This project holds every setter that resolves to it
+    # rather than handing it to the font library, because a family it cannot
+    # measure fails every element that inherits it. What it *should* measure as
+    # is the question, and the answer is a font harvest rather than an opinion.
+    yield case(
+        "L5-defaults-autofontfamily", 5, "defaults",
+        l5_document("Grid", '<TextBlock FontFamily="{ThemeResource ContentControlThemeFontFamily}" '
+                            'FontSize="20" Text="M"/>'),
+        [400.0, 300.0],
+        "a TextBlock in the family ContentControlThemeFontFamily names, which is the "
+        "literal XamlAutoFontFamily",
+        requires=["L4-text"],
+        twin="L5-defaults-autofontfamily-inline",
+        question=(
+            "What XamlAutoFontFamily resolves to. If this measures the same as "
+            "its Segoe UI twin then the sentinel is the UI font on the recorded "
+            "build and this project can map it; if it measures differently, the "
+            "mapping is something else and holding the setter was right; if it "
+            "is rejected, the sentinel is not resolvable through XamlReader at "
+            "all. Every one of those is an answer and none of them can be read "
+            "off the source."))
+    yield case(
+        "L5-defaults-autofontfamily-inline", 5, "defaults",
+        l5_document("Grid", '<TextBlock FontFamily="Segoe UI" FontSize="20" Text="M"/>'),
+        [400.0, 300.0],
+        "inline twin of L5-defaults-autofontfamily: the family the sentinel is assumed to "
+        "stand for on a Western-locale desktop",
+        requires=["L4-text"])
+
+    # 5. Whether an application's implicit style replaces the built-in one or
+    #    coexists with it.
+    #
+    # docs/design-notes/styles.md (MIT, 188f602b) says the two are separate
+    # property-system layers and that a Style-layer setter shadows a
+    # BuiltInStyle-layer setter for the same property while leaving the rest
+    # standing -- the "EmptyStateHyperlinkStyle" case it gives, a style with
+    # four setters and no Template that relies on the built-in style for one.
+    # This measures that claim rather than restating it, and it measures it on
+    # the one number the corpus has already pinned: a bare Button desires
+    # [20, 32] (L7-terminal-0e66f8e18d), and the 32 is not in the markup. An
+    # implicit style that sets only Width says whether that 32 survives
+    # underneath it.
+    yield case(
+        "L5-defaults-builtin-under-implicit", 5, "defaults",
+        l5_document("Grid",
+                    l5_resources("Grid", l5_style("Button", setter("Width", "150")))
+                    + '<Button/>'),
+        [400.0, 300.0],
+        "an application implicit style that sets one property of a control the framework "
+        "also styles. Its twin disagrees in this implementation, for the reason every "
+        "L5-styles-implicit pair does: the implicit lookup does not reach a Control here. "
+        "That disagreement is the existing gap restated, not a claim about the runtime",
+        requires=["L5-styles"],
+        twin="L5-defaults-builtin-under-implicit-inline",
+        question=(
+            "Whether an application's implicit style coexists with the "
+            "framework's built-in one or replaces it. A desired height of 32 "
+            "is coexistence: the width came from the application's style and "
+            "the height is still whatever gives a bare Button its recorded "
+            "[20, 32]. A height of 0 says the application's style took the "
+            "whole slot and the built-in one went with it. "
+            "docs/design-notes/styles.md says the first -- two property-system "
+            "layers that coexist -- and this is what turns that into a fact "
+            "about the build under test."))
+    yield case(
+        "L5-defaults-builtin-under-implicit-inline", 5, "defaults",
+        l5_document("Grid", '<Button Width="150"/>'), [400.0, 300.0],
+        "inline twin of L5-defaults-builtin-under-implicit: the same Width written on the "
+        "element, where no style of any kind is involved",
+        requires=["L2-content"])
+
+
 LEVELS = {
     0: [level0],
     1: [level1, level1_shape],
     2: [level2, level2_content],
     3: [level3, level3_canvas, level3_scroll],
     4: [level4, level4_icon, level4_source, level4_kern],
-    5: [level5, level5_styles, level5_theme, level5_x_primitives, level5_x_directives],
+    5: [level5, level5_styles, level5_theme, level5_x_primitives, level5_x_directives,
+        level5_defaults],
 }
 
 
