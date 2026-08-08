@@ -24,6 +24,10 @@
 #include <winstring.h>
 
 #include <windows.ui.xaml.h>
+// The pointer, key and tap handler types an element's add_/remove_ pairs take.
+// windows.ui.xaml.h only forward-declares them, and a forward declaration is
+// enough to name one in a signature but not to call AddRef on it.
+#include <windows.ui.xaml.input.h>
 #include <windows.ui.xaml.media.h>
 #include <windows.ui.xaml.media.animation.h>
 #include <windows.ui.xaml.shapes.h>

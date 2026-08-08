@@ -33,19 +33,52 @@ bool SameValue(const PropertyValue& a, const PropertyValue& b) {
     return a == b;
 }
 
-const DependencyProperty* RegisterProperty(std::string owner, std::string name,
-                                           PropertyMetadata metadata) {
+namespace {
+
+const DependencyProperty* Register(std::string owner, std::string name,
+                                   PropertyMetadata metadata, bool attached) {
     Registry& registry = Table();
     const auto key = std::make_pair(owner, name);
     if (registry.by_owner_and_name.count(key))
         throw PropertyError("the property '" + name + "' is already registered on '" + owner + "'");
 
     registry.properties.push_back(std::make_unique<DependencyProperty>(
-        std::move(owner), std::move(name), std::move(metadata), registry.properties.size()));
+        std::move(owner), std::move(name), std::move(metadata), registry.properties.size(),
+        attached));
     const DependencyProperty* property = registry.properties.back().get();
     registry.by_owner_and_name[key] = property;
     if (property->inherits()) registry.inherited.push_back(property);
     return property;
+}
+
+}  // namespace
+
+const DependencyProperty* RegisterProperty(std::string owner, std::string name,
+                                           PropertyMetadata metadata) {
+    return Register(std::move(owner), std::move(name), std::move(metadata), false);
+}
+
+const DependencyProperty* RegisterAttachedProperty(std::string owner, std::string name,
+                                                   PropertyMetadata metadata) {
+    // Filed under the qualified name, because that is the only name an
+    // attached property is ever written or looked up by -- see FindProperty,
+    // where a dotted name resolves against the registry directly instead of
+    // against the object's owner chain.
+    if (name.find('.') != std::string::npos)
+        throw PropertyError("an attached property is registered under its bare name, not '" +
+                            name + "'");
+    std::string qualified = owner + "." + name;
+    return Register(std::move(owner), std::move(qualified), std::move(metadata), true);
+}
+
+const DependencyProperty* FindPropertyOnOwner(const std::string& owner, const std::string& name) {
+    const Registry& registry = Table();
+    const auto found = registry.by_owner_and_name.find({owner, name});
+    if (found != registry.by_owner_and_name.end()) return found->second;
+    // A caller that named the owner may still be spelling an attached property
+    // by its bare name, which is filed qualified.
+    const auto attached = registry.by_owner_and_name.find({owner, owner + "." + name});
+    return attached == registry.by_owner_and_name.end() ? nullptr : attached->second;
 }
 
 const DependencyProperty* FindProperty(const std::vector<std::string>& owners,
@@ -55,7 +88,12 @@ const DependencyProperty* FindProperty(const std::vector<std::string>& owners,
     // A dotted name carries its own owner: Grid.Column is Grid's property
     // whatever it is written on, and resolving it against the element's chain
     // would refuse it everywhere except on a Grid.
-    const size_t dot = name.find('.');
+    //
+    // The *last* dot, not the first: an owner is a type name and a type name
+    // may itself be qualified. `Grid.Row` has one dot either way, and a
+    // property a caller registers through the ABI against
+    // `TerminalApp.TitlebarControl` has three.
+    const size_t dot = name.rfind('.');
     if (dot != std::string::npos) {
         const auto found = registry.by_owner_and_name.find({name.substr(0, dot), name});
         return found == registry.by_owner_and_name.end() ? nullptr : found->second;
@@ -77,6 +115,21 @@ const DependencyProperty* PropertyByIndex(size_t index) {
 }
 
 // --- DependencyObject ---------------------------------------------------------
+
+namespace {
+
+// The tokens of a handler map, in registration order, as a snapshot. Taken
+// before any handler runs, because a handler may add or remove others.
+std::vector<DependencyObject::PropertyChangedToken> TokensOf(
+    const std::map<DependencyObject::PropertyChangedToken,
+                   DependencyObject::PropertyChangedHandler>& handlers) {
+    std::vector<DependencyObject::PropertyChangedToken> tokens;
+    tokens.reserve(handlers.size());
+    for (const auto& entry : handlers) tokens.push_back(entry.first);
+    return tokens;
+}
+
+}  // namespace
 
 const PropertyValue* DependencyObject::OwnValue(const DependencyProperty& property) const {
     const auto animated = animated_.find(property.index());
@@ -119,20 +172,46 @@ void DependencyObject::ValueMoved(const DependencyProperty& property,
                                   const PropertyValue& before) {
     if (SameValue(before, GetValue(property))) return;
 
+    // The order the three kinds of observer run in is the runtime's, from
+    // dxaml `DependencyObject::NotifyPropertyChanged`
+    // (dxaml/xcp/dxaml/lib/DependencyObject.cpp, 188f602b):
+    //
+    //   1. the type's own OnPropertyChanged -- what a built-in property uses,
+    //      and what every property this repository registers uses;
+    //   2. the metadata's PropertyChangedCallback, which is the one a caller
+    //      supplies at Register time and which the runtime invokes before it
+    //      raises anything;
+    //   3. the per-object observers.
+    //
+    // Between 2 and 3 the runtime raises its DPChanged event source, which is
+    // the binding engine's hook; the whole-object handler list here is this
+    // implementation's equivalent of it and sits in the same place, so a
+    // binding still refreshes before a caller's RegisterPropertyChangedCallback
+    // sees the value.
     OnPropertyChanged(property);
     const PropertyValue after = GetValue(property);
-    // A handler is allowed to detach itself. Copying the token set keeps that
-    // safe without retaining a callback that another handler removed.
-    std::vector<PropertyChangedToken> tokens;
-    tokens.reserve(property_changed_handlers_.size());
-    for (const auto& [token, handler] : property_changed_handlers_) {
-        (void)handler;
-        tokens.push_back(token);
-    }
-    for (PropertyChangedToken token : tokens) {
+    if (property.metadata().changed) property.metadata().changed(*this, property, before, after);
+
+    // A handler is allowed to detach itself, or any other. Both loops therefore
+    // walk a snapshot of the tokens and look each one up again before calling
+    // it, so a callback that another callback removed is never invoked. The
+    // per-property loop re-finds its map as well, because removing the last
+    // handler for a property erases the map itself.
+    for (PropertyChangedToken token : TokensOf(property_changed_handlers_)) {
         const auto found = property_changed_handlers_.find(token);
         if (found != property_changed_handlers_.end()) found->second(*this, property, after);
     }
+
+    const auto per_property = per_property_handlers_.find(property.index());
+    if (per_property != per_property_handlers_.end()) {
+        for (PropertyChangedToken token : TokensOf(per_property->second)) {
+            const auto handlers = per_property_handlers_.find(property.index());
+            if (handlers == per_property_handlers_.end()) break;
+            const auto found = handlers->second.find(token);
+            if (found != handlers->second.end()) found->second(*this, property, after);
+        }
+    }
+
     if (property.inherits()) {
         for (DependencyObject* child : InheritanceChildren())
             child->InvalidateInherited(property, before);
@@ -156,6 +235,11 @@ void DependencyObject::ClearValue(const DependencyProperty& property) {
 
 bool DependencyObject::HasLocalValue(const DependencyProperty& property) const {
     return local_.count(property.index()) != 0;
+}
+
+const PropertyValue* DependencyObject::ReadLocalValue(const DependencyProperty& property) const {
+    const auto found = local_.find(property.index());
+    return found == local_.end() ? nullptr : &found->second;
 }
 
 void DependencyObject::SetStyleValue(const DependencyProperty& property, PropertyValue value) {
@@ -256,6 +340,29 @@ DependencyObject::PropertyChangedToken DependencyObject::AddPropertyChangedHandl
 
 void DependencyObject::RemovePropertyChangedHandler(PropertyChangedToken token) {
     property_changed_handlers_.erase(token);
+}
+
+DependencyObject::PropertyChangedToken DependencyObject::RegisterPropertyChangedCallback(
+    const DependencyProperty& property, PropertyChangedHandler handler) {
+    if (!handler) throw PropertyError("a property-changed callback cannot be empty");
+    // One token sequence for both kinds of observer. They are unregistered
+    // through different calls, so the sequences could be separate; sharing one
+    // means a token never names a registration on the same object twice, which
+    // is the property a caller that mislays which list a token came from needs.
+    const PropertyChangedToken token = next_property_changed_token_++;
+    per_property_handlers_[property.index()].emplace(token, std::move(handler));
+    return token;
+}
+
+void DependencyObject::UnregisterPropertyChangedCallback(const DependencyProperty& property,
+                                                         PropertyChangedToken token) {
+    const auto handlers = per_property_handlers_.find(property.index());
+    if (handlers == per_property_handlers_.end()) return;
+    handlers->second.erase(token);
+    // The runtime destroys a property's event source with its last handler
+    // (dxaml DependencyObject::UnregisterPropertyChangedCallback). Doing the
+    // same keeps "has this property any observers" a lookup rather than a scan.
+    if (handlers->second.empty()) per_property_handlers_.erase(handlers);
 }
 
 double DependencyObject::GetDouble(const DependencyProperty& property) const {

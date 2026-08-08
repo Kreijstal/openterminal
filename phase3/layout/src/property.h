@@ -72,7 +72,15 @@ public:
 // the corpus can write, which keeps values copyable and comparable without
 // dragging in a type system. Enumerations ride as int, the way a boxed enum
 // does in the runtime.
-using PropertyValue = std::variant<double, int, bool, Thickness, std::string>;
+//
+// std::monostate is null -- what a property whose type is `object` holds when
+// it holds nothing, which is what `PropertyMetadata(nullptr)` registers as a
+// default. No type in the layout core ever produces one and no measurement can
+// contain one; it exists because a property registered through the ABI may be
+// declared that way, and storing a plausible zero for it instead would be a
+// wrong value rather than an absent one. Every typed read refuses it by name.
+using PropertyValue =
+    std::variant<double, int, bool, Thickness, std::string, std::monostate>;
 
 // Whether two values are the same as far as anything reading the store is
 // concerned. NaN needs the special case rather than `==`: it is how XAML
@@ -80,7 +88,33 @@ using PropertyValue = std::variant<double, int, bool, Thickness, std::string>;
 // time it was assigned.
 bool SameValue(const PropertyValue& a, const PropertyValue& b);
 
+class DependencyObject;
+class DependencyProperty;
+
+// What PropertyMetadata's second constructor argument is in WinUI: a callback
+// the property itself carries, run whenever an object's effective value for it
+// moves. Registered against the property rather than against an object, so
+// every instance gets it -- which is what makes it different from
+// RegisterPropertyChangedCallback, which is per object.
+using PropertyChangedCallback =
+    std::function<void(DependencyObject&, const DependencyProperty&,
+                       const PropertyValue& old_value, const PropertyValue& new_value)>;
+
 struct PropertyMetadata {
+    // Spelled out rather than left an aggregate, so that adding a field does
+    // not turn every `{value, false, true}` at a registration site into a
+    // missing-initializer warning -- and so that a caller supplying only a
+    // default value, which is PropertyMetadata's one-argument constructor in
+    // the runtime, reads the same here.
+    PropertyMetadata() = default;
+    PropertyMetadata(PropertyValue value, bool inherits_value = false,
+                     bool affects_measure_value = false,
+                     PropertyChangedCallback changed_callback = {})
+        : default_value(std::move(value)),
+          inherits(inherits_value),
+          affects_measure(affects_measure_value),
+          changed(std::move(changed_callback)) {}
+
     PropertyValue default_value;
 
     // Inherited properties fall through to an ancestor when they have no local
@@ -93,6 +127,13 @@ struct PropertyMetadata {
     // FrameworkPropertyMetadataOptions.AffectsMeasure, and it is the only
     // thing the store has to tell layout.
     bool affects_measure = false;
+
+    // PropertyMetadata's PropertyChangedCallback. Empty for every property
+    // registered by this repository's own types -- they override
+    // OnPropertyChanged instead, which is what the runtime's built-in
+    // properties do too. It is here for properties registered *through the
+    // ABI*, by a caller that has no C++ type to override anything on.
+    PropertyChangedCallback changed;
 };
 
 // The identity of a property. Registered once and referred to by address, the
@@ -106,6 +147,16 @@ public:
     const PropertyValue& default_value() const { return metadata_.default_value; }
     bool inherits() const { return metadata_.inherits; }
     bool affects_measure() const { return metadata_.affects_measure; }
+    const PropertyMetadata& metadata() const { return metadata_; }
+
+    // Whether it was registered with RegisterAttached rather than Register.
+    //
+    // The store does not care -- an attached value is an ordinary entry under
+    // this property's index, on whatever object it was written on. What the
+    // flag decides is *resolution*: an attached property is found by its
+    // qualified `Owner.Name` from anywhere, and a plain one only through the
+    // owner chain of the object it is being read on.
+    bool is_attached() const { return attached_; }
 
     // Dense index, assigned at registration, which is what an object's store
     // is keyed by. Comparing names on every read would work and would be the
@@ -116,17 +167,19 @@ public:
     DependencyProperty& operator=(const DependencyProperty&) = delete;
 
     DependencyProperty(std::string owner, std::string name, PropertyMetadata metadata,
-                       size_t index)
+                       size_t index, bool attached = false)
         : owner_(std::move(owner)),
           name_(std::move(name)),
           metadata_(std::move(metadata)),
-          index_(index) {}
+          index_(index),
+          attached_(attached) {}
 
 private:
     std::string owner_;
     std::string name_;
     PropertyMetadata metadata_;
     size_t index_ = 0;
+    bool attached_ = false;
 };
 
 // Registers a property against an owner and returns the singleton that
@@ -138,6 +191,20 @@ private:
 // dangling reference looks like, whether or not it is one.
 const DependencyProperty* RegisterProperty(std::string owner, std::string name,
                                            PropertyMetadata metadata);
+
+// DependencyProperty.RegisterAttached. `name` is the bare one -- "Row", not
+// "Grid.Row" -- because that is what the caller passes and what the runtime
+// takes; the qualified name is this function's business, and it is what the
+// property is filed and resolved under, so an attached property is written the
+// way markup writes it.
+const DependencyProperty* RegisterAttachedProperty(std::string owner, std::string name,
+                                                   PropertyMetadata metadata);
+
+// The property with this owner and this qualified-or-bare name, or nullptr.
+// The registry's own lookup, without an owner chain: what the ABI's
+// DependencyProperty statics need, since a caller naming an owner has already
+// said which type it means.
+const DependencyProperty* FindPropertyOnOwner(const std::string& owner, const std::string& name);
 
 // The property a markup attribute names, or nullptr.
 //
@@ -189,6 +256,12 @@ public:
 
     bool HasLocalValue(const DependencyProperty& property) const;
 
+    // DependencyObject.ReadLocalValue: the local value only, ignoring every
+    // other source. nullptr is DependencyProperty.UnsetValue -- the sentinel
+    // the runtime returns for "no local value here", which is not the same
+    // answer as the default and not the same answer as the style's.
+    const PropertyValue* ReadLocalValue(const DependencyProperty& property) const;
+
     // What a style setter writes. Its own slot rather than the local one, so
     // that a local value set afterwards still wins, and so that replacing the
     // style exposes what was underneath instead of what the old style left
@@ -227,6 +300,19 @@ public:
     // clearing that animation raises the newly exposed value once.
     PropertyChangedToken AddPropertyChangedHandler(PropertyChangedHandler handler);
     void RemovePropertyChangedHandler(PropertyChangedToken token);
+
+    // DependencyObject.RegisterPropertyChangedCallback: the same observation,
+    // narrowed to one property. Kept apart from the handler list above rather
+    // than filtered out of it because the runtime keeps them apart -- one
+    // event source per property, created on first registration and destroyed
+    // with its last handler (dxaml `DependencyObject::m_pNotificationVector`).
+    //
+    // The order the three observers run in is the runtime's, see the note on
+    // ValueMoved in property.cpp.
+    PropertyChangedToken RegisterPropertyChangedCallback(const DependencyProperty& property,
+                                                         PropertyChangedHandler handler);
+    void UnregisterPropertyChangedCallback(const DependencyProperty& property,
+                                           PropertyChangedToken token);
 
     // Typed reads. They throw if the property does not hold that type, which
     // is a registration mistake rather than anything a case can cause.
@@ -283,6 +369,12 @@ private:
     std::map<size_t, PropertyValue> built_in_style_;
     std::map<size_t, PropertyValue> animated_;
     std::map<PropertyChangedToken, PropertyChangedHandler> property_changed_handlers_;
+    // Per-property observers, keyed by the property's store index. The inner
+    // map is the runtime's per-property event source; an empty one is erased,
+    // so `count()` on this map answers "does this property have observers"
+    // without a second flag.
+    std::map<size_t, std::map<PropertyChangedToken, PropertyChangedHandler>>
+        per_property_handlers_;
     PropertyChangedToken next_property_changed_token_ = 1;
     DependencyObject* inheritance_parent_ = nullptr;
 };

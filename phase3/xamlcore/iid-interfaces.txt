@@ -9,7 +9,6 @@
 
 Windows.UI.Xaml.IDependencyObject
 Windows.UI.Xaml.IDependencyObject2
-Windows.UI.Xaml.IDependencyProperty
 Windows.UI.Xaml.IDispatcherTimer
 Windows.UI.Xaml.IDispatcherTimerFactory
 Windows.UI.Xaml.IUIElement
@@ -121,7 +120,6 @@ Windows.System.IDispatcherQueueTimer
 Windows.UI.Xaml.Hosting.IWindowsXamlManager
 Windows.UI.Xaml.Hosting.IWindowsXamlManagerStatics
 Windows.Foundation.IClosable
-Windows.Foundation.IPropertyValue
 Windows.UI.IColorsStatics
 Windows.ApplicationModel.Resources.Core.IResourceManager
 Windows.ApplicationModel.Resources.Core.IResourceManagerStatics
@@ -191,6 +189,28 @@ Windows.UI.Xaml.Controls.IContentDialog2
 Windows.UI.Xaml.Controls.IContentDialog3
 Windows.UI.Xaml.Controls.IContentDialogFactory
 Windows.UI.Xaml.Controls.Primitives.ISelectorItem
+
+# Boxing. A dependency property's value crosses this ABI as an IInspectable,
+# and the only interface a boxed scalar is guaranteed to answer to is
+# IPropertyValue. The DLL both produces boxes (through the platform's
+# PropertyValue statics, so that a box it hands out is indistinguishable from
+# one the caller made) and reads them.
+Windows.Foundation.IPropertyValue
+Windows.Foundation.IPropertyValueStatics
+
+# The property system's own runtime classes.
+Windows.UI.Xaml.IDependencyProperty
+Windows.UI.Xaml.IDependencyPropertyStatics
+Windows.UI.Xaml.IPropertyMetadata
+Windows.UI.Xaml.IPropertyMetadataFactory
+Windows.UI.Xaml.IPropertyMetadataStatics
+# The two callback types are delegates, not interfaces: the IDL declares them
+# with `delegate`, so there is no uuid() attribute here to harvest, and none is
+# needed -- a delegate arrives already typed as a parameter and is only ever
+# invoked, never asked for by IID.
+
+# Event arguments the DLL hands to a handler it raises.
+Windows.UI.Xaml.ISizeChangedEventArgs
 
 # Every WinRT object implements these. The SDK's own inspectable.h shadows
 # mingw's, and the SDK version defines their IIDs through __uuidof rather than

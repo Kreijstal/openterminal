@@ -21,6 +21,8 @@
 #include "border.h"
 #include "collection.h"
 #include "com.h"
+#include "properties.h"
+#include "strings.h"
 #include "grid.h"
 #include "openxaml_abi_stubs.h"
 #include "stack_panel.h"
@@ -46,84 +48,48 @@ namespace wuxdata = ABI::Windows::UI::Xaml::Data;
 namespace wuxs = ABI::Windows::UI::Xaml::Shapes;
 namespace wuxi = ABI::Windows::UI::Xaml::Input;
 
-// --- strings ------------------------------------------------------------------
+// --- SizeChangedEventArgs -----------------------------------------------------
 //
-// The layout core carries text as UTF-8 and the ABI carries it as UTF-16, so
-// something has to convert. Doing it here rather than through
-// WideCharToMultiByte keeps the DLL's imports to what it already had.
+// The one event-arguments class this DLL builds, because SizeChanged is one of
+// the two events it raises. Not activatable and not registered: a caller never
+// constructs one, it only receives one.
 
-inline std::string Utf8FromHString(HSTRING text) {
-    UINT32 length = 0;
-    const wchar_t* buffer = WindowsGetStringRawBuffer(text, &length);
-    std::string out;
-    for (UINT32 index = 0; index < length; ++index) {
-        char32_t code = buffer[index];
-        // A surrogate pair is one codepoint written as two UTF-16 units.
-        if (code >= 0xD800 && code <= 0xDBFF && index + 1 < length &&
-            buffer[index + 1] >= 0xDC00 && buffer[index + 1] <= 0xDFFF) {
-            code = 0x10000 + ((code - 0xD800) << 10) + (buffer[++index] - 0xDC00);
-        }
-        if (code < 0x80) {
-            out += static_cast<char>(code);
-        } else if (code < 0x800) {
-            out += static_cast<char>(0xC0 | (code >> 6));
-            out += static_cast<char>(0x80 | (code & 0x3F));
-        } else if (code < 0x10000) {
-            out += static_cast<char>(0xE0 | (code >> 12));
-            out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
-            out += static_cast<char>(0x80 | (code & 0x3F));
-        } else {
-            out += static_cast<char>(0xF0 | (code >> 18));
-            out += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
-            out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
-            out += static_cast<char>(0x80 | (code & 0x3F));
-        }
-    }
-    return out;
-}
+class SizeChangedEventArgsObject final : public ComObject,
+                                         public abi::NotImpl_ISizeChangedEventArgs {
+public:
+    SizeChangedEventArgsObject(openxaml::Size previous, openxaml::Size current)
+        : previous_(previous), current_(current) {}
 
-inline std::string Utf8FromCodePoint(char32_t code) {
-    std::string out;
-    if (code < 0x80) {
-        out += static_cast<char>(code);
-    } else if (code < 0x800) {
-        out += static_cast<char>(0xC0 | (code >> 6));
-        out += static_cast<char>(0x80 | (code & 0x3F));
-    } else if (code < 0x10000) {
-        out += static_cast<char>(0xE0 | (code >> 12));
-        out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
-        out += static_cast<char>(0x80 | (code & 0x3F));
-    } else {
-        out += static_cast<char>(0xF0 | (code >> 18));
-        out += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
-        out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
-        out += static_cast<char>(0x80 | (code & 0x3F));
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.SizeChangedEventArgs";
     }
-    return out;
-}
 
-inline HRESULT HStringFromUtf8(const std::string& text, HSTRING* out) {
-    if (!out) return E_POINTER;
-    std::wstring wide;
-    size_t index = 0;
-    while (index < text.size()) {
-        const auto lead = static_cast<unsigned char>(text[index]);
-        size_t extra = lead < 0x80 ? 0 : (lead & 0xE0) == 0xC0 ? 1 : (lead & 0xF0) == 0xE0 ? 2 : 3;
-        char32_t code = lead < 0x80 ? lead : lead & (0x3F >> extra);
-        if (index + extra >= text.size()) return E_INVALIDARG;
-        for (size_t step = 1; step <= extra; ++step)
-            code = (code << 6) | (static_cast<unsigned char>(text[index + step]) & 0x3F);
-        index += extra + 1;
-        if (code < 0x10000) {
-            wide += static_cast<wchar_t>(code);
-        } else {
-            code -= 0x10000;
-            wide += static_cast<wchar_t>(0xD800 + (code >> 10));
-            wide += static_cast<wchar_t>(0xDC00 + (code & 0x3FF));
-        }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_ISizeChangedEventArgs,
+                        wux::ISizeChangedEventArgs)
+        OPENXAML_QI_ARM(IID_IUnknown, wux::ISizeChangedEventArgs)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wux::ISizeChangedEventArgs)
+        *object = nullptr;
+        return E_NOINTERFACE;
     }
-    return WindowsCreateString(wide.c_str(), static_cast<UINT32>(wide.size()), out);
-}
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_PreviousSize(wf::Size* value) override {
+        if (!value) return E_POINTER;
+        *value = {static_cast<FLOAT>(previous_.width), static_cast<FLOAT>(previous_.height)};
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_NewSize(wf::Size* value) override {
+        if (!value) return E_POINTER;
+        *value = {static_cast<FLOAT>(current_.width), static_cast<FLOAT>(current_.height)};
+        return S_OK;
+    }
+
+private:
+    openxaml::Size previous_;
+    openxaml::Size current_;
+};
 
 // --- collection traits --------------------------------------------------------
 
@@ -579,7 +545,8 @@ public:
             WindowsDeleteString(value);
         for (auto& [_, handler] : event_handlers_) handler->Release();
         for (auto& [_, handler] : loaded_handlers_) handler->Release();
-        for (auto& [_, handler] : layout_updated_handlers_) handler->Release();
+        for (auto& [_, handler] : handlers_) handler->Release();
+        for (auto& [_, callback] : callbacks_) callback->Release();
     }
 
     virtual openxaml::Element* Layout() = 0;
@@ -661,19 +628,6 @@ public:
         if (!value) return E_POINTER;
         *value = new (std::nothrow) GeneralTransformObject();
         return *value ? S_OK : E_OUTOFMEMORY;
-    }
-    HRESULT STDMETHODCALLTYPE RegisterPropertyChangedCallback(
-        wux::IDependencyProperty*, wux::IDependencyPropertyChangedCallback* handler,
-        INT64* token) override {
-        if (!token) return E_POINTER;
-        EventRegistrationToken event_token{};
-        const HRESULT hr = AddEvent(handler, &event_token);
-        *token = event_token.value;
-        return hr;
-    }
-    HRESULT STDMETHODCALLTYPE UnregisterPropertyChangedCallback(
-        wux::IDependencyProperty*, INT64 token) override {
-        return RemoveEvent({token});
     }
     HRESULT STDMETHODCALLTYPE get_Dispatcher(
         ABI::Windows::UI::Core::ICoreDispatcher** value) override {
@@ -908,13 +862,6 @@ public:
         resources_ = value;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE add_SizeChanged(
-        wux::ISizeChangedEventHandler* handler, EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
-    }
-    HRESULT STDMETHODCALLTYPE remove_SizeChanged(EventRegistrationToken token) override {
-        return RemoveEvent(token);
-    }
     HRESULT STDMETHODCALLTYPE add_Loaded(
         wux::IRoutedEventHandler* handler, EventRegistrationToken* token) override {
         EnsureLayoutPassCallback();
@@ -922,16 +869,6 @@ public:
     }
     HRESULT STDMETHODCALLTYPE remove_Loaded(EventRegistrationToken token) override {
         return RemoveTypedEvent(token, loaded_handlers_);
-    }
-    HRESULT STDMETHODCALLTYPE add_LayoutUpdated(
-        __FIEventHandler_1_IInspectable* handler,
-        EventRegistrationToken* token) override {
-        EnsureLayoutPassCallback();
-        return AddTypedEvent(handler, token, layout_updated_handlers_);
-    }
-    HRESULT STDMETHODCALLTYPE remove_LayoutUpdated(
-        EventRegistrationToken token) override {
-        return RemoveTypedEvent(token, layout_updated_handlers_);
     }
     HRESULT STDMETHODCALLTYPE get_RequestedTheme(wux::ElementTheme* value) override {
         if (!value) return E_POINTER;
@@ -1206,6 +1143,168 @@ public:
         return S_OK;
     }
 
+    // --- IDependencyObject ---
+    //
+    // The store these reach is the layout core's own, the one every accessor
+    // above already reads: `put_Width` and `SetValue(WidthProperty, ...)` are
+    // two spellings of one write, and the precedence chain -- animation over
+    // local over style over inherited over default -- is the chain that
+    // decides what the next Measure sees.
+
+    // The distinction every property entry point below makes: null is the
+    // caller's mistake, but an identity this DLL handed out that names no
+    // native slot (a *Property placeholder) is this runtime's own gap, and it
+    // answers the way the pre-store runtime did -- E_NOTIMPL, by name.
+    static HRESULT NoNativeIdentity(const char* method) {
+        TraceRuntime("OpenXaml: E_NOTIMPL IDependencyObject.");
+        TraceRuntime(method);
+        TraceRuntime(" (the property names no native slot)\n");
+        return E_NOTIMPL;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetValue(wux::IDependencyProperty* dp,
+                                       IInspectable** result) override {
+        if (!result) return E_POINTER;
+        *result = nullptr;
+        const openxaml::DependencyProperty* property = NativeProperty(dp);
+        if (!property) return dp ? NoNativeIdentity("GetValue") : E_INVALIDARG;
+        return BoxPropertyValue(Layout()->GetValue(*property), result);
+    }
+
+    HRESULT STDMETHODCALLTYPE SetValue(wux::IDependencyProperty* dp,
+                                       IInspectable* value) override {
+        const openxaml::DependencyProperty* property = NativeProperty(dp);
+        if (!property) return dp ? NoNativeIdentity("SetValue") : E_INVALIDARG;
+        openxaml::PropertyValue unboxed;
+        const HRESULT hr = UnboxPropertyValue(value, property->default_value(), &unboxed);
+        if (FAILED(hr)) return hr;
+        Layout()->SetValue(*property, std::move(unboxed));
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE ClearValue(wux::IDependencyProperty* dp) override {
+        const openxaml::DependencyProperty* property = NativeProperty(dp);
+        if (!property) return dp ? NoNativeIdentity("ClearValue") : E_INVALIDARG;
+        Layout()->ClearValue(*property);
+        return S_OK;
+    }
+
+    // DependencyProperty.UnsetValue -- the very object
+    // IDependencyPropertyStatics::get_UnsetValue hands out, so that the
+    // caller's `== DependencyProperty.UnsetValue` is true -- for a property
+    // whose value comes from a style, an ancestor or its default rather than
+    // from this object.
+    HRESULT STDMETHODCALLTYPE ReadLocalValue(wux::IDependencyProperty* dp,
+                                             IInspectable** result) override {
+        if (!result) return E_POINTER;
+        *result = nullptr;
+        const openxaml::DependencyProperty* property = NativeProperty(dp);
+        if (!property) return dp ? NoNativeIdentity("ReadLocalValue") : E_INVALIDARG;
+        const openxaml::PropertyValue* local = Layout()->ReadLocalValue(*property);
+        if (!local) {
+            *result = UnsetValue();
+            (*result)->AddRef();
+            return S_OK;
+        }
+        return BoxPropertyValue(*local, result);
+    }
+
+    HRESULT STDMETHODCALLTYPE RegisterPropertyChangedCallback(
+        wux::IDependencyProperty* dp, wux::IDependencyPropertyChangedCallback* callback,
+        INT64* result) override {
+        if (!result) return E_POINTER;
+        *result = 0;
+        if (!dp || !callback) return E_INVALIDARG;
+        const openxaml::DependencyProperty* property = NativeProperty(dp);
+        if (!property) {
+            // An identity this DLL handed out (a *Property placeholder) that
+            // names no native slot. The value behind it never moves through
+            // this runtime, so the observer is stored and never fired -- the
+            // same honesty as a stored event, and what the placeholder did
+            // before the store was reachable at all. Refusing instead would
+            // fail WinUI's control constructors, which register these
+            // observers unconditionally.
+            EventRegistrationToken stored{};
+            const HRESULT hr = AddEvent(callback, &stored);
+            if (FAILED(hr)) return hr;
+            *result = stored.value;
+            return S_OK;
+        }
+        callback->AddRef();
+        // The projected property, not the one the caller passed: the callback
+        // is handed the identity this DLL owns, which is the one it would get
+        // from a *Property static.
+        wux::IDependencyProperty* projected = ProjectProperty(*property);
+        auto* self = static_cast<wux::IDependencyObject*>(this);
+        const openxaml::DependencyObject::PropertyChangedToken token =
+            Layout()->RegisterPropertyChangedCallback(
+                *property,
+                [callback, projected, self](openxaml::DependencyObject&,
+                                            const openxaml::DependencyProperty&,
+                                            const openxaml::PropertyValue&) {
+                    callback->Invoke(self, projected);
+                });
+        callbacks_.emplace(static_cast<INT64>(token), callback);
+        *result = static_cast<INT64>(token);
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE UnregisterPropertyChangedCallback(wux::IDependencyProperty* dp,
+                                                                INT64 token) override {
+        if (!dp) return E_INVALIDARG;
+        const openxaml::DependencyProperty* property = NativeProperty(dp);
+        if (!property) return RemoveEvent({token});
+        Layout()->UnregisterPropertyChangedCallback(
+            *property, static_cast<openxaml::DependencyObject::PropertyChangedToken>(token));
+        const auto found = callbacks_.find(token);
+        if (found != callbacks_.end()) {
+            found->second->Release();
+            callbacks_.erase(found);
+        }
+        return S_OK;
+    }
+
+    // --- events through the layout core's own registry ---
+    //
+    // Unloaded is stored and never called -- there is no live visual tree to
+    // leave, so a handler that would only ever be called at a moment that does
+    // not exist is better stored honestly than refused. LayoutUpdated is
+    // raised: the core's arrange pass drains it after the size-changed queue,
+    // exactly where the reference's layout manager does. Every other stored
+    // event (pointers, keys, focus, taps) already lives on the AddEvent path
+    // above, and Loaded is raised by the island's layout-pass callback.
+
+#define OPENXAML_EVENT(name, handler_type, event_kind)                                   \
+    HRESULT STDMETHODCALLTYPE add_##name(handler_type* handler,                          \
+                                         EventRegistrationToken* token) override {       \
+        if (!token) return E_POINTER;                                                    \
+        token->value = 0;                                                                \
+        if (!handler) return E_INVALIDARG;                                               \
+        return AddEventHandler(openxaml::FrameworkEvent::event_kind, handler, token);    \
+    }                                                                                    \
+    HRESULT STDMETHODCALLTYPE remove_##name(EventRegistrationToken token) override {     \
+        return RemoveEventHandler(openxaml::FrameworkEvent::event_kind, token);          \
+    }
+
+    OPENXAML_EVENT(Unloaded, wux::IRoutedEventHandler, Unloaded)
+    OPENXAML_EVENT(LayoutUpdated, __FIEventHandler_1_IInspectable, LayoutUpdated)
+#undef OPENXAML_EVENT
+
+    // SizeChanged goes through the layout core's registry because it is
+    // raised: layout/src/events.h says when, and from which lines of the
+    // published XAML core, and the arguments it is given are built here from
+    // the two sizes the layout pass recorded.
+    HRESULT STDMETHODCALLTYPE add_SizeChanged(wux::ISizeChangedEventHandler* handler,
+                                              EventRegistrationToken* token) override {
+        if (!token) return E_POINTER;
+        token->value = 0;
+        if (!handler) return E_INVALIDARG;
+        return AddEventHandler(openxaml::FrameworkEvent::SizeChanged, handler, token);
+    }
+    HRESULT STDMETHODCALLTYPE remove_SizeChanged(EventRegistrationToken token) override {
+        return RemoveEventHandler(openxaml::FrameworkEvent::SizeChanged, token);
+    }
+
 protected:
     template <class Handler>
     HRESULT AddTypedEvent(Handler* handler, EventRegistrationToken* token,
@@ -1238,6 +1337,63 @@ protected:
         if (found == event_handlers_.end()) return S_OK;
         found->second->Release();
         event_handlers_.erase(found);
+        return S_OK;
+    }
+
+    // What a raised event does with the delegate it stored. Only the two
+    // events this implementation raises have an overload that calls anything;
+    // every other handler type falls through to the one that does nothing,
+    // which is the honest shape of "stored and never raised" -- the compiler
+    // then cannot silently start calling a handler for an event whose firing
+    // moment has not been established.
+    static void InvokeHandler(::IUnknown*, wux::IDependencyObject*,
+                              const openxaml::SizeChangedArgs&) {}
+
+    static void InvokeHandler(wux::ISizeChangedEventHandler* handler,
+                              wux::IDependencyObject* sender,
+                              const openxaml::SizeChangedArgs& args) {
+        auto* arguments = new SizeChangedEventArgsObject(args.previous, args.current);
+        handler->Invoke(sender, arguments);
+        static_cast<wux::ISizeChangedEventArgs*>(arguments)->Release();
+    }
+
+    static void InvokeHandler(__FIEventHandler_1_IInspectable* handler, wux::IDependencyObject*,
+                              const openxaml::SizeChangedArgs&) {
+        // Null sender and null arguments, as the reference raises it: the
+        // layout manager passes a NULL target for LayoutUpdated, which is what
+        // "every subscriber, about the pass rather than about an element"
+        // looks like from the core side.
+        handler->Invoke(nullptr, nullptr);
+    }
+
+    template <class Handler>
+    HRESULT AddEventHandler(openxaml::FrameworkEvent event, Handler* handler,
+                            EventRegistrationToken* token) {
+        handler->AddRef();
+        auto* sender = static_cast<wux::IDependencyObject*>(this);
+        const openxaml::EventToken registered = Layout()->events().Add(
+            event, [handler, sender](openxaml::Element&, openxaml::FrameworkEvent,
+                                     const openxaml::SizeChangedArgs& args) {
+                InvokeHandler(handler, sender, args);
+            });
+        if (registered == 0) {
+            handler->Release();
+            return E_FAIL;
+        }
+        handlers_.emplace(registered, handler);
+        token->value = registered;
+        return S_OK;
+    }
+
+    HRESULT RemoveEventHandler(openxaml::FrameworkEvent event, EventRegistrationToken token) {
+        // A token that names nothing is not an error. remove_ on a stale token
+        // is the caller's business, and the runtime does not fail it either.
+        if (!Layout()->events().Remove(event, token.value)) return S_OK;
+        const auto found = handlers_.find(token.value);
+        if (found != handlers_.end()) {
+            found->second->Release();
+            handlers_.erase(found);
+        }
         return S_OK;
     }
 
@@ -1294,18 +1450,6 @@ private:
                 handler->Release();
             }
         }
-
-        std::vector<__FIEventHandler_1_IInspectable*> handlers;
-        handlers.reserve(layout_updated_handlers_.size());
-        for (const auto& [_, handler] : layout_updated_handlers_) {
-            handler->AddRef();
-            handlers.push_back(handler);
-        }
-        for (auto* handler : handlers) {
-            TraceRuntime("OpenXaml: raising LayoutUpdated\n");
-            handler->Invoke(sender, nullptr);
-            handler->Release();
-        }
     }
 
     std::shared_ptr<WeakReferenceState> weak_state_;
@@ -1335,10 +1479,15 @@ private:
     LONGLONG next_event_token_ = 0;
     std::map<LONGLONG, IUnknown*> event_handlers_;
     std::map<LONGLONG, wux::IRoutedEventHandler*> loaded_handlers_;
-    std::map<LONGLONG, __FIEventHandler_1_IInspectable*> layout_updated_handlers_;
     std::map<UINT32, HSTRING> automation_strings_;
     bool layout_callback_installed_ = false;
     bool loaded_raised_ = false;
+    // The delegates this element holds a reference to, by the token the
+    // registration was given. The native store holds the lambda that calls
+    // them; this holds the reference that keeps them alive, because a COM
+    // object handed to us across the ABI is only ours while we count it.
+    std::map<openxaml::EventToken, ::IUnknown*> handlers_;
+    std::map<INT64, wux::IDependencyPropertyChangedCallback*> callbacks_;
 };
 
 // --- Border -------------------------------------------------------------------

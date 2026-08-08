@@ -256,9 +256,19 @@ void Element::Measure(Size available) {
 }
 
 void Element::Arrange(Rect final_rect) {
+    // Opened before the early returns, so that the outermost Arrange of a tree
+    // is the pass whatever it turns out to do. The pass raises what it
+    // accumulated when this goes out of scope, which is the point the
+    // reference's layout manager drains its queues at -- see events.h.
+    LayoutPass pass;
+
     // No layout storage, no slot to record and no render size to compute: an
     // element that takes no part in layout is not arranged either.
     if (!TakesPartInLayout()) return;
+
+    // Read before anything moves it. The reference's ArrangeCore captures
+    // oldRenderSize in the same place and for the same comparison.
+    const Size previous_render_size = render_size_;
 
     // The slot is recorded even for a collapsed element -- the parent did
     // place it, and LayoutInformation reports that placement -- but nothing
@@ -319,6 +329,11 @@ void Element::Arrange(Rect final_rect) {
     // Unclipped on purpose: the element does not know the layout system may
     // clip it, and should render as though it got everything it returned.
     render_size_ = ArrangeOverride(arrange_size);
+
+    // ArrangeOverride has already arranged the children, so a child that moved
+    // is queued before its parent -- and the queue is raised backwards, which
+    // is what delivers SizeChanged to a parent first.
+    LayoutPass::EnqueueSizeChanged(*this, previous_render_size, render_size_);
 }
 
 }  // namespace openxaml

@@ -50,7 +50,7 @@ import json  # noqa: E402
 # phase3/layout/CMakeLists.txt and has to stay in step with it -- a source
 # missing from here is a link failure naming the symbol, which is the failure
 # mode worth having.
-LAYOUT_SOURCES = ["property.cpp", "element.cpp", "border.cpp", "control.cpp",
+LAYOUT_SOURCES = ["property.cpp", "events.cpp", "element.cpp", "border.cpp", "control.cpp",
                   "stack_panel.cpp", "grid.cpp", "chrome.cpp", "canvas.cpp",
                   "content_presenter.cpp", "geometry.cpp", "image.cpp", "shape.cpp",
                   "icon.cpp", "brush.cpp", "text.cpp", "fonts.cpp", "json.cpp",
@@ -104,6 +104,12 @@ RUNTIME_CLASSES = [
     "Windows.ApplicationModel.Resources.Core.ResourceManager",
     "Windows.ApplicationModel.Resources.Core.ResourceContext",
     "Windows.UI.Xaml.Hosting.DesktopWindowXamlSource",
+    # The property system's own classes. DependencyProperty is static-only --
+    # RoActivateInstance on it fails, as it does on the real one -- but its
+    # factory is where Register and RegisterAttached live, and a caller reaches
+    # a factory by activating the class name.
+    "Windows.UI.Xaml.DependencyProperty",
+    "Windows.UI.Xaml.PropertyMetadata",
     "Windows.UI.Xaml.Controls.ContentControl",
     "Windows.UI.Xaml.Controls.ContentDialog",
     "Windows.UI.Xaml.Controls.Page",
