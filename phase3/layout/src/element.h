@@ -100,6 +100,18 @@ public:
 
     virtual std::vector<Element*> Children() const { return {}; }
 
+    // The children the *oracle* has, which is not the same collection.
+    //
+    // A recorded tree is whatever the probe's walk reached, and that walk asks
+    // four questions and no more: a Panel's Children, a Border's Child, and
+    // the Content of a ContentControl or a ContentPresenter -- see
+    // `walk` in ../../harness/xaml_probe.cpp. Anything else in the runtime's
+    // visual tree is a node the oracle was never asked about, so reporting it
+    // makes a case fail on a node the recording has no counterpart for rather
+    // than on a number. The default is the layout children, because for all
+    // four of those the two collections are the same one.
+    virtual std::vector<Element*> RecordedChildren() const { return Children(); }
+
     // Set when a property that affects measure moves, cleared by Measure --
     // including the Measure of an element that takes no part in layout, which
     // does nothing else. That is the whole difference between the two zeros an
