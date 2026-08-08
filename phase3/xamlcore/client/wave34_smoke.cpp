@@ -157,7 +157,10 @@ int main() {
             viewer_element->Arrange({0, 0, 200, 150});
             DOUBLE viewport_width = 0;
             DOUBLE extent_width = 0;
-            check(SUCCEEDED(viewer->get_ViewportWidth(&viewport_width)) && viewport_width == 184,
+            // The whole padded client, with no padding here: the bars are
+            // overlaid on the content rather than reserved out of it, which is
+            // what the L3-scroll recordings say and what the layout core does.
+            check(SUCCEEDED(viewer->get_ViewportWidth(&viewport_width)) && viewport_width == 200,
                   "ScrollViewer ABI viewport");
             check(SUCCEEDED(viewer->get_ExtentWidth(&extent_width)) && extent_width == 300,
                   "ScrollViewer ABI extent");
