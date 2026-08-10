@@ -115,3 +115,88 @@ Removing it after a one-frame opaque/transparent success would be premature.
 Additional required cases are two identical partial-alpha updates, parent
 repaint, child move/resize/hide/destroy, overlapping normal and layered
 siblings, z-order changes, nested children, and a cross-process child.
+
+## Addendum, 2026-08-10: the unmapped-child measurement, and what this note's failure mode actually needs
+
+This section is appended by wave 7 track I. Nothing above it is changed; it
+records what a later measurement showed about the boundary described above and
+what a Wine change did to it. It contains no captured executable or image data.
+
+### The two failure modes are distinct, and the note above is about only one
+
+A GDI-only probe with no XAML measures both halves of a layered child's first
+presentation. It creates a `WS_POPUP` parent, paints it, creates a
+`WS_CHILD | WS_EX_LAYERED` child, publishes an 8x4 frame whose left half is
+opaque `0xff908070` and whose right half is alpha zero with
+`UpdateLayeredWindow(ULW_ALPHA)`, shows the child, and reads the screen without
+dispatching a message. Run against Wine `8d664853bd5` before the change below,
+on `Xvfb :122`:
+
+| child created | opaque pixel | alpha-zero pixel |
+| --- | --- | --- |
+| `WS_CHILD` (not visible) | lost, reads `0x000000` | reveals parent, reads `0x332211` |
+| `WS_CHILD \| WS_VISIBLE`  | reaches screen, `0x708090` | lost, reads `0x000000` |
+
+So the failure mode this note records -- the alpha-zero pixel resolving to zero
+instead of to the parent -- reproduces **only** when the child is created
+`WS_VISIBLE`. It is not what the OpenTerminal island hits. The island's
+`phase3/xamlcore/src/factory.cpp` creates its child hidden and presents on
+commit, and on that path the alpha-zero pixel was already correct while the
+**opaque RGB** was the thing being lost across the map.
+
+Both modes disappear if the probe pumps messages before reading. Neither is a
+missing pixel; both are a presentation that Wine completes only once an X11
+`Expose` event has been dispatched, while Win32 presents a layered window
+synchronously.
+
+### The unmapped-child RGB loss, and its cause
+
+An X11 window that is not mapped has no backing store: Wine's
+`create_whole_window()` sets `attr.backing_store = NotUseful`, so the
+`XPutImage` that `x11drv_surface_flush()` issues for a withdrawn window is
+discarded by the X server. An ordinary window recovers from this because
+showing it generates a `WM_PAINT`. A layered window cannot: its pixels exist
+only in its window surface, `UpdateLayeredWindow` is allowed to publish them
+before the window is ever shown, and no repaint would produce them again. A
+trace of `NtUserUpdateLayeredWindow` followed by `ShowWindow` shows the surface
+being correctly retained and reused across the map --
+`get_default_window_surface: trying to reuse previous surface` -- and shows that
+nothing re-presents it after `window_set_wm_state` requests `WM_STATE 0 -> 0x1`.
+The only path that would have re-presented it is `X11DRV_Expose` ->
+`NtUserExposeWindowSurface`, which requires the application to pump messages
+first.
+
+`dlls/winewayland.drv/wayland_surface.c` already solves the same class of
+problem for its own driver, flushing the window surface once the initial
+configure arrives because content published before it could not be flushed.
+
+The Wine change that fixes this is `track/layered-first-frame` in
+`Kreijstal/wine-kreijstal`:
+
+* `winex11: Present a layered window surface when its window is mapped.`
+  (`dlls/winex11.drv/window.c`, `X11DRV_WindowPosChanged`) -- when a window
+  leaves `WithdrawnState` and carries a surface with an alpha mask, sync the
+  map to the server and call `NtUserExposeWindowSurface()` so the retained
+  surface is re-presented immediately.
+* `user32/tests: Test that layered window contents survive being shown.`
+  (`dlls/user32/tests/win.c`, `test_layered_child_window_show`) -- covers both
+  rows of the table above.
+
+Under the fixed build the unmapped-child row becomes opaque `0x708090` and
+alpha-zero `0x332211` with no message pump, and
+`phase3/render/gdi/island_frame_cache_test.cpp` stops skipping: its 32
+map-survival checks are measurement-keyed on `survives_map()`, so they enforce
+automatically. On stock Wine 11.13 the same binary still prints
+`32 island frame cache check(s) skipped by name after measurement`.
+
+### What is still open
+
+The `WS_VISIBLE`-created row is unchanged and remains `todo_wine` in the new
+Wine test. Its cause is the ordering inside `NtUserUpdateLayeredWindow`: the
+child's X window is created and mapped by `apply_window_pos()` *before* the
+frame is blended into the surface and the shape mask is applied, so the child
+is first drawn as an opaque rectangle over the parent and only then reshaped.
+Recovering the parent's pixel under the removed area is a repaint of the parent,
+which Wine performs only when the resulting exposure is dispatched. Fixing it
+properly is the retained compositor this note already describes, not another
+direct blit; the existing analysis above stands unchanged.
