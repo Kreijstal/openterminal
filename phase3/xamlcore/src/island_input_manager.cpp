@@ -151,6 +151,9 @@ bool IslandInputManager::RequestHostFocus() noexcept {
 }
 
 void IslandInputManager::OnHostFocusChanged(bool focused) noexcept {
+    TraceIslandInput("OpenXaml input event=host-focus focused=%d was=%d "
+                     "sink=%d\n", focused ? 1 : 0, host_focused_ ? 1 : 0,
+                     sink_ ? 1 : 0);
     if (host_focused_ == focused) return;
     host_focused_ = focused;
     ReconcileFocus();
@@ -161,6 +164,12 @@ IslandInputResult IslandInputManager::ForwardKeyMessage(
     if (!IsKeyMessage(message)) return {};
 
     const std::shared_ptr<IslandInputSink> target = notified_sink_;
+    TraceIslandInput("OpenXaml input event=key message=0x%x vk=%u down=%d "
+                     "host_focused=%d sink=%d notified=%d\n",
+                     static_cast<unsigned>(message),
+                     static_cast<unsigned>(wparam),
+                     (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) ? 1 : 0,
+                     host_focused_ ? 1 : 0, sink_ ? 1 : 0, target ? 1 : 0);
     if (!host_focused_ || !target) return {true, false};
 
     IslandKeyEvent event;
@@ -169,7 +178,10 @@ IslandInputResult IslandInputManager::ForwardKeyMessage(
     event.key_down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
     event.system_key = message == WM_SYSKEYDOWN || message == WM_SYSKEYUP;
     event.status = DecodeStatus(lparam);
-    return {true, target->OnIslandKey(event)};
+    const bool handled = target->OnIslandKey(event);
+    TraceIslandInput("OpenXaml input event=key-routed vk=%u handled=%d\n",
+                     static_cast<unsigned>(wparam), handled ? 1 : 0);
+    return {true, handled};
 }
 
 IslandInputResult IslandInputManager::ForwardCharacterMessage(
@@ -185,6 +197,10 @@ IslandInputResult IslandInputManager::ForwardCharacterMessage(
     }
 
     const std::shared_ptr<IslandInputSink> target = notified_sink_;
+    TraceIslandInput("OpenXaml input event=char message=0x%x char=%u "
+                     "host_focused=%d sink=%d notified=%d\n",
+                     static_cast<unsigned>(message), character,
+                     host_focused_ ? 1 : 0, sink_ ? 1 : 0, target ? 1 : 0);
     if (!host_focused_ || !target) return {true, false};
 
     IslandCharacterEvent event;
@@ -192,7 +208,10 @@ IslandInputResult IslandInputManager::ForwardCharacterMessage(
     event.character = character;
     event.system_character = message == WM_SYSCHAR;
     event.status = DecodeStatus(lparam);
-    return {true, target->OnIslandCharacter(event)};
+    const bool handled = target->OnIslandCharacter(event);
+    TraceIslandInput("OpenXaml input event=char-routed char=%u handled=%d\n",
+                     character, handled ? 1 : 0);
+    return {true, handled};
 }
 
 IslandInputResult IslandInputManager::ForwardPointerMessage(

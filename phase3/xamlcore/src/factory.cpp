@@ -4777,9 +4777,20 @@ private:
         DesktopWindowXamlSourceObject* const self = lease.host;
         switch (message) {
             case WM_SETFOCUS:
+                TraceIslandInput("OpenXaml input event=island-message name=setfocus "
+                                 "island=%p host=%p host_visible=%d "
+                                 "host_style=%08lx\n",
+                                 static_cast<void*>(window),
+                                 static_cast<void*>(GetParent(window)),
+                                 IsWindowVisible(GetParent(window)) ? 1 : 0,
+                                 static_cast<unsigned long>(
+                                     GetWindowLongW(GetParent(window), GWL_STYLE)));
                 if (self) self->input_manager_->OnHostFocusChanged(true);
                 return 0;
             case WM_KILLFOCUS:
+                TraceIslandInput("OpenXaml input event=island-message "
+                                 "name=killfocus island=%p\n",
+                                 static_cast<void*>(window));
                 if (self) self->input_manager_->OnHostFocusChanged(false);
                 return 0;
             case WM_KEYDOWN:
@@ -5148,6 +5159,8 @@ private:
     }
 
     void OnHostVisibilityChanged(bool visible) {
+        TraceIslandInput("OpenXaml input event=host-visibility visible=%d\n",
+                         visible ? 1 : 0);
         xaml_root_->SetHostVisible(visible);
         xaml_root_->NotifyChanged();
     }

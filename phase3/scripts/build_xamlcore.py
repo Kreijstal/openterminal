@@ -365,6 +365,15 @@ def main() -> None:
                       "terminal_pixel_probe.cpp")]
         + ["-lgdi32", "-luser32"])
 
+    # The injecting half of the phase-4 input round-trip gate. Like the pixel
+    # probe it links nothing of this runtime: it finds the hosting window,
+    # types into it by one named mechanism, and reports what it did.
+    terminal_input_probe = root / "terminal_input_probe.exe"
+    run(common + ["-municode", "-o", str(terminal_input_probe),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "terminal_input_probe.cpp")]
+        + ["-lgdi32", "-luser32"])
+
     island_input_smoke = root / "island_input_smoke.exe"
     run(common + ["-o", str(island_input_smoke),
                   str(PHASE3_DIR / "xamlcore" / "client" /
