@@ -5,11 +5,11 @@
   "supported for apps targeting Windows version 10.0.18226.0 and later"
   when there is none, which is what an unmanifested probe gets.
 
-  The probe is also deliberately left DPI-unaware. It never opens a window,
-  so DPI only enters as the scale factor XAML lays out against; leaving the
-  process unaware pins that at 1.0 on any runner, which is what the cases
-  record as their environment. Declaring per-monitor awareness would make
-  the measurements depend on the display the runner happens to have.
+  The probes are also deliberately DPI-unaware. The layout probe never opens a
+  window; the render probe uses an off-screen XAML Island. Leaving the process
+  unaware pins the scale at 1.0 on any runner, which is recorded with each
+  observation. Declaring per-monitor awareness would make the harvest depend
+  on the display the runner happens to have.
 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">

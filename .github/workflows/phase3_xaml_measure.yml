@@ -174,6 +174,19 @@ jobs:
           fi
           rm -rf _corpus-check
 
+      # Rendering needs a deliberately small corpus: capturing the entire
+      # layout database as BGRA would create hundreds of megabytes while still
+      # barely exercising paint. These authored programs isolate the stable
+      # boundaries the renderer consumes: pixels, effective transforms, clips,
+      # opacity, ordering and composition-visual state.
+      - name: Generate the render-oracle corpus
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/render-cases-1" "$RUNNER_TEMP/render-cases-2"
+          python3 -B phase3/scripts/generate_render_cases.py --out "$RUNNER_TEMP/render-cases-1"
+          python3 -B phase3/scripts/generate_render_cases.py --out "$RUNNER_TEMP/render-cases-2"
+          diff -r "$RUNNER_TEMP/render-cases-1" "$RUNNER_TEMP/render-cases-2"
+
       # The icon-font codepoints Terminal's markup names, extracted from the
       # same checkout by the same scoping rules the level 7 harvest uses. This
       # is research data rather than corpus data, so it is committed and held to
@@ -311,6 +324,31 @@ jobs:
                   "phase3/xaml-db/fonts/segoe-fluent-icons.json"
           ls -l phase3/xaml-db/fonts/*.json
 
+      # A FontFamily list is not the end of Windows text fallback. When none of
+      # its named faces covers a FontIcon glyph, DirectWrite maps a system face
+      # and a scale. Record that decision from the oracle machine, then harvest
+      # the mapped file through the same sfnt reader as every explicit family.
+      # The discovery script reads the generated corpus; no case id, glyph,
+      # fallback family, desired size or machine path is committed.
+      - name: Build the DirectWrite font fallback probe
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
+          if not defined VSDIR echo ::error::no Visual Studio with the x64 C++ toolset && exit /b 1
+          call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          cl /nologo /std:c++17 /EHsc ^
+             /Fe:phase3\harness\font_fallback_probe.exe ^
+             phase3\harness\font_fallback_probe.cpp ^
+             /link dwrite.lib ole32.lib || exit /b 1
+
+      - name: Harvest DirectWrite system font fallback
+        shell: bash
+        run: |
+          python3 -B phase3/scripts/harvest_system_font_fallbacks.py \
+            --cases phase3/xaml-db/cases \
+            --fonts phase3/xaml-db/fonts \
+            --probe phase3/harness/font_fallback_probe.exe
+
       - name: Build the probe
         shell: cmd
         run: |
@@ -326,6 +364,73 @@ jobs:
              /Fe:phase3\harness\xaml_probe.exe phase3\harness\xaml_probe.cpp ^
              /link windowsapp.lib ^
              /MANIFEST:EMBED /MANIFESTINPUT:phase3\harness\xaml_probe.manifest || exit /b 1
+
+      - name: Build the render-boundary probe
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
+          if not defined VSDIR echo ::error::no Visual Studio with the x64 C++ toolset && exit /b 1
+          call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          cl /nologo /std:c++20 /EHsc /DWIN32_LEAN_AND_MEAN ^
+             /Fe:phase3\harness\xaml_render_probe.exe ^
+             phase3\harness\xaml_render_probe.cpp ^
+             /link windowsapp.lib user32.lib ^
+             /MANIFEST:EMBED /MANIFESTINPUT:phase3\harness\xaml_probe.manifest || exit /b 1
+
+      - name: Build the DirectWrite glyph-boundary probe
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
+          if not defined VSDIR echo ::error::no Visual Studio with the x64 C++ toolset && exit /b 1
+          call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          cl /nologo /std:c++17 /EHsc ^
+             /Fe:phase3\harness\dwrite_glyph_probe.exe ^
+             phase3\harness\dwrite_glyph_probe.cpp ^
+             /link dwrite.lib ole32.lib || exit /b 1
+
+      # RenderTargetBitmap is the stable XAML output boundary. Raw BGRA stays
+      # in the workflow artifact (never the repository); reviewable JSON holds
+      # the visual tree, environment, dimensions and exact content hashes.
+      - name: Capture XAML render boundaries twice
+        shell: cmd
+        run: |
+          phase3\harness\xaml_render_probe.exe %RUNNER_TEMP%\render-cases-1 %RUNNER_TEMP%\render-run1
+          phase3\harness\xaml_render_probe.exe %RUNNER_TEMP%\render-cases-1 %RUNNER_TEMP%\render-run2
+
+      - name: Finalize and verify render observations
+        shell: bash
+        run: |
+          for run in 1 2; do
+            cp -r "$RUNNER_TEMP/render-cases-1" "$RUNNER_TEMP/render-run${run}/cases"
+            python3 -B phase3/scripts/harvest_dwrite_glyph_runs.py \
+              --cases "$RUNNER_TEMP/render-cases-1" \
+              --probe phase3/harness/dwrite_glyph_probe.exe \
+              --output "$RUNNER_TEMP/render-run${run}/dwrite-glyph-runs.json"
+          done
+          python3 -B phase3/scripts/finalize_render_observations.py "$RUNNER_TEMP/render-run1"
+          python3 -B phase3/scripts/finalize_render_observations.py "$RUNNER_TEMP/render-run2"
+          if ! diff -r "$RUNNER_TEMP/render-run1" "$RUNNER_TEMP/render-run2" \
+                     > "$RUNNER_TEMP/render-nondet.txt"; then
+            echo "::error::native XAML pixels or visual state differ between identical runs"
+            head -40 "$RUNNER_TEMP/render-nondet.txt"
+            exit 1
+          fi
+          cat > "$RUNNER_TEMP/render-run1/oracle.json" <<EOF
+          {
+           "schema_version": 1,
+           "os_build": "${os_build}",
+           "fonts": {
+            "Segoe UI": "${font_segoeui}",
+            "Segoe MDL2 Assets": "${font_segmdl2}",
+            "Segoe Fluent Icons": "${font_segoeicons}"
+           },
+           "xaml": "Windows.UI.Xaml (in-OS)",
+           "capture_boundary": "RenderTargetBitmap BGRA8 premultiplied",
+           "native_api_call_log": false,
+           "desktop_composition_capture": false
+          }
+          EOF
+          echo "native XAML render observations are deterministic across two runs"
 
       # Two independent runs into separate directories. Layout numbers that
       # differ between them are not usable as expectations, and the corpus is
@@ -443,6 +548,13 @@ jobs:
           name: xaml-measurements-${{ env.os_build }}
           path: phase3/xaml-db/measurements/
 
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xaml-render-boundaries-${{ env.os_build }}
+          path: ${{ runner.temp }}/render-run1/
+          if-no-files-found: warn
+
       # Its own artifact rather than a directory inside the measurements one,
       # so the layout the fetch script and the layout job already expect does
       # not move.
@@ -487,6 +599,7 @@ jobs:
           echo "fonts=xaml-fonts-${os_build}" >> "$GITHUB_OUTPUT"
           echo "cases=xaml-cases-${os_build}" >> "$GITHUB_OUTPUT"
           echo "theme=xaml-theme-resources-${os_build}" >> "$GITHUB_OUTPUT"
+          echo "render_oracle=xaml-render-boundaries-${os_build}" >> "$GITHUB_OUTPUT"
           echo "os_build=${os_build}" >> "$GITHUB_OUTPUT"
 
     outputs:
@@ -494,6 +607,7 @@ jobs:
       fonts: ${{ steps.oracle.outputs.fonts }}
       cases: ${{ steps.oracle.outputs.cases }}
       theme: ${{ steps.oracle.outputs.theme }}
+      render_oracle: ${{ steps.oracle.outputs.render_oracle }}
       os_build: ${{ steps.oracle.outputs.os_build }}
 
   # The reimplementation, checked against what the runtime just answered. This
@@ -725,11 +839,11 @@ jobs:
 
   # The first pixels. Separate from the layout job because it answers a
   # different question with the same corpus: not "what size is everything" but
-  # "which pixels does that turn into", and it has no oracle of its own -- wave
-  # 6 is where rendered-output probes get recorded. So it is gated on the round
-  # trip instead: paint the corpus, recover every rectangle back out of the
-  # dumps, and demand it be exactly the one the already-verified measurement
-  # path reports. See phase3/render/README.md.
+  # "which pixels does that turn into". Its original round-trip gate remains:
+  # paint the layout corpus, recover every rectangle back out of the dumps, and
+  # demand it be exactly the one the verified measurement path reports. Beside
+  # that is the Wave 6 acceptance test: the focused corpus is compared directly
+  # with pixels and visual state harvested from native Windows.UI.Xaml.
   #
   # On ubuntu, and with no Wine: the render core is plain C++17 and only the
   # glyph backend needs a platform. The dumps are a quarter of a gigabyte and
@@ -758,6 +872,11 @@ jobs:
         with:
           name: ${{ needs.measure.outputs.theme }}
           path: phase3/xaml-db/theme-resources
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.measure.outputs.render_oracle }}
+          path: native-render-oracle
 
       - name: Build the render core
         run: |
@@ -820,8 +939,57 @@ jobs:
             --output render-report.json \
             --summary "$GITHUB_STEP_SUMMARY"
 
+      # This is a real acceptance test and therefore exits nonzero for every
+      # mismatch: no tolerance and no expected-failure list. Wave 6 is not yet
+      # complete, so the step is temporarily allowed to fail at the workflow
+      # level. Its report and red step remain visible. Removing the one
+      # continue-on-error line turns the already-strict test into the release
+      # gate; the comparator itself does not change at that point.
+      - name: Future gate - native XAML renderer acceptance
+        id: native_render_acceptance
+        continue-on-error: true
+        run: |
+          "$RUNNER_TEMP/render-build/render_oracle_cases" \
+            native-render-oracle/cases "$RUNNER_TEMP/native-acceptance-actual" \
+            fonts phase3/xaml-db/theme-resources
+          python3 -B phase4/scripts/check_render_oracle.py \
+            --oracle native-render-oracle \
+            --actual "$RUNNER_TEMP/native-acceptance-actual" \
+            --output native-render-acceptance.json \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      # `continue-on-error` must not turn a crashed or vacuous comparator into
+      # success. A mismatch writes a complete report before exiting 1; an
+      # infrastructure error exits 2 without one and this independent step
+      # fails the job. It also proves every harvested case reached the report.
+      - name: The future acceptance test ran completely
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          try:
+              manifest = json.load(open("native-render-oracle/manifest.json"))
+              report = json.load(open("native-render-acceptance.json"))
+          except (OSError, json.JSONDecodeError) as error:
+              print(f"::error::native renderer acceptance did not produce a valid report: {error}")
+              sys.exit(1)
+          expected = len(manifest["captures"])
+          summary = report["summary"]
+          if summary["cases"] != expected or summary["passed"] + summary["failed"] != expected:
+              print(f"::error::acceptance report covers {summary['cases']} of {expected} cases")
+              sys.exit(1)
+          print(f"acceptance accounted for all {expected} cases: "
+                f"{summary['passed']} passed, {summary['failed']} failed")
+          PY
+
       - uses: actions/upload-artifact@v4
         if: always() && hashFiles('render-report.json') != ''
         with:
           name: render-report
           path: render-report.json
+
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('native-render-acceptance.json') != ''
+        with:
+          name: native-render-acceptance-${{ needs.measure.outputs.os_build }}
+          path: native-render-acceptance.json

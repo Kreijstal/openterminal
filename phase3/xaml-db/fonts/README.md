@@ -92,7 +92,12 @@ box, so that half is settled; the 10 is neither its em, nor Segoe UI's `M` at
 that size (12.57), nor Cascadia Mono's (8.2) now that a fourth family is
 harvested. So the runtime fell back past every family the markup names, to one
 chosen by rules nothing here records. Harvesting more families would not answer
-it — knowing *which* font it picked is the missing measurement.
+it — knowing *which* font it picked is the missing measurement. The Windows
+workflow now uses DirectWrite's system fallback mapper for every uncovered
+FontIcon glyph discovered in the generated corpus, then harvests the mapped
+file through the same deterministic sfnt reader. The current downloaded
+artifact predates that addition, so this case remains an explicit refusal until
+the next oracle run.
 
 The other one, what a simulated weight adds, was measured and is answered
 below.
@@ -135,6 +140,8 @@ box, so that half is settled; the 10 is neither its em nor Segoe UI's `M` at
 that size, which is 12.57. So the runtime fell back past every family the markup
 names, to one chosen by rules nothing here records. Harvesting more families
 would not answer it — knowing *which* font it picked is the missing measurement.
+The fallback probe added to the Windows workflow records that identity and its
+DirectWrite scale without using the case's desired size as input.
 
 **What a weight the metrics were not read at adds.** `FontWeight="Black"` on a
 square icon is recorded 11 wide at size 10 and 15 at size 14, where the

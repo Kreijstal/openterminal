@@ -454,6 +454,62 @@ def harvest(path: Path, family: str, codepoints: list[int]) -> dict:
     }
 
 
+def attach_system_fallbacks(metrics: dict, description: dict) -> None:
+    """Attach DirectWrite-selected fallback glyphs to a named-family harvest.
+
+    ``description`` is emitted by ``font_fallback_probe.exe`` on the same
+    Windows oracle runner. It identifies the mapped face and scale; this
+    function reads the glyph metrics from that exact file through the ordinary
+    deterministic sfnt harvester. No desired size or XAML case id enters the
+    result.
+    """
+    if description.get("schema_version") != 1:
+        raise FontError("the system-fallback description has an unsupported schema")
+    if description.get("source_family") != metrics["family"]:
+        raise FontError(
+            f"system fallbacks for {description.get('source_family')!r} cannot be "
+            f"attached to {metrics['family']!r}")
+    mappings = description.get("mappings")
+    if not isinstance(mappings, dict):
+        raise FontError("the system-fallback description has no mappings object")
+
+    attached: dict[str, dict] = {}
+    for key, mapping in sorted(mappings.items(), key=lambda item: int(item[0])):
+        codepoint = int(key)
+        if key in metrics["advances"]:
+            raise FontError(
+                f"U+{codepoint:04X} is covered by {metrics['family']}; it is not fallback")
+        if not isinstance(mapping, dict):
+            raise FontError(f"the system fallback for U+{codepoint:04X} is not an object")
+        family = mapping.get("family")
+        file = mapping.get("file")
+        scale = mapping.get("scale")
+        if not isinstance(family, str) or not family:
+            raise FontError(f"the system fallback for U+{codepoint:04X} has no family")
+        if not isinstance(file, str) or not file:
+            raise FontError(f"the system fallback for U+{codepoint:04X} has no file")
+        if not isinstance(scale, (int, float)) or scale <= 0:
+            raise FontError(f"the system fallback for U+{codepoint:04X} has invalid scale")
+
+        mapped = harvest(Path(file), family, [codepoint])
+        advance = mapped["advances"].get(str(codepoint))
+        if advance is None:
+            raise FontError(
+                f"DirectWrite mapped U+{codepoint:04X} to {family!r}, but {file!r} "
+                "does not cover it")
+        attached[str(codepoint)] = {
+            "family": family,
+            "scale": scale,
+            "source": mapped["source"],
+            "units_per_em": mapped["units_per_em"],
+            "advance": advance,
+        }
+        if isinstance(mapping.get("locale"), str):
+            attached[str(codepoint)]["locale"] = mapping["locale"]
+    if attached:
+        metrics["system_fallbacks"] = attached
+
+
 def line_spacing(metrics: dict) -> int:
     """Baseline to baseline, in design units."""
     hhea = metrics["hhea"]
@@ -504,6 +560,8 @@ def main() -> None:
                              "font and is what a fallback list exists for")
     parser.add_argument("--expect", type=Path, default=None,
                         help="metrics solved from the oracle; fail if the font disagrees")
+    parser.add_argument("--system-fallbacks-from", type=Path, default=None,
+                        help="JSON emitted by font_fallback_probe.exe on the oracle runner")
     args = parser.parse_args()
 
     if args.codepoints and args.codepoints_from:
@@ -521,6 +579,10 @@ def main() -> None:
         codepoints = list(DEFAULT_CODEPOINTS)
 
     metrics = harvest(args.font, args.family, codepoints)
+    if args.system_fallbacks_from:
+        attach_system_fallbacks(
+            metrics,
+            json.loads(args.system_fallbacks_from.read_text(encoding="utf-8")))
     missing = metrics["missing"]
     if missing and args.missing == "fail":
         raise SystemExit(

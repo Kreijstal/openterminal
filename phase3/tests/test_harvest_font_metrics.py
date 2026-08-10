@@ -19,8 +19,9 @@ SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIRECTORY))
 
 from harvest_font_metrics import (  # noqa: E402
-    Font, FontError, check_against, harvest, line_spacing,
+    Font, FontError, attach_system_fallbacks, check_against, harvest, line_spacing,
 )
+from harvest_system_font_fallbacks import requested_fallbacks  # noqa: E402
 
 # The numbers the corpus can answer on its own, solved by
 # derive_font_metrics.py and committed. The harvest is checked against them.
@@ -245,6 +246,67 @@ class HarvestFontMetricsTest(unittest.TestCase):
             units_per_em=1000, ascender=800, descender=-200, line_gap=0,
             advances=[500, 600], ranges=[(0x41, 0x41, 1)]))
         self.assertEqual(harvest(path, "Synthetic", [0x41])["missing"], [])
+
+    def test_system_fallback_uses_the_mapped_file_not_a_desired_size(self) -> None:
+        source = self.write(build_font(
+            units_per_em=1000, ascender=1000, descender=0, line_gap=0,
+            advances=[500, 600], ranges=[(0xE000, 0xE000, 1)]))
+        metrics = harvest(source, "Source Icons", [0xE000, 0x4D])
+
+        mapped = self.root / "mapped.ttf"
+        mapped.write_bytes(build_font(
+            units_per_em=2000, ascender=1500, descender=-500, line_gap=0,
+            advances=[500, 1400], ranges=[(0x4D, 0x4D, 1)]))
+        attach_system_fallbacks(metrics, {
+            "schema_version": 1,
+            "source_family": "Source Icons",
+            "mappings": {
+                "77": {"family": "Mapped Sans", "file": str(mapped), "scale": 0.75},
+            },
+        })
+        fallback = metrics["system_fallbacks"]["77"]
+        self.assertEqual(fallback["family"], "Mapped Sans")
+        self.assertEqual(fallback["units_per_em"], 2000)
+        self.assertEqual(fallback["advance"], 1400)
+        self.assertEqual(fallback["scale"], 0.75)
+        self.assertEqual(fallback["source"]["file"], "mapped.ttf")
+        self.assertNotIn(str(self.root), json.dumps(fallback))
+
+    def test_system_fallback_cannot_replace_a_covered_glyph(self) -> None:
+        source = self.write(build_font(
+            units_per_em=1000, ascender=800, descender=-200, line_gap=0,
+            advances=[500, 600], ranges=[(0x4D, 0x4D, 1)]))
+        metrics = harvest(source, "Source", [0x4D])
+        with self.assertRaisesRegex(FontError, "not fallback"):
+            attach_system_fallbacks(metrics, {
+                "schema_version": 1,
+                "source_family": "Source",
+                "mappings": {
+                    "77": {"family": "Mapped", "file": str(source), "scale": 1.0},
+                },
+            })
+
+    def test_fallback_requests_are_discovered_from_the_corpus(self) -> None:
+        cases = self.root / "cases"
+        cases.mkdir()
+        (cases / "icons.json").write_text(json.dumps({
+            "environment": {"language": "en-US"},
+            "markup": (
+                '<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">'
+                '<FontIcon FontFamily="Source, Second" Glyph="MA"/>'
+                '<FontIcon FontFamily="Second" Glyph="B"/>'
+                '<FontIcon FontFamily="{ThemeResource IconFont}" Glyph="Z"/>'
+                '</Grid>'),
+        }), encoding="utf-8")
+        fonts = {
+            "Source": {"advances": {"65": 600}},
+            "Second": {"advances": {"66": 700}},
+        }
+        # A is covered by the first family. B is covered by a named family in
+        # its own FontFamily. Only M leaves the explicit list and reaches the
+        # platform mapping; the markup extension cannot be resolved here.
+        self.assertEqual(requested_fallbacks(cases, fonts),
+                         {("Source", ord("M"), "en-US")})
 
     def kerning(self, **tables: bytes) -> dict[str, dict[str, int]]:
         path = self.write(build_font(
