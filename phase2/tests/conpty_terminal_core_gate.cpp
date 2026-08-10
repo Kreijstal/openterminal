@@ -12,10 +12,6 @@
 // It writes one JSON object to stdout and exits 0 only when the marker the
 // shell produced is in that buffer.
 //
-// The ingestion step itself is not implemented yet: with
-// --ingestion terminal-core the harness refuses by name rather than
-// pretending a buffer nothing wrote to is a measurement.
-//
 // Two pseudoconsole creation paths are measured, not assumed:
 //
 // - "create": ConptyCreatePseudoConsole, the one every ConPTY client uses. It
@@ -481,6 +477,7 @@ int wmain(int argc, wchar_t** argv)
     const auto script = "set OTGATE=" + markerValue + "\r\necho " + markerPrefix + "%OTGATE%\r\n";
     const std::wstring wideMarker(marker.begin(), marker.end());
 
+    til::u8state decoder;
     bool typed = false;
     const auto deadline = started + std::chrono::milliseconds(timeoutMs);
 
@@ -520,14 +517,18 @@ int wmain(int argc, wchar_t** argv)
 
             if (ingestion == "terminal-core")
             {
-                // Not implemented yet. The pseudoconsole side is real and the
-                // bytes are here; what is missing is the step that turns them
-                // into terminal input. Refuse by name rather than invent a
-                // buffer that nothing wrote to.
-                report.refusal = "terminalcore-ingestion-not-implemented";
-                report.detail = "the pseudoconsole's bytes are not written to "
-                                "Microsoft::Terminal::Core::Terminal yet";
-                break;
+                std::wstring wide;
+                if (FAILED(til::u8u16(chunk, wide, decoder)))
+                {
+                    report.refusal = "utf8-decode-failed";
+                    break;
+                }
+                if (!wide.empty())
+                {
+                    const auto lock = terminal.LockForWriting();
+                    terminal.Write(wide);
+                    report.wide_chars_written += wide.size();
+                }
             }
         }
         else

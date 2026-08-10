@@ -72,3 +72,61 @@ information, not a failure: it means the class was registered but something
 before it now fails differently. `crash` is the field to read then — a
 `winrt::hresult_class_not_registered` is a missing class, anything else is a
 method that answered and should not have, or refused and should not have.
+
+## A live shell in TerminalCore
+
+The boot frontier says the host process runs. It says nothing about whether a
+shell is behind it. `scripts/conpty_live.py` answers that separately, and the
+thing it measures is one PE the phase-2 build links,
+`openterminal_conpty_terminal_core_gate.exe`
+([`phase2/tests/conpty_terminal_core_gate.cpp`](../phase2/tests/conpty_terminal_core_gate.cpp)),
+which is the only binary here that links both halves: the pseudoconsole from
+`src/winconpty` and the terminal from `src/cascadia/TerminalCore`.
+
+It creates a pseudoconsole, spawns `cmd.exe` into it, types
+`set OTGATE=1138` and `echo CONPTY_GATE_%OTGATE%`, feeds every byte the
+pseudoconsole emits through `til::u8u16` into `Terminal::Write` under the
+terminal's own write lock, and then reads the answer back out of
+`Terminal::GetTextBuffer` under `Terminal::LockForReading`. Neither typed line
+contains `CONPTY_GATE_1138`; only the shell's own expansion of that variable
+can put it on a row, so the console's input echo cannot satisfy the gate.
+
+```bash
+cmake --build /tmp/openterminal-mingw/native-build \
+  --target openterminal_conpty_terminal_core_gate
+python3 -B phase4/scripts/conpty_live.py \
+  --executable /tmp/openterminal-mingw/native-build/openterminal_conpty_terminal_core_gate.exe \
+  --prefix /tmp/openterminal-conpty/prefix
+```
+
+The gate is [`tests/test_conpty_live.py`](tests/test_conpty_live.py). Its
+second case is a permanent negative control: the identical session with
+`--ingestion none` reads the same bytes off the pseudoconsole and never writes
+them to the terminal, and it must keep failing to find the marker. No display
+is needed — the console host runs headless — so nothing here starts an X
+server. The Wine prefix must be nested (`/tmp/openterminal-conpty/prefix`, not
+`/tmp/prefix`): Wine refuses a prefix whose immediate parent it does not own.
+
+### Two Wine defects the live session had to route around
+
+Both are in Wine, not in Terminal, and both are reachable from any ConPTY
+client — they are the reason `pty_path` in the report reads `pack` rather than
+`create`.
+
+| where | what happens |
+|---|---|
+| `dlls/ntdll/unix/file.c`, `nt_to_unix_file_name()` | `if (name_len && name[0] == '\\') return STATUS_INVALID_PARAMETER;` rejects a relative name beginning with a backslash before the wineserver sees it. `winconpty` opens the console reference as `"\Reference"` under the server handle, exactly as shipped, so `ConptyCreatePseudoConsole` fails with `HRESULT_FROM_NT(STATUS_INVALID_PARAMETER)` = `0xd000000d`. The server *does* implement the name (`console_server_lookup_name` in `server/console.c`); opening it as `"Reference"` succeeds. |
+| `programs/conhost/conhost.c`, `main_loop()` | the console host arms its `--signal` read with an asynchronous `NtReadFile` before entering its loop. `winconpty` passes an anonymous pipe, which is synchronous, so that call blocks: the host stays alive, never serves the console and never writes a byte to the pseudoconsole. Wine's own `CreatePseudoConsole` avoids this by using an overlapped *named* pipe. |
+
+The gate's `pack` path uses `ConptyPackPseudoConsole` — the same library's
+handoff entry point — over a server handle, a `"Reference"` client handle and
+an overlapped named signal pipe, and spawns the console host with
+`winconpty`'s own `--headless --width --height --signal --server` command
+line. `--pty-path create` demands the unmodified path and is expected to fail
+until Wine is fixed; `--pty-path auto` prefers it and records in
+`conpty_create_hresult` exactly how it refused.
+
+A third difference is in the harness rather than in Wine: the shell is spawned
+with `STARTF_USESTDHANDLES` and null standard handles. Without that, Wine
+passes the harness's own (non-console) standard handles straight through to
+the shell, whose output then never enters the pseudoconsole at all.
