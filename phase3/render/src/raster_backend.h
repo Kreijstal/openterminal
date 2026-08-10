@@ -64,6 +64,47 @@ public:
                           std::string& message) = 0;
 };
 
+// A CPU-readable view of one imported external surface: premultiplied BGRA8
+// as 0xAARRGGBB, top row first, `stride_pixels` elements per row. The view is
+// borrowed and only has to stay valid until the Render call that asked for it
+// returns, so a reader may hand back a mapped resource it unmaps afterwards.
+struct ExternalSurfaceView {
+    int width = 0;
+    int height = 0;
+    std::size_t stride_pixels = 0;
+    const std::uint32_t* pixels = nullptr;
+
+    bool readable() const {
+        return pixels != nullptr && width > 0 && height > 0 &&
+               stride_pixels >= static_cast<std::size_t>(width);
+    }
+};
+
+// The seam producer-owned content arrives through.
+//
+// Everything about *where* an external surface goes -- its arranged rect, the
+// retained clip above it, its place in paint order -- belongs to the scene and
+// is resolved by the backend. This interface answers only *what pixels it is*,
+// which is the one question a CPU backend cannot answer for itself: importing
+// a DXGI swap chain or a composition surface handle needs a graphics device.
+//
+// A DXGI reader is the real implementation and plugs in here: it maps the
+// presented back buffer and returns that view, and it is the only piece of
+// this path that needs Present to work. Until it exists, a reader for
+// ExternalSurfaceKind::CpuBgraImage drives the same compositing code.
+//
+// A reader must return false and name the reason. Fabricating pixels for a
+// source it could not import would make an absent frame indistinguishable
+// from a rendered one.
+class ExternalSurfaceReader {
+public:
+    virtual ~ExternalSurfaceReader() = default;
+
+    virtual bool ReadExternalSurface(const ExternalSurfaceReference& source,
+                                     ExternalSurfaceView& view,
+                                     std::string& message) = 0;
+};
+
 struct RasterResult {
     Surface surface;
     std::vector<RenderIssue> issues;
@@ -79,8 +120,13 @@ public:
 
     // `clear` is explicit because transparent acceptance surfaces and the
     // diagnostic backdrop are both legitimate clients of the same renderer.
+    //
+    // A null `external_reader` is not "no external surfaces": it means this
+    // frame has no way to import one, and every external-surface command in
+    // the scene is reported as UnsupportedExternalSurface rather than skipped.
     virtual RasterResult Render(const SceneSnapshot& scene, Color clear,
-                                TextRasterizer* text_rasterizer = nullptr) const = 0;
+                                TextRasterizer* text_rasterizer = nullptr,
+                                ExternalSurfaceReader* external_reader = nullptr) const = 0;
 };
 
 }  // namespace render

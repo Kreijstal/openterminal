@@ -79,6 +79,22 @@ struct TextOp {
     std::string path;
 };
 
+// A live, producer-owned surface's root-space axis-aligned bounding box, plus
+// the identity of the source that was bound to it at compile time.
+//
+// The authoritative geometry remains the LocalExternalSurface command plus its
+// VisualNode transform; this is the acceptance sidecar, and it is what lets a
+// frame record say which element a SwapChainPanel's content belongs to. The
+// native value is deliberately absent: nothing outside the compositor may
+// dereference it, and the kind plus generation are enough to say which source
+// a frame was built from and when it last changed.
+struct ExternalSurfaceOp {
+    Rect bounds;
+    std::string path;
+    ExternalSurfaceKind kind = ExternalSurfaceKind::None;
+    std::uint64_t generation = 0;
+};
+
 // A feature that was found and deliberately not drawn.
 struct Refusal {
     std::string path;
@@ -111,6 +127,7 @@ struct DisplayList {
     Size surface;
     std::vector<RectOp> rects;
     std::vector<TextOp> texts;
+    std::vector<ExternalSurfaceOp> externals;
     std::vector<Refusal> refusals;
     std::vector<NodeGeometry> geometry;
 

@@ -232,8 +232,10 @@ bool RasterPolygon(const Polygon& polygon, Color color, Surface& target) {
 
 class Walker {
 public:
-    Walker(const SceneSnapshot& scene, RasterResult& result, TextRasterizer* text_rasterizer)
-        : scene_(scene), result_(result), text_rasterizer_(text_rasterizer) {}
+    Walker(const SceneSnapshot& scene, RasterResult& result, TextRasterizer* text_rasterizer,
+           ExternalSurfaceReader* external_reader)
+        : scene_(scene), result_(result), text_rasterizer_(text_rasterizer),
+          external_reader_(external_reader) {}
 
     void Run() {
         const VisualNode* root = scene_.Find(scene_.root());
@@ -362,10 +364,10 @@ private:
                           "the CPU reference backend");
                 } else if (const auto* text = std::get_if<LocalText>(&command)) {
                     DrawText(node.id, index, *text, transform_to_root, clip, target);
-                } else if (std::get_if<LocalExternalSurface>(&command)) {
-                    Issue(RenderIssueCode::UnsupportedExternalSurface,
-                          node.id, index,
-                          "an external surface requires a platform compositor backend");
+                } else if (const auto* external =
+                               std::get_if<LocalExternalSurface>(&command)) {
+                    DrawExternalSurface(node.id, index, *external, transform_to_root,
+                                        clip, target);
                 } else {
                     Issue(RenderIssueCode::InvalidScene, node.id, index,
                           "display list contains an unknown command alternative");
@@ -477,16 +479,117 @@ private:
         }
     }
 
+    // Composites producer-owned pixels into the frame at the rect layout
+    // arranged for them.
+    //
+    // The pixels arrive already premultiplied and are composited source-over,
+    // one for one, at whole pixels. They are never resampled: a swap chain is
+    // sized by its producer to the panel it is bound to, and stretching what
+    // it presented would put content on the screen the producer never drew.
+    // Every case this cannot render exactly is named instead.
+    void DrawExternalSurface(NodeId node, std::size_t index,
+                             const LocalExternalSurface& external,
+                             const Matrix3x2& transform_to_root, const ClipState& clip,
+                             Surface& target) {
+        if (!HasValidExtent(external.bounds)) {
+            Issue(RenderIssueCode::InvalidScene, node, index,
+                  "external surface rectangle does not have finite, non-negative bounds");
+            return;
+        }
+        if (!external.source) {
+            Issue(RenderIssueCode::UnsupportedExternalSurface, node, index,
+                  "the retained external surface names no live source");
+            return;
+        }
+        if (!external_reader_) {
+            Issue(RenderIssueCode::UnsupportedExternalSurface, node, index,
+                  "no external surface reader is bound to this frame, so producer-owned "
+                  "content cannot be imported");
+            return;
+        }
+        if (!IsTranslation(transform_to_root)) {
+            Issue(RenderIssueCode::UnsupportedExternalSurface, node, index,
+                  "a scaled or rotated external surface would have to be resampled; the "
+                  "CPU reference backend composites producer pixels one for one");
+            return;
+        }
+        if (clip.present && !clip.axis_aligned) {
+            Issue(RenderIssueCode::UnsupportedExternalSurface, node, index,
+                  "a non-axis-aligned clip over an external surface would need partial "
+                  "pixel coverage of imported content");
+            return;
+        }
+
+        ExternalSurfaceView view;
+        std::string message;
+        if (!external_reader_->ReadExternalSurface(external.source, view, message)) {
+            if (message.empty()) message = "the external surface reader declined the source";
+            Issue(RenderIssueCode::UnsupportedExternalSurface, node, index,
+                  std::move(message));
+            return;
+        }
+        if (!view.readable()) {
+            Issue(RenderIssueCode::UnsupportedExternalSurface, node, index,
+                  "the external surface reader returned a view that is not a readable "
+                  "premultiplied image");
+            return;
+        }
+
+        const Rect root_bounds = transform_to_root.TransformRect(external.bounds);
+        if (!HasValidExtent(root_bounds)) {
+            Issue(RenderIssueCode::InvalidScene, node, index,
+                  "translated external surface rectangle is not representable");
+            return;
+        }
+        const PixelRect placement = SnapRect(root_bounds);
+        if (placement.width() != view.width || placement.height() != view.height) {
+            Issue(RenderIssueCode::UnsupportedExternalSurface, node, index,
+                  "the producer's " + std::to_string(view.width) + "x" +
+                      std::to_string(view.height) + " surface is not the arranged " +
+                      std::to_string(placement.width()) + "x" +
+                      std::to_string(placement.height()) +
+                      " rectangle; resampling it would invent content the producer "
+                      "never presented");
+            return;
+        }
+        if (placement.empty()) return;
+
+        PixelRect visible = placement;
+        if (clip.present) {
+            const PixelRect clip_box = SnapRect(clip.bounds);
+            visible.left = std::max(visible.left, clip_box.left);
+            visible.top = std::max(visible.top, clip_box.top);
+            visible.right = std::min(visible.right, clip_box.right);
+            visible.bottom = std::min(visible.bottom, clip_box.bottom);
+        }
+        visible.left = std::max(visible.left, 0);
+        visible.top = std::max(visible.top, 0);
+        visible.right = std::min(visible.right, target.width());
+        visible.bottom = std::min(visible.bottom, target.height());
+        if (visible.empty()) return;
+
+        for (int y = visible.top; y < visible.bottom; ++y) {
+            const std::size_t row =
+                static_cast<std::size_t>(y - placement.top) * view.stride_pixels;
+            for (int x = visible.left; x < visible.right; ++x) {
+                target.BlendPremultipliedPixel(
+                    x, y, view.pixels[row + static_cast<std::size_t>(x - placement.left)]);
+            }
+        }
+    }
+
     const SceneSnapshot& scene_;
     RasterResult& result_;
     TextRasterizer* text_rasterizer_;
+    ExternalSurfaceReader* external_reader_;
     std::unordered_set<std::uint64_t> visited_;
 };
 
 }  // namespace
 
 RasterResult CpuRasterBackend::Render(const SceneSnapshot& scene, Color clear,
-                                      TextRasterizer* text_rasterizer) const {
+                                      TextRasterizer* text_rasterizer,
+                                      ExternalSurfaceReader* external_reader) const {
     const Size extent = scene.surface();
     if (!std::isfinite(extent.width) || !std::isfinite(extent.height) || extent.width < 0.0 ||
         extent.height < 0.0) {
@@ -531,7 +634,7 @@ RasterResult CpuRasterBackend::Render(const SceneSnapshot& scene, Color clear,
                                             std::move(validation_error)});
         return result;
     }
-    Walker(scene, result, text_rasterizer).Run();
+    Walker(scene, result, text_rasterizer, external_reader).Run();
     return result;
 }
 

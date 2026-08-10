@@ -22,6 +22,7 @@ add_library(openxaml_render STATIC
     src/surface.cpp
     src/cpu_raster_backend.cpp
     src/case_runner.cpp
+    src/external_surface_reader.cpp
 )
 target_include_directories(openxaml_render PUBLIC src)
 target_link_libraries(openxaml_render PUBLIC openxaml_layout)

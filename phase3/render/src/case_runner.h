@@ -58,9 +58,14 @@ CaseResult LayOutCase(const std::string& case_json);
 // Replays the retained scene through the platform-neutral raster boundary.
 // This is shared by offscreen cases and platform presenters so no host can
 // accidentally keep painting the deprecated flat compatibility view.
+//
+// `external_reader` imports producer-owned content -- a SwapChainPanel's swap
+// chain or composition surface. The corpus harnesses pass none, because a
+// corpus case has no producer; a live island passes the one its host bound.
 Surface RasterizeDisplayList(const DisplayList& list, TextBackend* backend, Color clear,
                              Color text_ink, std::vector<std::string>& text_failures,
-                             std::vector<RenderIssue>& render_issues);
+                             std::vector<RenderIssue>& render_issues,
+                             ExternalSurfaceReader* external_reader = nullptr);
 
 // Paints a laid-out case. `backend` may be null, in which case the text runs
 // are recorded in the dump's sidecar and no ink is drawn. The ordinary

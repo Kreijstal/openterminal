@@ -17,6 +17,16 @@ enum class ExternalSurfaceKind {
     None,
     CompositionSurfaceHandle,
     DxgiSwapChain,
+    // A producer-owned, already premultiplied BGRA image resident in this
+    // process. `native_value` points at a render::CpuExternalImage, declared
+    // in phase3/render/src/external_surface_reader.h, and `lifetime` owns it.
+    //
+    // This is the one source kind a CPU compositor can read without a
+    // graphics device, and it is the shape a DXGI readback produces once a
+    // presented back buffer has been mapped. It is not a substitute for a
+    // swap chain: a platform compositor still imports those directly, and a
+    // producer that has only a swap chain must not describe it as this.
+    CpuBgraImage,
 };
 
 struct ExternalSurfaceReference {

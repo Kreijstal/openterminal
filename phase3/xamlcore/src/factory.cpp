@@ -4908,12 +4908,13 @@ private:
         std::snprintf(summary, sizeof(summary),
                       "OpenXaml frame event=scene-summary reason=%s "
                       "generation=%llu nodes=%zu node_total=%zu fills=%zu "
-                      "fill_total=%zu texts=%zu\n",
+                      "fill_total=%zu texts=%zu external_surfaces=%zu\n",
                       reason, generation, frame_cache_.scene_nodes().size(),
                       frame_cache_.scene_node_total(),
                       frame_cache_.scene_fills().size(),
                       frame_cache_.scene_fill_total(),
-                      frame_cache_.scene_texts().size());
+                      frame_cache_.scene_texts().size(),
+                      frame_cache_.scene_external_surfaces().size());
         OutputDebugStringA(summary);
 
         constexpr std::size_t kMaximumLine = 460;
@@ -4961,6 +4962,36 @@ private:
                           text.bounds.y, text.bounds.width, text.bounds.height);
             AppendBoundedPath(values, text.path, kMaximumLine);
         }
+        // Where a region of this frame came from outside XAML. A checker that
+        // predicts a pixel from the fill records has to know these rectangles:
+        // no fill covers them, and their content changes with the producer's
+        // generation rather than with the frame's.
+        const auto& externals = frame_cache_.scene_external_surfaces();
+        for (std::size_t index = 0; index < externals.size(); ++index) {
+            const auto& external = externals[index];
+            char values[288]{};
+            std::snprintf(values, sizeof(values),
+                          "OpenXaml frame event=scene-external-surface reason=%s "
+                          "generation=%llu index=%zu kind=%s source_generation=%llu "
+                          "rect=%.3f,%.3f,%.3f,%.3f path=",
+                          reason, generation, index,
+                          ExternalSurfaceKindName(external.kind),
+                          static_cast<unsigned long long>(external.generation),
+                          external.bounds.x, external.bounds.y, external.bounds.width,
+                          external.bounds.height);
+            AppendBoundedPath(values, external.path, kMaximumLine);
+        }
+    }
+
+    static const char* ExternalSurfaceKindName(openxaml::ExternalSurfaceKind kind) {
+        switch (kind) {
+            case openxaml::ExternalSurfaceKind::None: return "none";
+            case openxaml::ExternalSurfaceKind::CompositionSurfaceHandle:
+                return "composition-surface-handle";
+            case openxaml::ExternalSurfaceKind::DxgiSwapChain: return "dxgi-swap-chain";
+            case openxaml::ExternalSurfaceKind::CpuBgraImage: return "cpu-bgra-image";
+        }
+        return "unknown";
     }
 
     // Wine bounds what one OutputDebugString call renders. A path is the only

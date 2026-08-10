@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "cpu_raster_backend.h"
+#include "external_surface_reader.h"
 
 using namespace openxaml;
 using namespace openxaml::render;
@@ -413,6 +414,102 @@ void ExternalSurfacesAreNamedUntilACompositorBackendExists() {
     CHECK(result.surface.At(1, 1) == Pack(kClear));
 }
 
+// A producer's own pixels, published as a CPU BGRA image. The lifetime token
+// is what a scene snapshot holds; the image behind it belongs to the producer.
+struct ProducerImage {
+    std::shared_ptr<std::vector<std::uint32_t>> pixels =
+        std::make_shared<std::vector<std::uint32_t>>();
+    CpuExternalImage image;
+
+    ExternalSurfaceReference Reference(int width, int height) {
+        pixels->resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+        for (std::size_t index = 0; index < pixels->size(); ++index) {
+            (*pixels)[index] = PackPremultiplied(
+                0xff, static_cast<unsigned char>(0x10 + 0x20 * (index % 4)),
+                static_cast<unsigned char>(0x30 + 0x20 * (index / 4)), 0xc0);
+        }
+        image.width = width;
+        image.height = height;
+        image.stride_pixels = static_cast<std::size_t>(width);
+        image.pixels = pixels->data();
+
+        ExternalSurfaceReference reference;
+        reference.kind = ExternalSurfaceKind::CpuBgraImage;
+        reference.generation = 9;
+        reference.native_value = reinterpret_cast<std::uintptr_t>(&image);
+        reference.lifetime = std::static_pointer_cast<const void>(pixels);
+        return reference;
+    }
+};
+
+// An imported surface occupies exactly the rectangle the scene gives it, at
+// whole pixels, composited source-over. The node is translated so a backend
+// that ignored the transform and blitted at the origin would be caught.
+void ExternalSurfacesAreCompositedAtTheirSceneRectangle() {
+    VisualNode root = Node(1);
+    root.local_transform = Matrix3x2::Translation(1.0, 2.0);
+    auto content = std::make_shared<LocalDisplayList>();
+    ProducerImage producer;
+    content->commands.push_back(
+        LocalExternalSurface{Rect{0.0, 0.0, 2.0, 2.0}, producer.Reference(2, 2)});
+    root.content = std::move(content);
+
+    CpuExternalSurfaceReader reader;
+    const RasterResult result = CpuRasterBackend{}.Render(
+        SceneSnapshot(Size{4.0, 5.0}, NodeId{1}, {root}), kClear, nullptr, &reader);
+    CHECK(result.complete());
+    for (int y = 0; y < 5; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            const bool inside = x >= 1 && x < 3 && y >= 2 && y < 4;
+            const std::uint32_t expected =
+                inside ? (*producer.pixels)[static_cast<std::size_t>(y - 2) * 2 +
+                                            static_cast<std::size_t>(x - 1)]
+                       : Pack(kClear);
+            CHECK(result.surface.At(x, y) == expected);
+        }
+    }
+}
+
+// A producer's surface is never resampled, and a reader that cannot import a
+// source says so instead of leaving a hole that looks like a rendered frame.
+void ExternalSurfacesRefuseScalingAndUnimportableSources() {
+    VisualNode scaled = Node(1);
+    auto scaled_content = std::make_shared<LocalDisplayList>();
+    ProducerImage producer;
+    scaled_content->commands.push_back(
+        LocalExternalSurface{Rect{0.0, 0.0, 4.0, 4.0}, producer.Reference(2, 2)});
+    scaled.content = std::move(scaled_content);
+
+    CpuExternalSurfaceReader reader;
+    const RasterResult mismatched = CpuRasterBackend{}.Render(
+        SceneSnapshot(Size{4.0, 4.0}, NodeId{1}, {scaled}), kClear, nullptr, &reader);
+    CHECK(HasIssue(mismatched, RenderIssueCode::UnsupportedExternalSurface, NodeId{1}));
+    CHECK(mismatched.issues.size() == 1);
+    CHECK(mismatched.issues[0].message.find("2x2") != std::string::npos);
+    CHECK(mismatched.issues[0].message.find("4x4") != std::string::npos);
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x) CHECK(mismatched.surface.At(x, y) == Pack(kClear));
+
+    VisualNode swap_chain = Node(1);
+    auto swap_chain_content = std::make_shared<LocalDisplayList>();
+    ExternalSurfaceReference source;
+    source.kind = ExternalSurfaceKind::DxgiSwapChain;
+    source.generation = 2;
+    source.native_value = 0x4321;
+    source.lifetime = std::make_shared<int>(1);
+    swap_chain_content->commands.push_back(
+        LocalExternalSurface{Rect{0.0, 0.0, 2.0, 2.0}, std::move(source)});
+    swap_chain.content = std::move(swap_chain_content);
+
+    const RasterResult unimportable = CpuRasterBackend{}.Render(
+        SceneSnapshot(Size{2.0, 2.0}, NodeId{1}, {swap_chain}), kClear, nullptr, &reader);
+    CHECK(HasIssue(unimportable, RenderIssueCode::UnsupportedExternalSurface, NodeId{1}));
+    CHECK(unimportable.issues.size() == 1);
+    CHECK(unimportable.issues[0].message.find("graphics device") != std::string::npos);
+    for (int y = 0; y < 2; ++y)
+        for (int x = 0; x < 2; ++x) CHECK(unimportable.surface.At(x, y) == Pack(kClear));
+}
+
 void SourcedImageBrushesAreRetainedAsANamedBackendBoundary() {
     VisualNode root = Node(1);
     auto content = std::make_shared<LocalDisplayList>();
@@ -454,6 +551,8 @@ int main() {
     TransformedTextIsACommandIssueAndIsNeverPaintedUntransformed();
     CancellingTransformsDelegateTextAsTheResultingIdentity();
     ExternalSurfacesAreNamedUntilACompositorBackendExists();
+    ExternalSurfacesAreCompositedAtTheirSceneRectangle();
+    ExternalSurfacesRefuseScalingAndUnimportableSources();
     SourcedImageBrushesAreRetainedAsANamedBackendBoundary();
 
     if (failures != 0) {

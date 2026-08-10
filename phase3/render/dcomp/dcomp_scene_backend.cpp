@@ -891,6 +891,13 @@ HRESULT WindowsDcompPlatform::ImportExternalSurface(
             value = reinterpret_cast<IUnknown*>(source.native_value);
             value->AddRef();
             break;
+        case ExternalSurfaceKind::CpuBgraImage:
+            // A producer's CPU image is composited by the CPU backend. Making
+            // a DirectComposition surface out of it would mean this platform
+            // uploading and owning a copy of the producer's pixels every
+            // frame, which is a different design from importing a resource the
+            // producer already owns on the GPU. Named rather than approximated.
+            return E_NOTIMPL;
         case ExternalSurfaceKind::None:
             return E_INVALIDARG;
     }
