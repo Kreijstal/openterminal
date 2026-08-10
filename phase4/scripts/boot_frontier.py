@@ -10,6 +10,12 @@ The frontier is a measurement, not a wish. It advances only when the runtime
 actually implements what the binary asks for next, and the committed
 expectation in ``phase4/expected/boot-frontier.json`` moves the same way the
 oracle digest does: deliberately, after reading what changed.
+
+Before launching, the fonts the executable ships beside itself are installed
+into the prefix. That is environment provisioning, not part of what is being
+measured: Wine stubs the font-set builder Terminal loads them with, so without
+it every run measures the same DirectWrite gap instead of the runtime. See
+``install_deployment_fonts.py`` for what Wine does and does not implement here.
 """
 
 import argparse
@@ -20,6 +26,9 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from install_deployment_fonts import install as install_deployment_fonts  # noqa: E402
 
 MISSING_CLASS = re.compile(
     r"RoGetActivationFactory Failed to find library for L\"([^\"]+)\"")
@@ -59,6 +68,8 @@ def run(executable: Path, prefix: Path, timeout: int, use_xvfb: bool) -> dict:
     environment["WINEDLLOVERRIDES"] = "winedbg.exe=d"
     runtime = find_mingw_runtime()
     environment["WINEPATH"] = "Z:" + str(runtime).replace("/", "\\")
+
+    install_deployment_fonts(executable.parent, prefix, environment)
 
     command = ["wine", str(executable)]
     if use_xvfb:

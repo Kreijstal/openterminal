@@ -26,7 +26,9 @@ from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY / "phase3" / "scripts"))
+sys.path.insert(0, str(REPOSITORY / "phase4" / "scripts"))
 from build_xamlcore import registration  # noqa: E402
+from install_deployment_fonts import install as install_deployment_fonts  # noqa: E402
 from prepare_runtime_fonts import (  # noqa: E402
     DEFAULT_SPEC as DEFAULT_RUNTIME_FONT_SPEC,
     prepare as prepare_runtime_fonts,
@@ -272,6 +274,13 @@ def integrate(dll: Path, executable: Path, xbf_root: Path, prefix: Path,
     registry_file.write_text(registration(dll), encoding="utf-8", newline="\n")
     run([wine, "regedit.exe", str(registry_file)], environment)
 
+    # Terminal loads the fonts it deploys through a DirectWrite call Wine
+    # stubs, so install them the way Wine does resolve fonts. Without this
+    # AtlasEngine's UpdateFont fails silently and the boot dies dividing by a
+    # zero cell size. See install_deployment_fonts.py.
+    deployment_fonts = install_deployment_fonts(
+        executable.parent, prefix, environment, wine)
+
     # Prove the registration refers to the exact input artifact before launch.
     query = run(
         [wine, "reg.exe", "query",
@@ -294,6 +303,7 @@ def integrate(dll: Path, executable: Path, xbf_root: Path, prefix: Path,
         "executable_sha256": sha256(executable),
         "openxaml_dll": str(dll),
         "openxaml_dll_sha256": sha256(dll),
+        "deployment_fonts": deployment_fonts["fonts"],
         "prefix": str(prefix),
         "runtime_font_alias_manifest": str(font_alias_manifest),
         "runtime_font_alias_manifest_sha256": sha256(font_alias_manifest),
