@@ -6,7 +6,9 @@
 
 #include <cstdio>
 #include <cwchar>
+#include <memory>
 
+#include "com.h"
 #include "openxaml_iids.h"
 
 namespace wuxc = ABI::Windows::UI::Xaml::Controls;
@@ -14,10 +16,58 @@ namespace wuxcp = ABI::Windows::UI::Xaml::Controls::Primitives;
 namespace wuxs = ABI::Windows::UI::Xaml::Shapes;
 namespace wux = ABI::Windows::UI::Xaml;
 namespace wuxmk = ABI::Windows::UI::Xaml::Markup;
+namespace wuxm = ABI::Windows::UI::Xaml::Media;
 namespace wf = ABI::Windows::Foundation;
 
 inline constexpr GUID weak_reference_source_iid = {
     0x00000038, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+
+inline constexpr GUID muxc_info_bar_iid = {
+    0x273ffde8, 0x9324, 0x55b7,
+    {0x9f, 0xfe, 0x7d, 0x99, 0x5a, 0x8a, 0xf5, 0x6b}};
+inline constexpr GUID muxc_info_bar_factory_iid = {
+    0x60618a60, 0x9be7, 0x5df5,
+    {0xbe, 0x0d, 0x93, 0x3d, 0x34, 0xdd, 0xb4, 0x4c}};
+
+struct SmokeInfoBar : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_IsOpen(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsOpen(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Title(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Title(HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Message(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Message(HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Severity(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Severity(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IconSource(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IconSource(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsIconVisible(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsIconVisible(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsClosable(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsClosable(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_CloseButtonStyle(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_CloseButtonStyle(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_CloseButtonCommand(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_CloseButtonCommand(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_CloseButtonCommandParameter(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_CloseButtonCommandParameter(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ActionButton(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ActionButton(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Content(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Content(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ContentTemplate(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ContentTemplate(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_TemplateSettings(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_CloseButtonClick(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_CloseButtonClick(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Closing(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_Closing(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Closed(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_Closed(EventRegistrationToken) = 0;
+};
+
+struct SmokeInfoBarFactory : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE CreateInstance(void*, void**, void**) = 0;
+};
 
 // The factory a class name resolves to, which is where WinRT puts a class's
 // static members. DependencyProperty and PropertyMetadata are reached only
@@ -80,6 +130,21 @@ INT32 UnboxInt32(IInspectable* value) {
     boxed->GetInt32(&out);
     boxed->Release();
     return out;
+}
+
+bool SameIdentity(IInspectable* left, IInspectable* right) {
+    if (!left || !right) return left == right;
+    IUnknown* left_identity = nullptr;
+    IUnknown* right_identity = nullptr;
+    const HRESULT left_hr = left->QueryInterface(
+        IID_IUnknown, reinterpret_cast<void**>(&left_identity));
+    const HRESULT right_hr = right->QueryInterface(
+        IID_IUnknown, reinterpret_cast<void**>(&right_identity));
+    const bool same = SUCCEEDED(left_hr) && SUCCEEDED(right_hr) &&
+        left_identity == right_identity;
+    if (left_identity) left_identity->Release();
+    if (right_identity) right_identity->Release();
+    return same;
 }
 
 // A caller's delegates. The DLL never asks these for an interface -- a
@@ -150,6 +215,111 @@ public:
         ++calls;
         return S_OK;
     }
+};
+
+class FakeImageSource final : public wuxm::IImageSource {
+public:
+    explicit FakeImageSource(int* destroyed) : destroyed_(destroyed) {}
+    ~FakeImageSource() {
+        if (destroyed_) ++*destroyed_;
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        static constexpr GUID image_source_iid = {
+            0x737ef309, 0xea41, 0x4d96,
+            {0xa7, 0x1c, 0x98, 0xe9, 0x8e, 0xfc, 0xab, 0x07}};
+        if (IsEqualGUID(iid, IID_IUnknown) ||
+            IsEqualGUID(iid, openxaml::iid::IInspectable) ||
+            IsEqualGUID(iid, image_source_iid)) {
+            *object = static_cast<wuxm::IImageSource*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++references_; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = --references_;
+        if (!remaining) delete this;
+        return remaining;
+    }
+    HRESULT STDMETHODCALLTYPE GetIids(ULONG*, IID**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING* value) override {
+        if (!value) return E_POINTER;
+        constexpr wchar_t name[] = L"OpenXaml.Smoke.ImageSource";
+        return WindowsCreateString(name, ARRAYSIZE(name) - 1, value);
+    }
+    HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel* value) override {
+        if (!value) return E_POINTER;
+        *value = BaseTrust;
+        return S_OK;
+    }
+
+private:
+    ULONG references_ = 1;
+    int* destroyed_ = nullptr;
+};
+
+class DeferredNameMaterializer final
+    : public openxaml::winrt::IOpenXamlDeferredMaterializer {
+public:
+    DeferredNameMaterializer(wux::IFrameworkElement* element, HSTRING name)
+        : element_(element) {
+        element_->AddRef();
+        WindowsDuplicateString(name, &name_);
+    }
+    ~DeferredNameMaterializer() {
+        WindowsDeleteString(name_);
+        element_->Release();
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        if (IsEqualGUID(iid, IID_IUnknown) ||
+            IsEqualGUID(iid,
+                        openxaml::winrt::IID_IOpenXamlDeferredMaterializer)) {
+            *object = static_cast<
+                openxaml::winrt::IOpenXamlDeferredMaterializer*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++references_; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = --references_;
+        if (!remaining) delete this;
+        return remaining;
+    }
+    HRESULT STDMETHODCALLTYPE Materialize(
+        openxaml::winrt::IOpenXamlNameScope* scope,
+        IInspectable** value) override {
+        if (!scope || !value) return E_INVALIDARG;
+        *value = nullptr;
+        ++calls;
+        openxaml::winrt::IOpenXamlNameScopeOwner* owner = nullptr;
+        HRESULT hr = element_->QueryInterface(
+            openxaml::winrt::IID_IOpenXamlNameScopeOwner,
+            reinterpret_cast<void**>(&owner));
+        if (SUCCEEDED(hr)) hr = owner->AttachNameScope(scope);
+        if (owner) owner->Release();
+        if (SUCCEEDED(hr)) hr = element_->put_Name(name_);
+        if (SUCCEEDED(hr))
+            hr = element_->QueryInterface(
+                openxaml::iid::IInspectable,
+                reinterpret_cast<void**>(value));
+        return hr;
+    }
+
+    int calls = 0;
+
+private:
+    ULONG references_ = 1;
+    wux::IFrameworkElement* element_ = nullptr;
+    HSTRING name_ = nullptr;
 };
 
 template <class Interface>
@@ -359,6 +529,458 @@ int main() {
         content->Release();
     }
 
+    auto* info_bar = Activate<SmokeInfoBar>(
+        L"Microsoft.UI.Xaml.Controls.InfoBar",
+        muxc_info_bar_iid);
+    check(info_bar != nullptr, "WinUI InfoBar activation");
+    if (info_bar) {
+        HSTRING title = nullptr;
+        HSTRING message = nullptr;
+        WindowsCreateString(L"Warning", 7, &title);
+        WindowsCreateString(L"Keyboard service unavailable", 28, &message);
+        check(SUCCEEDED(info_bar->put_Title(title)) &&
+                  SUCCEEDED(info_bar->put_Message(message)) &&
+                  SUCCEEDED(info_bar->put_Severity(2)) &&
+                  SUCCEEDED(info_bar->put_IsClosable(1)) &&
+                  SUCCEEDED(info_bar->put_IsIconVisible(1)) &&
+                  SUCCEEDED(info_bar->put_IsOpen(1)),
+              "InfoBar state setters");
+        HSTRING read_message = nullptr;
+        INT32 severity = -1;
+        INT32 comparison = -1;
+        boolean is_open = 0;
+        check(SUCCEEDED(info_bar->get_Message(&read_message)) &&
+                  SUCCEEDED(WindowsCompareStringOrdinal(
+                      message, read_message, &comparison)) && comparison == 0 &&
+                  SUCCEEDED(info_bar->get_Severity(&severity)) && severity == 2 &&
+                  SUCCEEDED(info_bar->get_IsOpen(&is_open)) && is_open,
+              "InfoBar state round-trip");
+        WindowsDeleteString(read_message);
+
+        openxaml::winrt::IOpenXamlNative* native = nullptr;
+        check(SUCCEEDED(info_bar->QueryInterface(
+                  openxaml::winrt::IID_IOpenXamlNative,
+                  reinterpret_cast<void**>(&native))) && native &&
+                  native->LayoutElement()->visibility() ==
+                      openxaml::Visibility::Visible,
+              "InfoBar IsOpen participates in layout visibility");
+        if (native) native->Release();
+        WindowsDeleteString(message);
+        WindowsDeleteString(title);
+        info_bar->Release();
+    }
+
+    auto* info_bar_factory =
+        Statics<SmokeInfoBarFactory>(
+            L"Microsoft.UI.Xaml.Controls.InfoBar",
+            muxc_info_bar_factory_iid);
+    check(info_bar_factory != nullptr, "WinUI InfoBar composable factory");
+    if (info_bar_factory) {
+        void* inner = nullptr;
+        void* projected = nullptr;
+        check(SUCCEEDED(info_bar_factory->CreateInstance(
+                  nullptr, &inner, &projected)) && inner && projected,
+              "InfoBar factory CreateInstance");
+        if (projected)
+            static_cast<SmokeInfoBar*>(projected)->Release();
+        if (inner)
+            static_cast<IInspectable*>(inner)->Release();
+        info_bar_factory->Release();
+    }
+
+    // One materialized XAML tree owns one namescope. The scope stores weak
+    // references: lookup must track rename/duplicates without retaining an
+    // element after the visual owner releases it.
+    auto* name_root = Activate<wux::IFrameworkElement>(
+        L"Windows.UI.Xaml.Controls.Grid",
+        openxaml::iid::Windows_UI_Xaml_IFrameworkElement);
+    auto* named_child = Activate<wux::IFrameworkElement>(
+        L"Windows.UI.Xaml.Controls.Border",
+        openxaml::iid::Windows_UI_Xaml_IFrameworkElement);
+    auto* transient_child = Activate<wux::IFrameworkElement>(
+        L"Windows.UI.Xaml.Controls.Border",
+        openxaml::iid::Windows_UI_Xaml_IFrameworkElement);
+    auto* deferred_child = Activate<wux::IFrameworkElement>(
+        L"Windows.UI.Xaml.Controls.Border",
+        openxaml::iid::Windows_UI_Xaml_IFrameworkElement);
+    check(name_root && named_child && transient_child && deferred_child,
+          "namescope element activation");
+    if (name_root && named_child && transient_child && deferred_child) {
+        auto* scope = new (std::nothrow) openxaml::winrt::XamlNameScope();
+        openxaml::winrt::IOpenXamlNameScopeOwner* root_owner = nullptr;
+        openxaml::winrt::IOpenXamlNameScopeOwner* child_owner = nullptr;
+        openxaml::winrt::IOpenXamlNameScopeOwner* transient_owner = nullptr;
+        check(scope && SUCCEEDED(name_root->QueryInterface(
+                  openxaml::winrt::IID_IOpenXamlNameScopeOwner,
+                  reinterpret_cast<void**>(&root_owner))) && root_owner &&
+                  SUCCEEDED(named_child->QueryInterface(
+                  openxaml::winrt::IID_IOpenXamlNameScopeOwner,
+                  reinterpret_cast<void**>(&child_owner))) && child_owner &&
+                  SUCCEEDED(transient_child->QueryInterface(
+                  openxaml::winrt::IID_IOpenXamlNameScopeOwner,
+                  reinterpret_cast<void**>(&transient_owner))) && transient_owner,
+              "private namescope attachment ABI");
+        if (scope && root_owner && child_owner && transient_owner) {
+            check(SUCCEEDED(root_owner->AttachNameScope(scope)) &&
+                      SUCCEEDED(child_owner->AttachNameScope(scope)) &&
+                      SUCCEEDED(transient_owner->AttachNameScope(scope)),
+                  "attach one scope to materialized tree");
+
+            HSTRING root_name = nullptr;
+            HSTRING child_name = nullptr;
+            HSTRING renamed = nullptr;
+            HSTRING transient = nullptr;
+            HSTRING deferred = nullptr;
+            WindowsCreateString(L"Root", 4, &root_name);
+            WindowsCreateString(L"Child", 5, &child_name);
+            WindowsCreateString(L"RenamedChild", 12, &renamed);
+            WindowsCreateString(L"Transient", 9, &transient);
+            WindowsCreateString(L"Deferred", 8, &deferred);
+            check(SUCCEEDED(name_root->put_Name(root_name)) &&
+                      SUCCEEDED(named_child->put_Name(child_name)),
+                  "FrameworkElement Name registration");
+
+            IInspectable* expected_child = nullptr;
+            IInspectable* found = nullptr;
+            named_child->QueryInterface(
+                openxaml::iid::IInspectable,
+                reinterpret_cast<void**>(&expected_child));
+            check(SUCCEEDED(name_root->FindName(child_name, &found)) && found &&
+                      SameIdentity(found, expected_child),
+                  "FindName resolves a named child by COM identity");
+            if (found) found->Release();
+
+            check(transient_child->put_Name(child_name) == E_INVALIDARG,
+                  "duplicate live name is rejected");
+            check(SUCCEEDED(named_child->put_Name(renamed)),
+                  "named element rename");
+            found = reinterpret_cast<IInspectable*>(1);
+            check(SUCCEEDED(name_root->FindName(child_name, &found)) && !found,
+                  "rename removes old name");
+            check(SUCCEEDED(name_root->FindName(renamed, &found)) && found &&
+                      SameIdentity(found, expected_child),
+                  "rename publishes new name");
+            if (found) found->Release();
+
+            check(SUCCEEDED(transient_child->put_Name(transient)),
+                  "transient name registration");
+            transient_owner->Release();
+            transient_owner = nullptr;
+            transient_child->Release();
+            transient_child = nullptr;
+            found = reinterpret_cast<IInspectable*>(1);
+            check(SUCCEEDED(name_root->FindName(transient, &found)) && !found,
+                  "namescope does not retain destroyed element");
+
+            auto* materializer = new (std::nothrow)
+                DeferredNameMaterializer(deferred_child, deferred);
+            check(materializer && SUCCEEDED(scope->RegisterDeferred(
+                      deferred, materializer)),
+                  "register deferred namescope entry");
+            IInspectable* expected_deferred = nullptr;
+            deferred_child->QueryInterface(
+                openxaml::iid::IInspectable,
+                reinterpret_cast<void**>(&expected_deferred));
+            found = nullptr;
+            check(materializer &&
+                      SUCCEEDED(name_root->FindName(deferred, &found)) && found &&
+                      SameIdentity(found, expected_deferred) &&
+                      materializer->calls == 1,
+                  "FindName materializes a deferred entry once");
+            if (found) found->Release();
+            found = nullptr;
+            check(materializer &&
+                      SUCCEEDED(name_root->FindName(deferred, &found)) && found &&
+                      SameIdentity(found, expected_deferred) &&
+                      materializer->calls == 1,
+                  "repeated FindName reuses the materialized identity");
+            if (found) found->Release();
+            if (expected_deferred) expected_deferred->Release();
+            if (materializer) materializer->Release();
+
+            if (expected_child) expected_child->Release();
+            WindowsDeleteString(deferred);
+            WindowsDeleteString(transient);
+            WindowsDeleteString(renamed);
+            WindowsDeleteString(child_name);
+            WindowsDeleteString(root_name);
+        }
+        if (transient_owner) transient_owner->Release();
+        if (child_owner) child_owner->Release();
+        if (root_owner) root_owner->Release();
+        if (scope) scope->Release();
+    }
+    if (transient_child) transient_child->Release();
+    if (deferred_child) deferred_child->Release();
+    if (named_child) named_child->Release();
+    if (name_root) name_root->Release();
+
+    auto* source_image = Activate<wuxc::IImage>(
+        L"Windows.UI.Xaml.Controls.Image",
+        openxaml::iid::Windows_UI_Xaml_Controls_IImage);
+    check(source_image != nullptr, "Image activation");
+    if (source_image) {
+        openxaml::winrt::IOpenXamlNative* native = nullptr;
+        check(SUCCEEDED(source_image->QueryInterface(
+                  openxaml::winrt::IID_IOpenXamlNative,
+                  reinterpret_cast<void**>(&native))) && native,
+              "Image private layout projection");
+        int invalidations = 0;
+        bool last_layout = false;
+        std::shared_ptr<openxaml::RenderInvalidationSink> sink;
+        if (native) {
+            sink = std::make_shared<openxaml::RenderInvalidationSink>(
+                [&](bool layout) {
+                    ++invalidations;
+                    last_layout = layout;
+                });
+            check(native->LayoutElement()->AttachRenderInvalidationSink(sink),
+                  "attach Image invalidation sink");
+        }
+
+        wuxm::Stretch stretch = wuxm::Stretch_None;
+        check(SUCCEEDED(source_image->get_Stretch(&stretch)) &&
+                  stretch == wuxm::Stretch_Uniform,
+              "Image default Stretch is Uniform");
+        int destroyed = 0;
+        auto* source = new FakeImageSource(&destroyed);
+        check(SUCCEEDED(source_image->put_Source(source)) && invalidations == 1 &&
+                  last_layout,
+              "Image source retained with layout invalidation");
+        wuxm::IImageSource* retained = nullptr;
+        check(SUCCEEDED(source_image->get_Source(&retained)) && retained &&
+                  SameIdentity(static_cast<IInspectable*>(retained),
+                               static_cast<IInspectable*>(source)),
+              "Image source round-trip identity");
+        source->Release();
+        source = nullptr;
+        check(destroyed == 0, "Image owns assigned source");
+        if (retained) retained->Release();
+
+        check(SUCCEEDED(source_image->put_Stretch(wuxm::Stretch_Fill)) &&
+                  invalidations == 2 && last_layout,
+              "Image Stretch mutation invalidates layout");
+        check(source_image->put_Stretch(static_cast<wuxm::Stretch>(99)) == E_INVALIDARG &&
+                  invalidations == 2,
+              "Image rejects invalid Stretch");
+        const wux::Thickness nine_grid{1.0, 2.0, 3.0, 4.0};
+        check(SUCCEEDED(source_image->put_NineGrid(nine_grid)) &&
+                  invalidations == 3 && !last_layout,
+              "Image NineGrid is render-only invalidation");
+        wux::Thickness retained_grid{};
+        check(SUCCEEDED(source_image->get_NineGrid(&retained_grid)) &&
+                  retained_grid.Left == 1.0 && retained_grid.Top == 2.0 &&
+                  retained_grid.Right == 3.0 && retained_grid.Bottom == 4.0,
+              "Image NineGrid round-trip");
+        check(source_image->put_NineGrid({-1.0, 0.0, 0.0, 0.0}) == E_INVALIDARG,
+              "Image rejects negative NineGrid");
+
+        check(SUCCEEDED(source_image->put_Source(nullptr)) && invalidations == 4 &&
+                  last_layout && destroyed == 1,
+              "clearing Image source releases it and invalidates layout");
+        retained = reinterpret_cast<wuxm::IImageSource*>(1);
+        check(SUCCEEDED(source_image->get_Source(&retained)) && !retained,
+              "cleared Image source reads null");
+
+        if (native) {
+            native->LayoutElement()->DetachRenderInvalidationSink(sink);
+            native->Release();
+        }
+        source_image->Release();
+    }
+
+    // A brush is a live DependencyObject, not a colour copied at assignment.
+    // Exercise the private layout projection here because the public ABI can
+    // only return the same IBrush; it cannot prove what the renderer sees.
+    auto* painted_border = Activate<wuxc::IBorder>(
+        L"Windows.UI.Xaml.Controls.Border",
+        openxaml::iid::Windows_UI_Xaml_Controls_IBorder);
+    auto* shared_brush = Activate<wuxm::ISolidColorBrush>(
+        L"Windows.UI.Xaml.Media.SolidColorBrush",
+        openxaml::iid::Windows_UI_Xaml_Media_ISolidColorBrush);
+    check(painted_border != nullptr && shared_brush != nullptr,
+          "live brush projection activation");
+    if (painted_border && shared_brush) {
+        openxaml::winrt::IOpenXamlNative* native = nullptr;
+        check(SUCCEEDED(painted_border->QueryInterface(
+                  openxaml::winrt::IID_IOpenXamlNative,
+                  reinterpret_cast<void**>(&native))) && native != nullptr,
+              "Border private layout projection");
+        wuxm::IBrush* brush = nullptr;
+        check(SUCCEEDED(shared_brush->QueryInterface(
+                  openxaml::iid::Windows_UI_Xaml_Media_IBrush,
+                  reinterpret_cast<void**>(&brush))) && brush != nullptr,
+              "SolidColorBrush IBrush projection");
+        if (native && brush) {
+            int invalidations = 0;
+            auto sink = std::make_shared<openxaml::RenderInvalidationSink>(
+                [&](bool layout) {
+                    check(!layout, "brush mutation is render-only invalidation");
+                    ++invalidations;
+                });
+            openxaml::Element* layout = native->LayoutElement();
+            check(layout->AttachRenderInvalidationSink(sink),
+                  "attach brush invalidation sink");
+            const auto brush_equals = [](const openxaml::BrushValue& value,
+                                         openxaml::Color color) {
+                return value.declared && value.has_color && value.color == color;
+            };
+
+            const ABI::Windows::UI::Color red{255, 255, 0, 0};
+            const ABI::Windows::UI::Color blue{255, 0, 0, 255};
+            check(SUCCEEDED(shared_brush->put_Color(red)) &&
+                      SUCCEEDED(painted_border->put_Background(brush)),
+                  "assign live red background");
+            check(brush_equals(layout->background_brush(), {255, 255, 0, 0}) &&
+                      invalidations == 1,
+                  "red projected into renderer brush");
+
+            check(SUCCEEDED(shared_brush->put_Color(blue)) &&
+                      brush_equals(layout->background_brush(), {255, 0, 0, 255}) &&
+                      invalidations == 2,
+                  "live red-to-blue brush mutation");
+            check(SUCCEEDED(brush->put_Opacity(0.5)) &&
+                      brush_equals(layout->background_brush(), {128, 0, 0, 255}) &&
+                      invalidations == 3,
+                  "brush opacity projected into alpha");
+
+            auto* second_border = Activate<wuxc::IBorder>(
+                L"Windows.UI.Xaml.Controls.Border",
+                openxaml::iid::Windows_UI_Xaml_Controls_IBorder);
+            openxaml::winrt::IOpenXamlNative* second_native = nullptr;
+            if (second_border) {
+                second_border->QueryInterface(
+                    openxaml::winrt::IID_IOpenXamlNative,
+                    reinterpret_cast<void**>(&second_native));
+            }
+            check(second_border != nullptr && second_native != nullptr &&
+                      SUCCEEDED(second_border->put_Background(brush)),
+                  "shared brush assigned to second element");
+
+            // Drop both caller references. The two projections retain the
+            // brush, and a brush obtained back through either property must
+            // still update both renderer values.
+            brush->Release();
+            brush = nullptr;
+            shared_brush->Release();
+            shared_brush = nullptr;
+            wuxm::IBrush* retained = nullptr;
+            wuxm::ISolidColorBrush* retained_solid = nullptr;
+            check(SUCCEEDED(painted_border->get_Background(&retained)) && retained &&
+                      SUCCEEDED(retained->QueryInterface(
+                          openxaml::iid::Windows_UI_Xaml_Media_ISolidColorBrush,
+                          reinterpret_cast<void**>(&retained_solid))) && retained_solid,
+                  "element retains assigned shared brush");
+            if (retained_solid && second_native) {
+                const ABI::Windows::UI::Color green{255, 0, 255, 0};
+                check(SUCCEEDED(retained_solid->put_Color(green)) &&
+                          layout->background_brush().color.g == 255 &&
+                          second_native->LayoutElement()->background_brush().color.g == 255,
+                      "retained shared brush updates every subscriber");
+            }
+
+            auto* replacement = Activate<wuxm::ISolidColorBrush>(
+                L"Windows.UI.Xaml.Media.SolidColorBrush",
+                openxaml::iid::Windows_UI_Xaml_Media_ISolidColorBrush);
+            wuxm::IBrush* replacement_brush = nullptr;
+            if (replacement) {
+                replacement->put_Color({255, 255, 255, 0});
+                replacement->QueryInterface(
+                    openxaml::iid::Windows_UI_Xaml_Media_IBrush,
+                    reinterpret_cast<void**>(&replacement_brush));
+            }
+            check(replacement_brush &&
+                      SUCCEEDED(painted_border->put_Background(replacement_brush)) &&
+                      layout->background_brush().color.r == 255,
+                  "brush replacement projects new value");
+            const int before_old_mutation = invalidations;
+            if (retained_solid) retained_solid->put_Color(red);
+            check(layout->background_brush().color.r == 255 &&
+                      invalidations == before_old_mutation,
+                  "replacement detaches old brush observer");
+
+            check(SUCCEEDED(painted_border->put_BorderBrush(replacement_brush)) &&
+                      layout->border_brush().has_color &&
+                      layout->border_brush().color.r == 255,
+                  "BorderBrush projects into renderer border slot");
+
+            auto verify_background = [&](auto* object, const char* what) {
+                openxaml::winrt::IOpenXamlNative* projected = nullptr;
+                const bool queried = object && SUCCEEDED(object->QueryInterface(
+                    openxaml::winrt::IID_IOpenXamlNative,
+                    reinterpret_cast<void**>(&projected))) && projected;
+                check(queried && brush_equals(
+                          projected->LayoutElement()->background_brush(),
+                          {255, 255, 255, 0}),
+                      what);
+                if (projected) projected->Release();
+            };
+            auto* panel = Activate<wuxc::IPanel>(
+                L"Windows.UI.Xaml.Controls.Grid",
+                openxaml::iid::Windows_UI_Xaml_Controls_IPanel);
+            check(panel && SUCCEEDED(panel->put_Background(replacement_brush)),
+                  "Panel background assignment");
+            verify_background(panel, "Panel background renderer projection");
+            if (panel) panel->Release();
+
+            auto* presenter = Activate<wuxc::IContentPresenter4>(
+                L"Windows.UI.Xaml.Controls.ContentPresenter",
+                openxaml::iid::Windows_UI_Xaml_Controls_IContentPresenter4);
+            check(presenter && SUCCEEDED(presenter->put_Background(replacement_brush)),
+                  "ContentPresenter background assignment");
+            verify_background(presenter, "ContentPresenter background renderer projection");
+            if (presenter) presenter->Release();
+
+            auto* projected_control = Activate<wuxc::IControl>(
+                L"Windows.UI.Xaml.Controls.ContentControl",
+                openxaml::iid::Windows_UI_Xaml_Controls_IControl);
+            check(projected_control &&
+                      SUCCEEDED(projected_control->put_Background(replacement_brush)),
+                  "ContentControl background assignment");
+            verify_background(projected_control,
+                              "ContentControl background renderer projection");
+            if (projected_control) projected_control->Release();
+
+            check(SUCCEEDED(painted_border->put_Background(nullptr)) &&
+                      !layout->background_brush().declared,
+                  "null brush becomes undeclared");
+
+            auto* image = Activate<wuxm::IImageBrush>(
+                L"Windows.UI.Xaml.Media.ImageBrush",
+                openxaml::iid::Windows_UI_Xaml_Media_IImageBrush);
+            wuxm::IBrush* image_brush = nullptr;
+            if (image) image->QueryInterface(
+                openxaml::iid::Windows_UI_Xaml_Media_IBrush,
+                reinterpret_cast<void**>(&image_brush));
+            check(image_brush && SUCCEEDED(painted_border->put_Background(image_brush)) &&
+                      layout->background_brush().declared &&
+                      layout->background_brush().kind == openxaml::BrushKind::Image &&
+                      !layout->background_brush().has_image_source,
+                  "empty ImageBrush projects as a typed transparent no-op");
+            const int before_image_mutation = invalidations;
+            check(image_brush && SUCCEEDED(image_brush->put_Opacity(0.5)) &&
+                      layout->background_brush().kind == openxaml::BrushKind::Image &&
+                      !layout->background_brush().has_image_source &&
+                      invalidations == before_image_mutation + 1,
+                  "ImageBrush mutations retain typed state and invalidate rendering");
+
+            sink->Close();
+            layout->DetachRenderInvalidationSink(sink);
+            if (image_brush) image_brush->Release();
+            if (image) image->Release();
+            if (replacement_brush) replacement_brush->Release();
+            if (replacement) replacement->Release();
+            if (retained_solid) retained_solid->Release();
+            if (retained) retained->Release();
+            if (second_native) second_native->Release();
+            if (second_border) second_border->Release();
+        }
+        if (brush) brush->Release();
+        if (native) native->Release();
+    }
+    if (shared_brush) shared_brush->Release();
+    if (painted_border) painted_border->Release();
+
     auto* weak_border = Activate<wux::IUIElement>(
         L"Windows.UI.Xaml.Controls.Border", openxaml::iid::Windows_UI_Xaml_IUIElement);
     check(weak_border != nullptr, "Border activation for weak reference");
@@ -393,10 +1015,151 @@ int main() {
         if (weak_border) weak_border->Release();
     }
 
+    auto* scale = Activate<wuxm::IScaleTransform>(
+        L"Windows.UI.Xaml.Media.ScaleTransform",
+        openxaml::iid::Windows_UI_Xaml_Media_IScaleTransform);
+    check(scale != nullptr, "ScaleTransform activation");
+    if (scale) {
+        wuxm::ITransform* transform = nullptr;
+        wuxm::IGeneralTransform* general = nullptr;
+        auto* target = Activate<wux::IUIElement>(
+            L"Windows.UI.Xaml.Controls.Grid",
+            openxaml::iid::Windows_UI_Xaml_IUIElement);
+        openxaml::winrt::IOpenXamlNative* native = nullptr;
+        if (target) {
+            target->QueryInterface(openxaml::winrt::IID_IOpenXamlNative,
+                                   reinterpret_cast<void**>(&native));
+        }
+        check(SUCCEEDED(scale->put_ScaleX(2.0)) &&
+                  SUCCEEDED(scale->put_ScaleY(3.0)) &&
+                  SUCCEEDED(scale->put_CenterX(4.0)) &&
+                  SUCCEEDED(scale->put_CenterY(5.0)) &&
+                  SUCCEEDED(scale->QueryInterface(
+                      openxaml::iid::Windows_UI_Xaml_Media_ITransform,
+                      reinterpret_cast<void**>(&transform))) && transform &&
+                  SUCCEEDED(scale->QueryInterface(
+                      openxaml::iid::Windows_UI_Xaml_Media_IGeneralTransform,
+                      reinterpret_cast<void**>(&general))) && general,
+              "ScaleTransform base projections and values");
+        check(target && native && transform &&
+                  SUCCEEDED(target->put_RenderTransform(transform)) &&
+                  SUCCEEDED(target->put_RenderTransformOrigin({0.5f, 0.25f})),
+              "UIElement live ScaleTransform assignment");
+        if (native) {
+            const openxaml::VisualTransform current =
+                native->LayoutElement()->visual_transform();
+            check(current.kind == openxaml::VisualTransformKind::Scale &&
+                      current.scale_x == 2.0 && current.scale_y == 3.0 &&
+                      current.center_x == 4.0 && current.center_y == 5.0,
+                  "ScaleTransform projects into retained visual state");
+            check(SUCCEEDED(scale->put_ScaleX(4.0)) &&
+                      native->LayoutElement()->visual_transform().scale_x == 4.0,
+                  "assigned ScaleTransform mutation remains live");
+        }
+        if (general) {
+            wf::Point transformed{};
+            check(SUCCEEDED(general->TransformPoint({5.0f, 6.0f}, &transformed)) &&
+                      transformed.X == 8.0f && transformed.Y == 8.0f,
+                  "ScaleTransform point mapping");
+            general->Release();
+        }
+        if (transform) transform->Release();
+        if (native) native->Release();
+        if (target) target->Release();
+        scale->Release();
+    }
+
+    auto* user_control = Activate<wuxc::IUserControl>(
+        L"Windows.UI.Xaml.Controls.UserControl",
+        openxaml::iid::Windows_UI_Xaml_Controls_IUserControl);
+    check(user_control != nullptr, "UserControl activation");
+    if (user_control) {
+        auto* user_content = static_cast<wuxc::IContentControl*>(nullptr);
+        auto* user_native = static_cast<openxaml::winrt::IOpenXamlNative*>(nullptr);
+        auto* user_child = Activate<wux::IUIElement>(
+            L"Windows.UI.Xaml.Controls.Grid",
+            openxaml::iid::Windows_UI_Xaml_IUIElement);
+        auto* child_native = static_cast<openxaml::winrt::IOpenXamlNative*>(nullptr);
+        check(SUCCEEDED(user_control->QueryInterface(
+                  openxaml::iid::Windows_UI_Xaml_Controls_IContentControl,
+                  reinterpret_cast<void**>(&user_content))) && user_content,
+              "UserControl IContentControl projection");
+        check(SUCCEEDED(user_control->QueryInterface(
+                  openxaml::winrt::IID_IOpenXamlNative,
+                  reinterpret_cast<void**>(&user_native))) && user_native,
+              "UserControl private layout projection");
+        if (user_child) {
+            user_child->QueryInterface(
+                openxaml::winrt::IID_IOpenXamlNative,
+                reinterpret_cast<void**>(&child_native));
+        }
+        IInspectable* child_inspectable = nullptr;
+        if (user_child) {
+            user_child->QueryInterface(openxaml::iid::IInspectable,
+                                       reinterpret_cast<void**>(&child_inspectable));
+        }
+        check(user_content && user_native && child_native && child_inspectable &&
+                  SUCCEEDED(user_content->put_Content(child_inspectable)) &&
+                  SUCCEEDED(user_native->PerformLayout(320.0, 200.0)),
+              "UserControl full-bounds content layout");
+        if (child_native) {
+            const openxaml::Rect slot = child_native->LayoutElement()->layout_slot();
+            check(slot.x == 0.0 && slot.y == 0.0 && slot.width == 320.0 &&
+                      slot.height == 200.0,
+                  "UserControl arranges zero-desired content to its complete bounds");
+        }
+        if (child_inspectable) child_inspectable->Release();
+        if (child_native) child_native->Release();
+        if (user_child) user_child->Release();
+        if (user_native) user_native->Release();
+        if (user_content) user_content->Release();
+        user_control->Release();
+    }
+
     auto* page = Activate<wuxc::IPage>(L"Windows.UI.Xaml.Controls.Page",
                                        openxaml::iid::Windows_UI_Xaml_Controls_IPage);
     check(page != nullptr, "Page activation");
     if (page) {
+        auto* page_content = static_cast<wuxc::IContentControl*>(nullptr);
+        auto* page_native = static_cast<openxaml::winrt::IOpenXamlNative*>(nullptr);
+        auto* page_child = Activate<wux::IUIElement>(
+            L"Windows.UI.Xaml.Controls.Grid",
+            openxaml::iid::Windows_UI_Xaml_IUIElement);
+        auto* child_native = static_cast<openxaml::winrt::IOpenXamlNative*>(nullptr);
+        check(SUCCEEDED(page->QueryInterface(
+                  openxaml::iid::Windows_UI_Xaml_Controls_IContentControl,
+                  reinterpret_cast<void**>(&page_content))) && page_content,
+              "Page IContentControl projection");
+        check(SUCCEEDED(page->QueryInterface(
+                  openxaml::winrt::IID_IOpenXamlNative,
+                  reinterpret_cast<void**>(&page_native))) && page_native,
+              "Page private layout projection");
+        if (page_child) {
+            page_child->QueryInterface(
+                openxaml::winrt::IID_IOpenXamlNative,
+                reinterpret_cast<void**>(&child_native));
+        }
+        IInspectable* child_inspectable = nullptr;
+        if (page_child) {
+            page_child->QueryInterface(openxaml::iid::IInspectable,
+                                       reinterpret_cast<void**>(&child_inspectable));
+        }
+        check(page_content && page_native && child_native && child_inspectable &&
+                  SUCCEEDED(page_content->put_Content(child_inspectable)) &&
+                  SUCCEEDED(page_native->PerformLayout(320.0, 200.0)),
+              "Page full-bounds content layout");
+        if (child_native) {
+            const openxaml::Rect slot = child_native->LayoutElement()->layout_slot();
+            check(slot.x == 0.0 && slot.y == 0.0 && slot.width == 320.0 &&
+                      slot.height == 200.0,
+                  "Page arranges zero-desired content to its complete bounds");
+        }
+        if (child_inspectable) child_inspectable->Release();
+        if (child_native) child_native->Release();
+        if (page_child) page_child->Release();
+        if (page_native) page_native->Release();
+        if (page_content) page_content->Release();
+
         wux::IUIElement10* element10 = nullptr;
         check(SUCCEEDED(page->QueryInterface(
                   openxaml::iid::Windows_UI_Xaml_IUIElement10,
@@ -598,6 +1361,13 @@ int main() {
         DOUBLE radius = 0;
         check(SUCCEEDED(rectangle->get_RadiusX(&radius)) && radius == 4,
               "Rectangle radius round-trip");
+        wuxs::IShape* rectangle_shape = nullptr;
+        check(SUCCEEDED(rectangle->QueryInterface(
+                  openxaml::iid::Windows_UI_Xaml_Shapes_IShape,
+                  reinterpret_cast<void**>(&rectangle_shape))) &&
+                  rectangle_shape,
+              "Rectangle IShape projection");
+        if (rectangle_shape) rectangle_shape->Release();
         rectangle->Release();
     }
 
@@ -647,7 +1417,75 @@ int main() {
     auto* path = Activate<wuxs::IPath>(L"Windows.UI.Xaml.Shapes.Path",
                                        openxaml::iid::Windows_UI_Xaml_Shapes_IPath);
     check(path != nullptr, "Path activation");
-    if (path) path->Release();
+    if (path) {
+        wuxs::IShape* shape = nullptr;
+        check(SUCCEEDED(path->QueryInterface(
+                  openxaml::iid::Windows_UI_Xaml_Shapes_IShape,
+                  reinterpret_cast<void**>(&shape))) && shape,
+              "Path IShape projection");
+        if (shape) {
+            DOUBLE number = -1;
+            wuxm::Stretch stretch = wuxm::Stretch_Fill;
+            check(SUCCEEDED(shape->get_StrokeThickness(&number)) && number == 0.0,
+                  "Shape default StrokeThickness");
+            check(SUCCEEDED(shape->get_StrokeMiterLimit(&number)) && number == 10.0,
+                  "Shape default StrokeMiterLimit");
+            check(SUCCEEDED(shape->get_Stretch(&stretch)) &&
+                      stretch == wuxm::Stretch_None,
+                  "Shape default Stretch");
+            check(shape->put_StrokeThickness(-1.0) == E_INVALIDARG &&
+                      shape->put_StrokeMiterLimit(0.5) == E_INVALIDARG &&
+                      shape->put_Stretch(static_cast<wuxm::Stretch>(99)) == E_INVALIDARG,
+                  "Shape validation");
+
+            auto* solid = Activate<wuxm::ISolidColorBrush>(
+                L"Windows.UI.Xaml.Media.SolidColorBrush",
+                openxaml::iid::Windows_UI_Xaml_Media_ISolidColorBrush);
+            wuxm::IBrush* brush = nullptr;
+            if (solid) {
+                const ABI::Windows::UI::Color red{255, 0xf0, 0x20, 0x10};
+                check(SUCCEEDED(solid->put_Color(red)), "Shape brush color");
+                check(SUCCEEDED(solid->QueryInterface(
+                          openxaml::iid::Windows_UI_Xaml_Media_IBrush,
+                          reinterpret_cast<void**>(&brush))) && brush,
+                      "Shape brush projection");
+            }
+            check(brush && SUCCEEDED(shape->put_Fill(brush)) &&
+                      SUCCEEDED(shape->put_Stroke(brush)) &&
+                      SUCCEEDED(shape->put_StrokeThickness(2.0)),
+                  "Shape retained paint setters");
+            wuxm::IBrush* retained = nullptr;
+            check(SUCCEEDED(shape->get_Fill(&retained)) &&
+                      SameIdentity(static_cast<IInspectable*>(brush),
+                                   static_cast<IInspectable*>(retained)),
+                  "Shape Fill identity round-trip");
+            if (retained) retained->Release();
+
+            openxaml::winrt::IOpenXamlNative* native = nullptr;
+            check(SUCCEEDED(path->QueryInterface(
+                      openxaml::winrt::IID_IOpenXamlNative,
+                      reinterpret_cast<void**>(&native))) && native,
+                  "Shape native projection");
+            if (native) {
+                const auto& fill = native->LayoutElement()->fill_brush();
+                const auto& stroke = native->LayoutElement()->stroke_brush();
+                check(fill.declared && fill.has_color && fill.color.r == 0xf0 &&
+                          stroke.declared && stroke.has_color && stroke.color.r == 0xf0,
+                      "Shape live brush retention");
+                native->Release();
+            }
+
+            wuxm::ITransform* geometry_transform = nullptr;
+            check(SUCCEEDED(shape->get_GeometryTransform(&geometry_transform)) &&
+                      geometry_transform,
+                  "Shape identity GeometryTransform");
+            if (geometry_transform) geometry_transform->Release();
+            if (brush) brush->Release();
+            if (solid) solid->Release();
+            shape->Release();
+        }
+        path->Release();
+    }
     auto* path_icon = Activate<wuxc::IPathIcon>(L"Windows.UI.Xaml.Controls.PathIcon",
                                                 openxaml::iid::Windows_UI_Xaml_Controls_IPathIcon);
     check(path_icon != nullptr, "PathIcon activation");

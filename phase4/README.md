@@ -28,6 +28,29 @@ no missing import or runtime class, OpenXaml `E_NOTIMPL`, XBF materialization
 failure, C++ exception, or access violation. Its committed expectation is
 `expected/boot-frontier.json`.
 
+For a release-candidate check, use the artifact-coupled launcher rather than a
+prefix that may contain an older registration. It refuses a nonempty prefix,
+registers the exact DLL argument, verifies that registration, launches from
+the Terminal deployment directory with the same directory as the XBF root,
+and requires a clean, non-empty committed UI frame before a bounded timeout is
+success. It also fetches the pinned Apache-2.0 WinUI-compatible icon font from
+`phase3/xamlcore/runtime_fonts.json`, verifies its SHA-256 under `/tmp`, and
+passes a private family-alias manifest to DirectWrite. No font binary is
+written to the repository:
+
+```bash
+python3 -B phase4/scripts/run_terminal_integration.py \
+  --xaml-dll /tmp/openterminal-xamlcore/openxaml.dll \
+  --executable /tmp/openterminal-mingw/native-build/WindowsTerminal.exe \
+  --prefix /tmp/openterminal-exact-integration \
+  --timeout 30
+```
+
+Omit `--prefix` for an automatically removed temporary prefix. Supply
+`--log /tmp/openxaml-terminal.log` when the launch trace must survive that
+cleanup. No DLL, executable, XBF or Wine-prefix file is written to the
+repository.
+
 This is a boot milestone, not complete UI validation. The shipped XBF object
 graphs now materialize, but full control rendering, swap-chain presentation,
 input, accessibility, live resource behavior and ConPTY-backed tabs remain the

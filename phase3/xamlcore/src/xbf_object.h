@@ -31,6 +31,13 @@ struct Object {
     std::vector<Value> items;
     std::map<std::string, Value> dictionary;
     std::map<std::string, std::shared_ptr<Object>> names;
+
+    // x:Load="False" is represented in the primary stream by an internal
+    // DeferredElement. Its real object graph lives in a custom-runtime-data
+    // substream. Keep that graph on the marker without activating it: the
+    // runtime namescope materializes it only when FindName requests the
+    // deferred root.
+    std::shared_ptr<Object> deferred_content;
 };
 
 // Materializes the ordinary XBF node stream into a platform-neutral object

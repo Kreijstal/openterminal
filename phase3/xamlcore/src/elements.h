@@ -13,20 +13,26 @@
 #ifndef OPENXAML_ELEMENTS_H
 #define OPENXAML_ELEMENTS_H
 
+#include <algorithm>
 #include <cmath>
+#include <exception>
 #include <map>
 #include <memory>
 #include <roapi.h>
+#include <set>
 
 #include "border.h"
 #include "collection.h"
 #include "com.h"
+#include "core_dispatcher.h"
+#include "external_surface_binding.h"
 #include "properties.h"
 #include "strings.h"
 #include "grid.h"
 #include "openxaml_abi_stubs.h"
 #include "stack_panel.h"
 #include "text.h"
+#include "xaml_focus.h"
 #include "advanced_controls.h"
 #include "basic_controls.h"
 #include "canvas.h"
@@ -37,6 +43,28 @@
 #include "shape.h"
 
 namespace openxaml::winrt {
+
+inline void TraceLayoutException(const char* stage, const char* detail) noexcept {
+    char line[768]{};
+    const char* prefix = "OpenXaml: island ";
+    std::size_t used = 0;
+    auto append = [&](const char* source) {
+        if (!source) source = "unknown C++ exception";
+        while (*source && used + 2 < sizeof(line)) {
+            const unsigned char value = static_cast<unsigned char>(*source++);
+            line[used++] = value >= 0x20 && value != 0x7f
+                ? static_cast<char>(value)
+                : ' ';
+        }
+    };
+    append(prefix);
+    append(stage);
+    append(" degraded: ");
+    append(detail);
+    line[used++] = '\n';
+    line[used] = '\0';
+    TraceRuntime(line);
+}
 
 namespace wf = ABI::Windows::Foundation;
 namespace wux = ABI::Windows::UI::Xaml;
@@ -89,6 +117,66 @@ public:
 private:
     openxaml::Size previous_;
     openxaml::Size current_;
+};
+
+// RangeBase raises this routed event whenever coercion changes the effective
+// Value. Keep OriginalSource strongly held because a handler may retain the
+// arguments after the synchronous event dispatch has returned.
+class RangeBaseValueChangedEventArgsObject final
+    : public ComObject,
+      public abi::NotImpl_IRangeBaseValueChangedEventArgs,
+      public abi::NotImpl_IRoutedEventArgs {
+public:
+    RangeBaseValueChangedEventArgsObject(IInspectable* source,
+                                         double old_value,
+                                         double new_value)
+        : source_(source), old_value_(old_value), new_value_(new_value) {
+        if (source_) source_->AddRef();
+    }
+    ~RangeBaseValueChangedEventArgsObject() override {
+        if (source_) source_->Release();
+    }
+
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(
+            ::openxaml::iid::Windows_UI_Xaml_Controls_Primitives_IRangeBaseValueChangedEventArgs,
+            wuxcp::IRangeBaseValueChangedEventArgs)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IRoutedEventArgs,
+                        wux::IRoutedEventArgs)
+        OPENXAML_QI_ARM(IID_IUnknown,
+                        wuxcp::IRangeBaseValueChangedEventArgs)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable,
+                        wuxcp::IRangeBaseValueChangedEventArgs)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_OldValue(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = old_value_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_NewValue(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = new_value_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_OriginalSource(IInspectable** value) override {
+        if (!value) return E_POINTER;
+        *value = source_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+
+private:
+    IInspectable* source_ = nullptr;
+    double old_value_ = 0.0;
+    double new_value_ = 0.0;
 };
 
 // --- collection traits --------------------------------------------------------
@@ -291,10 +379,167 @@ public:
     }
 };
 
+class TransformMutationObserver {
+public:
+    virtual ~TransformMutationObserver() = default;
+    virtual void TransformValueChanged(const openxaml::VisualTransform& value) = 0;
+};
+
+// {6F70656E-7861-6D6C-9E05-7472616E7366}
+inline constexpr GUID IID_IOpenXamlTransformSource = {
+    0x6f70656e, 0x7861, 0x6d6c,
+    {0x9e, 0x05, 0x74, 0x72, 0x61, 0x6e, 0x73, 0x66}};
+
+struct IOpenXamlTransformSource : IUnknown {
+    virtual HRESULT Subscribe(TransformMutationObserver* observer, LONGLONG* token,
+                              openxaml::VisualTransform* current) = 0;
+    virtual void Unsubscribe(LONGLONG token) = 0;
+};
+
+class ScaleTransformObject final : public ComObject,
+                                   public abi::NotImpl_IDependencyObject,
+                                   public wuxm::IGeneralTransform,
+                                   public wuxm::ITransform,
+                                   public wuxm::IScaleTransform,
+                                   public IOpenXamlTransformSource {
+public:
+    using PrimaryInterface = wuxm::IScaleTransform;
+    explicit ScaleTransformObject(double scale_x = 1.0, double scale_y = 1.0,
+                                  double center_x = 0.0, double center_y = 0.0)
+        : center_x_(center_x), center_y_(center_y), scale_x_(scale_x), scale_y_(scale_y) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Media.ScaleTransform";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Media_IScaleTransform,
+                        wuxm::IScaleTransform)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Media_ITransform,
+                        wuxm::ITransform)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Media_IGeneralTransform,
+                        wuxm::IGeneralTransform)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IDependencyObject,
+                        wux::IDependencyObject)
+        OPENXAML_QI_ARM(IID_IOpenXamlTransformSource, IOpenXamlTransformSource)
+        OPENXAML_QI_ARM(IID_IUnknown, wuxm::IScaleTransform)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wuxm::IScaleTransform)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+#define OPENXAML_SCALE_PROPERTY(name, field)                         \
+    HRESULT STDMETHODCALLTYPE get_##name(DOUBLE* value) override {  \
+        if (!value) return E_POINTER;                               \
+        *value = field;                                             \
+        return S_OK;                                                \
+    }                                                               \
+    HRESULT STDMETHODCALLTYPE put_##name(DOUBLE value) override {   \
+        if (std::isnan(value)) value = 0.0;                         \
+        if (!std::isfinite(value)) return E_INVALIDARG;             \
+        if (field == value) return S_OK;                            \
+        field = value;                                              \
+        NotifyObservers();                                          \
+        return S_OK;                                                \
+    }
+    OPENXAML_SCALE_PROPERTY(CenterX, center_x_)
+    OPENXAML_SCALE_PROPERTY(CenterY, center_y_)
+    OPENXAML_SCALE_PROPERTY(ScaleX, scale_x_)
+    OPENXAML_SCALE_PROPERTY(ScaleY, scale_y_)
+#undef OPENXAML_SCALE_PROPERTY
+
+    HRESULT STDMETHODCALLTYPE get_Inverse(wuxm::IGeneralTransform** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (scale_x_ == 0.0 || scale_y_ == 0.0) return S_OK;
+        auto* inverse = new (std::nothrow) ScaleTransformObject(
+            1.0 / scale_x_, 1.0 / scale_y_, center_x_, center_y_);
+        if (!inverse) return E_OUTOFMEMORY;
+        *value = static_cast<wuxm::IGeneralTransform*>(inverse);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE TransformPoint(wf::Point point, wf::Point* value) override {
+        if (!value) return E_POINTER;
+        value->X = static_cast<FLOAT>(center_x_ + (point.X - center_x_) * scale_x_);
+        value->Y = static_cast<FLOAT>(center_y_ + (point.Y - center_y_) * scale_y_);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE TryTransform(wf::Point point, wf::Point* value,
+                                           boolean* transformed) override {
+        if (!value || !transformed) return E_POINTER;
+        *transformed = 1;
+        return TransformPoint(point, value);
+    }
+    HRESULT STDMETHODCALLTYPE TransformBounds(wf::Rect rect, wf::Rect* value) override {
+        if (!value) return E_POINTER;
+        wf::Point first{rect.X, rect.Y};
+        wf::Point second{rect.X + rect.Width, rect.Y + rect.Height};
+        TransformPoint(first, &first);
+        TransformPoint(second, &second);
+        value->X = std::min(first.X, second.X);
+        value->Y = std::min(first.Y, second.Y);
+        value->Width = std::abs(second.X - first.X);
+        value->Height = std::abs(second.Y - first.Y);
+        return S_OK;
+    }
+    HRESULT Subscribe(TransformMutationObserver* observer, LONGLONG* token,
+                      openxaml::VisualTransform* current) override {
+        if (!observer || !token || !current) return E_INVALIDARG;
+        const LONGLONG next = ++next_observer_token_;
+        observers_[next] = observer;
+        *token = next;
+        *current = Snapshot();
+        return S_OK;
+    }
+    void Unsubscribe(LONGLONG token) override { observers_.erase(token); }
+
+private:
+    openxaml::VisualTransform Snapshot() const {
+        return openxaml::VisualTransform::Scale(scale_x_, scale_y_, center_x_, center_y_);
+    }
+    void NotifyObservers() {
+        const openxaml::VisualTransform value = Snapshot();
+        std::vector<LONGLONG> tokens;
+        tokens.reserve(observers_.size());
+        for (const auto& [token, _] : observers_) tokens.push_back(token);
+        for (LONGLONG token : tokens) {
+            const auto found = observers_.find(token);
+            if (found != observers_.end()) found->second->TransformValueChanged(value);
+        }
+    }
+    DOUBLE center_x_ = 0.0;
+    DOUBLE center_y_ = 0.0;
+    DOUBLE scale_x_ = 1.0;
+    DOUBLE scale_y_ = 1.0;
+    LONGLONG next_observer_token_ = 0;
+    std::map<LONGLONG, TransformMutationObserver*> observers_;
+};
+
+// Private live-brush boundary. A projected element keeps the public IBrush
+// alive and subscribes to mutable brush state through this interface. The
+// observer is deliberately non-owning: the projection unsubscribes before it
+// releases the brush, preventing a brush -> element -> brush cycle.
+class BrushMutationObserver {
+public:
+    virtual ~BrushMutationObserver() = default;
+    virtual void BrushValueChanged(const openxaml::BrushValue& value) = 0;
+};
+
+// {6F70656E-7861-6D6C-9E03-627275736873}
+inline constexpr GUID IID_IOpenXamlBrushSource = {
+    0x6f70656e, 0x7861, 0x6d6c, {0x9e, 0x03, 0x62, 0x72, 0x75, 0x73, 0x68, 0x73}};
+
+struct IOpenXamlBrushSource : IUnknown {
+    virtual HRESULT Subscribe(BrushMutationObserver* observer, LONGLONG* token,
+                              openxaml::BrushValue* current) = 0;
+    virtual void Unsubscribe(LONGLONG token) = 0;
+};
+
 class ImageBrushObject final : public ComObject,
                                public abi::NotImpl_IDependencyObject,
                                public abi::NotImpl_IBrush,
-                               public abi::NotImpl_IImageBrush {
+                               public abi::NotImpl_IImageBrush,
+                               public IOpenXamlBrushSource {
 public:
     using PrimaryInterface = wuxm::IImageBrush;
     ~ImageBrushObject() override {
@@ -313,6 +558,7 @@ public:
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Media_IBrush, wuxm::IBrush)
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IDependencyObject,
                         wux::IDependencyObject)
+        OPENXAML_QI_ARM(IID_IOpenXamlBrushSource, IOpenXamlBrushSource)
         OPENXAML_QI_ARM(IID_IUnknown, wuxm::IImageBrush)
         OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wuxm::IImageBrush)
         *object = nullptr;
@@ -326,25 +572,34 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE put_Opacity(DOUBLE value) override {
-        opacity_ = value; return S_OK;
+        if (!std::isfinite(value) || value < 0.0 || value > 1.0) return E_INVALIDARG;
+        opacity_ = value;
+        NotifyObservers();
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_Transform(wuxm::ITransform** value) override {
         return Get(transform_, value);
     }
     HRESULT STDMETHODCALLTYPE put_Transform(wuxm::ITransform* value) override {
-        return Put(transform_, value);
+        const HRESULT hr = Put(transform_, value);
+        if (SUCCEEDED(hr)) NotifyObservers();
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE get_RelativeTransform(wuxm::ITransform** value) override {
         return Get(relative_transform_, value);
     }
     HRESULT STDMETHODCALLTYPE put_RelativeTransform(wuxm::ITransform* value) override {
-        return Put(relative_transform_, value);
+        const HRESULT hr = Put(relative_transform_, value);
+        if (SUCCEEDED(hr)) NotifyObservers();
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE get_ImageSource(wuxm::IImageSource** value) override {
         return Get(source_, value);
     }
     HRESULT STDMETHODCALLTYPE put_ImageSource(wuxm::IImageSource* value) override {
-        return Put(source_, value);
+        const HRESULT hr = Put(source_, value);
+        if (SUCCEEDED(hr)) NotifyObservers();
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE add_ImageFailed(wux::IExceptionRoutedEventHandler* handler,
                                                EventRegistrationToken* token) override {
@@ -360,6 +615,17 @@ public:
     HRESULT STDMETHODCALLTYPE remove_ImageOpened(EventRegistrationToken token) override {
         return Remove(token);
     }
+    HRESULT Subscribe(BrushMutationObserver* observer, LONGLONG* token,
+                      openxaml::BrushValue* current) override {
+        if (!observer || !token || !current) return E_INVALIDARG;
+        *token = 0;
+        const LONGLONG next = ++next_observer_token_;
+        observers_[next] = observer;
+        *token = next;
+        *current = ProjectedValue();
+        return S_OK;
+    }
+    void Unsubscribe(LONGLONG token) override { observers_.erase(token); }
 
 private:
     template <class T> static HRESULT Get(T* source, T** value) {
@@ -384,6 +650,24 @@ private:
         if (found == handlers_.end()) return S_OK;
         found->second->Release(); handlers_.erase(found); return S_OK;
     }
+    openxaml::BrushValue ProjectedValue() const {
+        // Null ImageSource is the ImageBrush default and paints nothing,
+        // independent of opacity, stretch or transforms. A non-null source is
+        // retained as present, but resource identity/decoding remains a named
+        // renderer boundary until the scene owns the IImageSource snapshot.
+        return openxaml::BrushValue::Image(source_ != nullptr);
+    }
+    void NotifyObservers() {
+        const openxaml::BrushValue value = ProjectedValue();
+        std::vector<LONGLONG> snapshot;
+        snapshot.reserve(observers_.size());
+        for (const auto& [token, _] : observers_) snapshot.push_back(token);
+        for (LONGLONG token : snapshot) {
+            const auto current = observers_.find(token);
+            if (current != observers_.end())
+                current->second->BrushValueChanged(value);
+        }
+    }
 
     DOUBLE opacity_ = 1.0;
     wuxm::IImageSource* source_ = nullptr;
@@ -391,12 +675,15 @@ private:
     wuxm::ITransform* relative_transform_ = nullptr;
     LONGLONG next_token_ = 0;
     std::map<LONGLONG, IUnknown*> handlers_;
+    LONGLONG next_observer_token_ = 0;
+    std::map<LONGLONG, BrushMutationObserver*> observers_;
 };
 
 class SolidColorBrushObject final : public ComObject,
                                     public abi::NotImpl_IDependencyObject,
                                     public abi::NotImpl_IBrush,
-                                    public abi::NotImpl_ISolidColorBrush {
+                                    public abi::NotImpl_ISolidColorBrush,
+                                    public IOpenXamlBrushSource {
 public:
     using PrimaryInterface = wuxm::ISolidColorBrush;
     ~SolidColorBrushObject() override {
@@ -413,6 +700,7 @@ public:
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Media_IBrush, wuxm::IBrush)
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IDependencyObject,
                         wux::IDependencyObject)
+        OPENXAML_QI_ARM(IID_IOpenXamlBrushSource, IOpenXamlBrushSource)
         OPENXAML_QI_ARM(IID_IUnknown, wuxm::ISolidColorBrush)
         OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wuxm::ISolidColorBrush)
         *object = nullptr;
@@ -426,6 +714,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE put_Color(ABI::Windows::UI::Color value) override {
         color_ = value;
+        NotifyObservers();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_Opacity(DOUBLE* value) override {
@@ -434,20 +723,39 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE put_Opacity(DOUBLE value) override {
+        if (!std::isfinite(value) || value < 0.0 || value > 1.0) return E_INVALIDARG;
         opacity_ = value;
+        NotifyObservers();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_Transform(wuxm::ITransform** value) override {
         return Get(transform_, value);
     }
     HRESULT STDMETHODCALLTYPE put_Transform(wuxm::ITransform* value) override {
-        return Put(transform_, value);
+        const HRESULT hr = Put(transform_, value);
+        if (SUCCEEDED(hr)) NotifyObservers();
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE get_RelativeTransform(wuxm::ITransform** value) override {
         return Get(relative_transform_, value);
     }
     HRESULT STDMETHODCALLTYPE put_RelativeTransform(wuxm::ITransform* value) override {
-        return Put(relative_transform_, value);
+        const HRESULT hr = Put(relative_transform_, value);
+        if (SUCCEEDED(hr)) NotifyObservers();
+        return hr;
+    }
+    HRESULT Subscribe(BrushMutationObserver* observer, LONGLONG* token,
+                      openxaml::BrushValue* current) override {
+        if (!observer || !token || !current) return E_INVALIDARG;
+        *token = 0;
+        const LONGLONG next = ++next_observer_token_;
+        observers_[next] = observer;
+        *token = next;
+        *current = ProjectedValue();
+        return S_OK;
+    }
+    void Unsubscribe(LONGLONG token) override {
+        observers_.erase(token);
     }
 private:
     template <class T> static HRESULT Get(T* source, T** value) {
@@ -462,10 +770,132 @@ private:
         target = value;
         return S_OK;
     }
+    openxaml::BrushValue ProjectedValue() const {
+        // A transformed solid brush is not an axis-aligned solid fill. Keep it
+        // declared but colourless so the display-list builder emits its named
+        // unsupported-brush refusal instead of discarding the transform.
+        if (transform_ || relative_transform_)
+            return openxaml::BrushValue{true, false, {}};
+        const auto alpha = static_cast<unsigned char>(
+            std::floor(static_cast<double>(color_.A) * opacity_ + 0.5));
+        return openxaml::BrushValue{
+            true, true, {alpha, color_.R, color_.G, color_.B}};
+    }
+    void NotifyObservers() {
+        const openxaml::BrushValue value = ProjectedValue();
+        std::vector<LONGLONG> snapshot;
+        snapshot.reserve(observers_.size());
+        for (const auto& [token, _] : observers_) snapshot.push_back(token);
+        for (LONGLONG token : snapshot) {
+            const auto current = observers_.find(token);
+            if (current != observers_.end())
+                current->second->BrushValueChanged(value);
+        }
+    }
     ABI::Windows::UI::Color color_{255, 0, 0, 0};
     DOUBLE opacity_ = 1.0;
     wuxm::ITransform* transform_ = nullptr;
     wuxm::ITransform* relative_transform_ = nullptr;
+    LONGLONG next_observer_token_ = 0;
+    std::map<LONGLONG, BrushMutationObserver*> observers_;
+};
+
+enum class ProjectedBrushSlot { Background, Border, Fill, Stroke };
+
+// Owns one element brush assignment and its optional live subscription.
+// Member declaration order is important at call sites: declare the layout
+// element before this projection so this destructor detaches while the target
+// still exists.
+class BrushProjection final : private BrushMutationObserver {
+public:
+    BrushProjection(openxaml::Element& element, ProjectedBrushSlot slot)
+        : element_(element), slot_(slot) {}
+    ~BrushProjection() { Reset(); }
+
+    BrushProjection(const BrushProjection&) = delete;
+    BrushProjection& operator=(const BrushProjection&) = delete;
+
+    HRESULT Assign(wuxm::IBrush* value) {
+        // Retain first: assigning the same interface again must not release the
+        // object's final reference while replacing its subscription.
+        if (value) value->AddRef();
+        Reset();
+        brush_ = value;
+
+        if (!brush_) {
+            Publish(openxaml::BrushValue{});
+            return S_OK;
+        }
+
+        HRESULT hr = brush_->QueryInterface(
+            IID_IOpenXamlBrushSource, reinterpret_cast<void**>(&source_));
+        if (FAILED(hr)) {
+            // Any other Brush remains present but unsupported. This is the
+            // distinction DisplayList uses for a named refusal.
+            Publish(openxaml::BrushValue{true, false, {}});
+            return S_OK;
+        }
+
+        openxaml::BrushValue current;
+        hr = source_->Subscribe(this, &token_, &current);
+        if (FAILED(hr)) {
+            source_->Release();
+            source_ = nullptr;
+            Publish(openxaml::BrushValue{true, false, {}});
+            return hr;
+        }
+        Publish(current);
+        return S_OK;
+    }
+
+    HRESULT Get(wuxm::IBrush** value) const {
+        if (!value) return E_POINTER;
+        *value = brush_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+
+private:
+    void Reset() {
+        if (source_) {
+            source_->Unsubscribe(token_);
+            source_->Release();
+            source_ = nullptr;
+            token_ = 0;
+        }
+        if (brush_) {
+            brush_->Release();
+            brush_ = nullptr;
+        }
+    }
+
+    void BrushValueChanged(const openxaml::BrushValue& value) override {
+        Publish(value);
+    }
+
+    void Publish(openxaml::BrushValue value) {
+        switch (slot_) {
+            case ProjectedBrushSlot::Background:
+                element_.set_background_brush(value);
+                break;
+            case ProjectedBrushSlot::Border:
+                element_.set_border_brush(value);
+                break;
+            case ProjectedBrushSlot::Fill:
+                element_.set_fill_brush(value);
+                break;
+            case ProjectedBrushSlot::Stroke:
+                element_.set_stroke_brush(value);
+                break;
+        }
+        element_.InvalidateRender(false);
+    }
+
+    openxaml::Element& element_;
+    ProjectedBrushSlot slot_;
+    wuxm::IBrush* brush_ = nullptr;
+    IOpenXamlBrushSource* source_ = nullptr;
+    LONGLONG token_ = 0;
 };
 
 // Terminal's VisualBellLight is a nonvisual XamlLight placed in UIElement.Lights.
@@ -525,18 +955,40 @@ class XamlElement : public ComObject,
                     public abi::NotImpl_IFrameworkElement2,
                     public IWeakReferenceSource,
                     public IOpenXamlAutomationProperties,
-                    public IOpenXamlNative {
+                    public IOpenXamlNative,
+                    public IOpenXamlNameScopeOwner,
+                    public XamlFocusTarget,
+                    private TransformMutationObserver {
 public:
     // The interface an activation factory returns this object as. Every
     // element is a UIElement; Grid's definitions are not, and say so.
     using PrimaryInterface = wux::IUIElement;
+    using GettingFocusHandler =
+        __FITypedEventHandler_2_Windows__CUI__CXaml__CUIElement_Windows__CUI__CXaml__CInput__CGettingFocusEventArgs;
+    using LosingFocusHandler =
+        __FITypedEventHandler_2_Windows__CUI__CXaml__CUIElement_Windows__CUI__CXaml__CInput__CLosingFocusEventArgs;
 
     XamlElement()
         : weak_state_(std::make_shared<WeakReferenceState>(
-              this, static_cast<wux::IUIElement*>(this))) {}
+              this, static_cast<wux::IUIElement*>(this))),
+          owner_thread_id_(GetCurrentThreadId()) {
+        // DependencyObject.Dispatcher is the dispatcher of the creating UI
+        // thread. Capture it now so a background getter never manufactures a
+        // dispatcher for the wrong thread.
+        (void)GetCoreDispatcherForCurrentThread(&owner_dispatcher_);
+    }
 
     ~XamlElement() override {
+        ResetRenderTransform();
+        UnregisterXamlFocusTarget(*this);
+        if (name_scope_ && name_) {
+            (void)name_scope_->Unregister(
+                name_, static_cast<IInspectable*>(static_cast<wux::IUIElement*>(this)));
+        }
+        if (name_scope_) name_scope_->Release();
+        WindowsDeleteString(name_);
         weak_state_->Invalidate();
+        if (owner_dispatcher_) owner_dispatcher_->Release();
         if (resources_) resources_->Release();
         if (context_flyout_) context_flyout_->Release();
         if (xaml_root_) xaml_root_->Release();
@@ -544,6 +996,25 @@ public:
         for (auto& [_, value] : automation_strings_)
             WindowsDeleteString(value);
         for (auto& [_, handler] : event_handlers_) handler->Release();
+        for (auto& [_, handler] : got_focus_handlers_) handler->Release();
+        for (auto& [_, handler] : lost_focus_handlers_) handler->Release();
+        for (auto& [_, handler] : getting_focus_handlers_) handler->Release();
+        for (auto& [_, handler] : losing_focus_handlers_) handler->Release();
+        for (auto& [_, handler] : preview_key_down_handlers_) handler->Release();
+        for (auto& [_, handler] : key_down_handlers_) handler->Release();
+        for (auto& [_, handler] : preview_key_up_handlers_) handler->Release();
+        for (auto& [_, handler] : key_up_handlers_) handler->Release();
+        for (auto& [_, handler] : character_handlers_) handler->Release();
+        for (auto& [_, handler] : pointer_pressed_handlers_) handler->Release();
+        for (auto& [_, handler] : pointer_moved_handlers_) handler->Release();
+        for (auto& [_, handler] : pointer_released_handlers_) handler->Release();
+        for (auto& [_, handler] : pointer_entered_handlers_) handler->Release();
+        for (auto& [_, handler] : pointer_exited_handlers_) handler->Release();
+        for (auto& [_, handler] : pointer_capture_lost_handlers_) handler->Release();
+        for (auto& [_, handler] : pointer_canceled_handlers_) handler->Release();
+        for (auto& [_, handler] : pointer_wheel_handlers_) handler->Release();
+        for (auto& [_, handler] : tapped_handlers_) handler->Release();
+        for (auto& [_, handler] : double_tapped_handlers_) handler->Release();
         for (auto& [_, handler] : loaded_handlers_) handler->Release();
         for (auto& [_, handler] : handlers_) handler->Release();
         for (auto& [_, callback] : callbacks_) callback->Release();
@@ -554,7 +1025,346 @@ public:
         return const_cast<XamlElement*>(this)->Layout();
     }
 
-    openxaml::Element* LayoutElement() override { return Layout(); }
+    HRESULT STDMETHODCALLTYPE get_RenderTransform(wuxm::ITransform** value) override {
+        if (!value) return E_POINTER;
+        *value = render_transform_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_RenderTransform(wuxm::ITransform* value) override {
+        if (value) value->AddRef();
+        ResetRenderTransform();
+        render_transform_ = value;
+        if (!value) {
+            Layout()->set_visual_transform({});
+            return S_OK;
+        }
+
+        HRESULT hr = value->QueryInterface(
+            IID_IOpenXamlTransformSource,
+            reinterpret_cast<void**>(&render_transform_source_));
+        if (SUCCEEDED(hr)) {
+            openxaml::VisualTransform current;
+            hr = render_transform_source_->Subscribe(
+                this, &render_transform_token_, &current);
+            if (FAILED(hr)) {
+                render_transform_source_->Release();
+                render_transform_source_ = nullptr;
+                return hr;
+            }
+            Layout()->set_visual_transform(std::move(current));
+            return S_OK;
+        }
+
+        HSTRING runtime_name = nullptr;
+        std::string type = "Windows.UI.Xaml.Media.Transform";
+        if (SUCCEEDED(value->GetRuntimeClassName(&runtime_name)) && runtime_name) {
+            UINT32 length = 0;
+            const wchar_t* wide = WindowsGetStringRawBuffer(runtime_name, &length);
+            type.clear();
+            type.reserve(length);
+            for (UINT32 index = 0; index < length; ++index)
+                type.push_back(wide[index] <= 0x7f ? static_cast<char>(wide[index]) : '?');
+            WindowsDeleteString(runtime_name);
+        }
+        Layout()->set_visual_transform(openxaml::VisualTransform::Unsupported(std::move(type)));
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_RenderTransformOrigin(wf::Point* value) override {
+        if (!value) return E_POINTER;
+        const openxaml::Point origin = Layout()->render_transform_origin();
+        *value = {static_cast<FLOAT>(origin.x), static_cast<FLOAT>(origin.y)};
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_RenderTransformOrigin(wf::Point value) override {
+        if (!std::isfinite(value.X) || !std::isfinite(value.Y)) return E_INVALIDARG;
+        Layout()->set_render_transform_origin({value.X, value.Y});
+        return S_OK;
+    }
+
+    openxaml::Element* LayoutElement() override {
+        // Native ABI consumers such as FocusManager may request focus before
+        // this element has any event registrations. Publishing the projection
+        // here gives Element*-based focus lookup a lifetime-bounded identity.
+        RegisterXamlFocusTarget(*this);
+        return Layout();
+    }
+    openxaml::Element* FocusLayoutElement() noexcept override { return Layout(); }
+    bool HasFocusThreadAccess() const noexcept override {
+        return GetCurrentThreadId() == owner_thread_id_;
+    }
+    void RetainFocusTarget() noexcept override {
+        static_cast<wux::IUIElement*>(this)->AddRef();
+    }
+    void ReleaseFocusTarget() noexcept override {
+        static_cast<wux::IUIElement*>(this)->Release();
+    }
+    HRESULT CopyFocusInspectable(IInspectable** value) noexcept override {
+        if (!value) return E_POINTER;
+        *value = static_cast<IInspectable*>(static_cast<wux::IUIElement*>(this));
+        (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT CopyOwnXamlRoot(wux::IXamlRoot** value) noexcept override {
+        if (!value) return E_POINTER;
+        *value = xaml_root_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    void SetIslandFocusState(wux::FocusState state) noexcept override {
+        focus_state_ = state;
+    }
+    void InvokeIslandFocusEvent(bool gained) noexcept override {
+        try {
+        auto& source = gained ? got_focus_handlers_ : lost_focus_handlers_;
+        std::vector<wux::IRoutedEventHandler*> snapshot;
+        snapshot.reserve(source.size());
+        for (const auto& [_, handler] : source) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+        IInspectable* const sender = static_cast<IInspectable*>(
+            static_cast<wux::IUIElement*>(this));
+        for (wux::IRoutedEventHandler* handler : snapshot) {
+            (void)handler->Invoke(sender, nullptr);
+            handler->Release();
+        }
+        } catch (...) {
+            // Routed input/focus callbacks are HWND-bound noexcept seams.
+        }
+    }
+    void InvokeIslandLosingFocus(
+        wuxi::ILosingFocusEventArgs* args) noexcept override {
+        InvokeFocusChanging(losing_focus_handlers_, args);
+    }
+    void InvokeIslandGettingFocus(
+        wuxi::IGettingFocusEventArgs* args) noexcept override {
+        InvokeFocusChanging(getting_focus_handlers_, args);
+    }
+    void InvokeIslandKeyEvent(
+        bool preview, bool key_down,
+        wuxi::IKeyRoutedEventArgs* args) noexcept override {
+        try {
+        auto& source = preview
+            ? (key_down ? preview_key_down_handlers_ : preview_key_up_handlers_)
+            : (key_down ? key_down_handlers_ : key_up_handlers_);
+        std::vector<wuxi::IKeyEventHandler*> snapshot;
+        snapshot.reserve(source.size());
+        for (const auto& [_, handler] : source) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+        IInspectable* const sender = static_cast<IInspectable*>(
+            static_cast<wux::IUIElement*>(this));
+        for (wuxi::IKeyEventHandler* handler : snapshot) {
+            (void)handler->Invoke(sender, args);
+            boolean handled = 0;
+            if (SUCCEEDED(args->get_Handled(&handled)) && handled) break;
+        }
+        for (wuxi::IKeyEventHandler* handler : snapshot) handler->Release();
+        } catch (...) {
+        }
+    }
+    void InvokeIslandCharacterEvent(
+        wuxi::ICharacterReceivedRoutedEventArgs* args) noexcept override {
+        try {
+        using CharacterHandler =
+            __FITypedEventHandler_2_Windows__CUI__CXaml__CUIElement_Windows__CUI__CXaml__CInput__CCharacterReceivedRoutedEventArgs;
+        std::vector<CharacterHandler*> snapshot;
+        snapshot.reserve(character_handlers_.size());
+        for (const auto& [_, handler] : character_handlers_) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+        wux::IUIElement* const sender = static_cast<wux::IUIElement*>(this);
+        for (CharacterHandler* handler : snapshot) {
+            (void)handler->Invoke(sender, args);
+            boolean handled = 0;
+            if (SUCCEEDED(args->get_Handled(&handled)) && handled) break;
+        }
+        for (CharacterHandler* handler : snapshot) handler->Release();
+        } catch (...) {
+        }
+    }
+    void InvokeIslandPointerEvent(
+        IslandPointerEventKind kind,
+        wuxi::IPointerRoutedEventArgs* args) noexcept override {
+        try {
+        std::map<LONGLONG, wuxi::IPointerEventHandler*>* source = nullptr;
+        switch (kind) {
+            case IslandPointerEventKind::Pressed:
+                source = &pointer_pressed_handlers_;
+                break;
+            case IslandPointerEventKind::Moved:
+                source = &pointer_moved_handlers_;
+                break;
+            case IslandPointerEventKind::Released:
+                source = &pointer_released_handlers_;
+                break;
+            case IslandPointerEventKind::Wheel:
+                source = &pointer_wheel_handlers_;
+                break;
+            case IslandPointerEventKind::Entered:
+                source = &pointer_entered_handlers_;
+                break;
+            case IslandPointerEventKind::Exited:
+                source = &pointer_exited_handlers_;
+                break;
+            case IslandPointerEventKind::Canceled:
+                source = &pointer_canceled_handlers_;
+                break;
+            case IslandPointerEventKind::CaptureLost:
+                source = &pointer_capture_lost_handlers_;
+                break;
+        }
+        if (!source || !args) return;
+        if (kind == IslandPointerEventKind::CaptureLost) {
+            wuxi::IPointer* pointer = nullptr;
+            if (SUCCEEDED(args->get_Pointer(&pointer)) && pointer) {
+                UINT32 pointer_id = 0;
+                if (SUCCEEDED(pointer->get_PointerId(&pointer_id)))
+                    captured_pointer_ids_.erase(pointer_id);
+                pointer->Release();
+            }
+        }
+        std::vector<wuxi::IPointerEventHandler*> snapshot;
+        snapshot.reserve(source->size());
+        for (const auto& [_, handler] : *source) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+        IInspectable* const sender = static_cast<IInspectable*>(
+            static_cast<wux::IUIElement*>(this));
+        for (wuxi::IPointerEventHandler* handler : snapshot) {
+            (void)handler->Invoke(sender, args);
+            boolean handled = 0;
+            if (SUCCEEDED(args->get_Handled(&handled)) && handled) break;
+        }
+        for (wuxi::IPointerEventHandler* handler : snapshot) handler->Release();
+        } catch (...) {
+        }
+    }
+    void InvokeIslandTapEvent(
+        IslandTapEventKind kind,
+        wuxi::ITappedRoutedEventArgs* args) noexcept override {
+        if (!args) return;
+        try {
+        IInspectable* const sender = static_cast<IInspectable*>(
+            static_cast<wux::IUIElement*>(this));
+        if (kind == IslandTapEventKind::Tapped) {
+            std::vector<wuxi::ITappedEventHandler*> snapshot;
+            snapshot.reserve(tapped_handlers_.size());
+            for (const auto& [_, handler] : tapped_handlers_) {
+                handler->AddRef();
+                snapshot.push_back(handler);
+            }
+            for (wuxi::ITappedEventHandler* handler : snapshot) {
+                (void)handler->Invoke(sender, args);
+                boolean handled = 0;
+                if (SUCCEEDED(args->get_Handled(&handled)) && handled) break;
+            }
+            for (wuxi::ITappedEventHandler* handler : snapshot)
+                handler->Release();
+            return;
+        }
+
+        constexpr GUID double_args_iid = {
+            0xaf404424, 0x26df, 0x44f4,
+            {0x87, 0x14, 0x93, 0x59, 0x24, 0x9b, 0x62, 0xd3}};
+        std::vector<wuxi::IDoubleTappedEventHandler*> snapshot;
+        snapshot.reserve(double_tapped_handlers_.size());
+        for (const auto& [_, handler] : double_tapped_handlers_) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+        wuxi::IDoubleTappedRoutedEventArgs* double_args = nullptr;
+        if (FAILED(args->QueryInterface(
+                double_args_iid,
+                reinterpret_cast<void**>(&double_args))) || !double_args) {
+            for (wuxi::IDoubleTappedEventHandler* handler : snapshot)
+                handler->Release();
+            return;
+        }
+        for (wuxi::IDoubleTappedEventHandler* handler : snapshot) {
+            (void)handler->Invoke(sender, double_args);
+            boolean handled = 0;
+            if (SUCCEEDED(double_args->get_Handled(&handled)) && handled) break;
+        }
+        for (wuxi::IDoubleTappedEventHandler* handler : snapshot)
+            handler->Release();
+        double_args->Release();
+        } catch (...) {
+        }
+    }
+    wux::FocusState IslandFocusState() const noexcept { return focus_state_; }
+    HRESULT ValidateOwnedCollectionChange(IUnknown*, IUnknown* added) override {
+        if (!added) return S_OK;
+        IOpenXamlNative* native = nullptr;
+        const HRESULT hr = added->QueryInterface(
+            IID_IOpenXamlNative, reinterpret_cast<void**>(&native));
+        // Row/column definitions and other non-visual member collections have
+        // no native element to attach.
+        if (FAILED(hr)) return S_OK;
+        openxaml::Element* child = native->LayoutElement();
+        const bool allowed = Layout()->CanAttachVisualChild(*child);
+        native->Release();
+        return allowed ? S_OK : E_INVALIDARG;
+    }
+    void OnOwnedCollectionRemoving(IUnknown* removed) override {
+        IOpenXamlNative* native = nullptr;
+        if (removed && SUCCEEDED(removed->QueryInterface(
+                           IID_IOpenXamlNative,
+                           reinterpret_cast<void**>(&native)))) {
+            openxaml::Element* const child = native->LayoutElement();
+            pending_detached_roots_[removed] =
+                XamlFocusScope::VisualRoot(child);
+            PrepareXamlVisualSubtreeDetached(
+                child, pending_detached_roots_[removed]);
+            Layout()->DetachVisualChild(*child);
+            native->Release();
+        }
+    }
+    void OnOwnedCollectionRemoved(IUnknown* removed) override {
+        const auto pending = pending_detached_roots_.find(removed);
+        if (pending == pending_detached_roots_.end()) return;
+        IOpenXamlNative* native = nullptr;
+        if (removed && SUCCEEDED(removed->QueryInterface(
+                           IID_IOpenXamlNative,
+                           reinterpret_cast<void**>(&native)))) {
+            NotifyXamlVisualSubtreeDetached(native->LayoutElement(),
+                                            pending->second);
+            native->Release();
+        }
+        pending_detached_roots_.erase(pending);
+    }
+    void OnOwnedCollectionChanged(IUnknown* added) override {
+        IOpenXamlNative* native = nullptr;
+        if (added && SUCCEEDED(added->QueryInterface(
+                         IID_IOpenXamlNative,
+                         reinterpret_cast<void**>(&native)))) {
+            // Validation ran before the collection changed. Failure here can
+            // only mean an internal ordering bug; leave the tree detached and
+            // make the structural invalidation observable.
+            openxaml::Element* const parent = Layout();
+            openxaml::Element* const child = native->LayoutElement();
+            const bool attached = parent->AttachVisualChild(*child);
+            if (GetEnvironmentVariableW(L"OPENXAML_TRACE_VISUAL_TREE", nullptr, 0)) {
+                char message[384]{};
+                std::snprintf(
+                    message, sizeof(message),
+                    "OpenXaml visual attach parent=%s parent_id=%llu child=%s "
+                    "child_id=%llu attached=%s\n",
+                    parent->TypeName().c_str(),
+                    static_cast<unsigned long long>(parent->render_node_id()),
+                    child->TypeName().c_str(),
+                    static_cast<unsigned long long>(child->render_node_id()),
+                    attached ? "true" : "false");
+                OutputDebugStringA(message);
+            }
+            native->Release();
+        }
+        Layout()->NotifyVisualStructureChanged();
+    }
     HRESULT PerformLayout(double width, double height) override {
         if (width < 0.0 || height < 0.0) return E_INVALIDARG;
         TraceRuntime("OpenXaml: island layout begin\n");
@@ -563,19 +1373,25 @@ public:
         try {
             Layout()->Measure({width, height});
             TraceRuntime("OpenXaml: island measure complete\n");
+        } catch (const std::exception& error) {
+            // Leaf-level feature refusals are contained by their owning
+            // element. Reaching this boundary means the tree layout itself
+            // failed; arrange remains a last-resort attempt so diagnostics and
+            // the first layout event are not lost with the original failure.
+            TraceLayoutException("measure", error.what());
+            result = S_FALSE;
         } catch (...) {
-            // A leaf renderer (most commonly text when no harvested metrics
-            // are installed) must not suppress layout for every ancestor or
-            // prevent the application from observing its first layout pass.
-            // Arrange still gives stretch panels their actual island size.
-            TraceRuntime("OpenXaml: island measure degraded\n");
+            TraceLayoutException("measure", nullptr);
             result = S_FALSE;
         }
         try {
             Layout()->Arrange({0.0, 0.0, width, height});
             TraceRuntime("OpenXaml: island arrange complete\n");
+        } catch (const std::exception& error) {
+            TraceLayoutException("arrange", error.what());
+            result = S_FALSE;
         } catch (...) {
-            TraceRuntime("OpenXaml: island arrange degraded\n");
+            TraceLayoutException("arrange", nullptr);
             result = S_FALSE;
         }
         try {
@@ -632,10 +1448,40 @@ public:
     HRESULT STDMETHODCALLTYPE get_Dispatcher(
         ABI::Windows::UI::Core::ICoreDispatcher** value) override {
         if (!value) return E_POINTER;
-        // A CoreDispatcher projection is supplied next to the message-loop
-        // backend.  Returning an absent dispatcher is the WinRT-compatible
-        // representation while no island dispatcher has been attached.
-        *value = nullptr;
+        *value = owner_dispatcher_;
+        if (!*value) return E_UNEXPECTED;
+        (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE CapturePointer(
+        wuxi::IPointer* pointer, boolean* result) override {
+        if (!result) return E_POINTER;
+        *result = 0;
+        if (!pointer) return E_INVALIDARG;
+        UINT32 pointer_id = 0;
+        HRESULT hr = pointer->get_PointerId(&pointer_id);
+        if (FAILED(hr)) return hr;
+        if (CaptureXamlPointer(*this, pointer_id)) {
+            captured_pointer_ids_.insert(pointer_id);
+            *result = 1;
+        }
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE ReleasePointerCapture(
+        wuxi::IPointer* pointer) override {
+        if (!pointer) return E_INVALIDARG;
+        UINT32 pointer_id = 0;
+        HRESULT hr = pointer->get_PointerId(&pointer_id);
+        if (FAILED(hr)) return hr;
+        (void)ReleaseXamlPointer(*this, pointer_id);
+        captured_pointer_ids_.erase(pointer_id);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE ReleasePointerCaptures() override {
+        const std::set<UINT32> captured = captured_pointer_ids_;
+        for (UINT32 pointer_id : captured)
+            (void)ReleaseXamlPointer(*this, pointer_id);
+        captured_pointer_ids_.clear();
         return S_OK;
     }
     HRESULT SetAutomationString(UINT32 property, HSTRING value) override {
@@ -659,17 +1505,19 @@ public:
     }
     HRESULT STDMETHODCALLTYPE add_DoubleTapped(
         wuxi::IDoubleTappedEventHandler* handler, EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        RegisterXamlFocusTarget(*this);
+        return AddTypedEvent(handler, token, double_tapped_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_DoubleTapped(EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, double_tapped_handlers_);
     }
     HRESULT STDMETHODCALLTYPE add_Tapped(
         wuxi::ITappedEventHandler* handler, EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        RegisterXamlFocusTarget(*this);
+        return AddTypedEvent(handler, token, tapped_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_Tapped(EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, tapped_handlers_);
     }
     HRESULT STDMETHODCALLTYPE add_Holding(
         wuxi::IHoldingEventHandler* handler, EventRegistrationToken* token) override {
@@ -715,48 +1563,53 @@ public:
     }
     HRESULT STDMETHODCALLTYPE add_KeyUp(
         wuxi::IKeyEventHandler* handler, EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        RegisterXamlFocusTarget(*this);
+        return AddTypedEvent(handler, token, key_up_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_KeyUp(EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, key_up_handlers_);
     }
     HRESULT STDMETHODCALLTYPE add_KeyDown(
         wuxi::IKeyEventHandler* handler, EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        RegisterXamlFocusTarget(*this);
+        return AddTypedEvent(handler, token, key_down_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_KeyDown(EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, key_down_handlers_);
     }
     HRESULT STDMETHODCALLTYPE add_GotFocus(
         wux::IRoutedEventHandler* handler, EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        RegisterXamlFocusTarget(*this);
+        return AddTypedEvent(handler, token, got_focus_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_GotFocus(EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, got_focus_handlers_);
     }
     HRESULT STDMETHODCALLTYPE add_LostFocus(
         wux::IRoutedEventHandler* handler, EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        RegisterXamlFocusTarget(*this);
+        return AddTypedEvent(handler, token, lost_focus_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_LostFocus(EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, lost_focus_handlers_);
     }
-#define OPENXAML_POINTER_EVENT(name)                                      \
+#define OPENXAML_POINTER_EVENT(name, storage)                             \
     HRESULT STDMETHODCALLTYPE add_##name(                                \
         wuxi::IPointerEventHandler* handler, EventRegistrationToken* token) override { \
-        return AddEvent(handler, token);                                  \
+        RegisterXamlFocusTarget(*this);                                   \
+        return AddTypedEvent(handler, token, storage);                    \
     }                                                                     \
     HRESULT STDMETHODCALLTYPE remove_##name(EventRegistrationToken token) override { \
-        return RemoveEvent(token);                                        \
+        return RemoveTypedEvent(token, storage);                          \
     }
-    OPENXAML_POINTER_EVENT(PointerPressed)
-    OPENXAML_POINTER_EVENT(PointerMoved)
-    OPENXAML_POINTER_EVENT(PointerReleased)
-    OPENXAML_POINTER_EVENT(PointerEntered)
-    OPENXAML_POINTER_EVENT(PointerExited)
-    OPENXAML_POINTER_EVENT(PointerCaptureLost)
-    OPENXAML_POINTER_EVENT(PointerCanceled)
-    OPENXAML_POINTER_EVENT(PointerWheelChanged)
+    OPENXAML_POINTER_EVENT(PointerPressed, pointer_pressed_handlers_)
+    OPENXAML_POINTER_EVENT(PointerMoved, pointer_moved_handlers_)
+    OPENXAML_POINTER_EVENT(PointerReleased, pointer_released_handlers_)
+    OPENXAML_POINTER_EVENT(PointerEntered, pointer_entered_handlers_)
+    OPENXAML_POINTER_EVENT(PointerExited, pointer_exited_handlers_)
+    OPENXAML_POINTER_EVENT(PointerCaptureLost, pointer_capture_lost_handlers_)
+    OPENXAML_POINTER_EVENT(PointerCanceled, pointer_canceled_handlers_)
+    OPENXAML_POINTER_EVENT(PointerWheelChanged, pointer_wheel_handlers_)
 #undef OPENXAML_POINTER_EVENT
     HRESULT STDMETHODCALLTYPE add_ContextRequested(
         __FITypedEventHandler_2_Windows__CUI__CXaml__CUIElement_Windows__CUI__CXaml__CInput__CContextRequestedEventArgs* handler,
@@ -782,11 +1635,12 @@ public:
     HRESULT STDMETHODCALLTYPE add_CharacterReceived(
         __FITypedEventHandler_2_Windows__CUI__CXaml__CUIElement_Windows__CUI__CXaml__CInput__CCharacterReceivedRoutedEventArgs* handler,
         EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        RegisterXamlFocusTarget(*this);
+        return AddTypedEvent(handler, token, character_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_CharacterReceived(
         EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, character_handlers_);
     }
     HRESULT STDMETHODCALLTYPE add_ProcessKeyboardAccelerators(
         __FITypedEventHandler_2_Windows__CUI__CXaml__CUIElement_Windows__CUI__CXaml__CInput__CProcessKeyboardAcceleratorEventArgs* handler,
@@ -799,19 +1653,21 @@ public:
     }
     HRESULT STDMETHODCALLTYPE add_PreviewKeyDown(
         wuxi::IKeyEventHandler* handler, EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        RegisterXamlFocusTarget(*this);
+        return AddTypedEvent(handler, token, preview_key_down_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_PreviewKeyDown(
         EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, preview_key_down_handlers_);
     }
     HRESULT STDMETHODCALLTYPE add_PreviewKeyUp(
         wuxi::IKeyEventHandler* handler, EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        RegisterXamlFocusTarget(*this);
+        return AddTypedEvent(handler, token, preview_key_up_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_PreviewKeyUp(
         EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, preview_key_up_handlers_);
     }
 
     // C++/WinRT's auto_revoke event overload stores a weak reference to the
@@ -824,6 +1680,60 @@ public:
     }
 
     // --- IFrameworkElement ---
+    HRESULT STDMETHODCALLTYPE get_Name(HSTRING* value) override {
+        if (!value) return E_POINTER;
+        if (!HasFocusThreadAccess()) return RPC_E_WRONG_THREAD;
+        return WindowsDuplicateString(name_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Name(HSTRING value) override {
+        if (!HasFocusThreadAccess()) return RPC_E_WRONG_THREAD;
+        if (SameHString(name_, value)) return S_OK;
+
+        HSTRING next = nullptr;
+        HRESULT hr = WindowsDuplicateString(value, &next);
+        if (FAILED(hr)) return hr;
+        IInspectable* const self = static_cast<IInspectable*>(
+            static_cast<wux::IUIElement*>(this));
+        if (name_scope_ && !HStringEmpty(next)) {
+            hr = name_scope_->Register(next, self);
+            if (FAILED(hr)) {
+                WindowsDeleteString(next);
+                return hr;
+            }
+        }
+        if (name_scope_ && !HStringEmpty(name_))
+            (void)name_scope_->Unregister(name_, self);
+        WindowsDeleteString(name_);
+        name_ = next;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE FindName(HSTRING name, IInspectable** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (!HasFocusThreadAccess()) return RPC_E_WRONG_THREAD;
+        return name_scope_ ? name_scope_->Find(name, value) : S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE AttachNameScope(
+        IOpenXamlNameScope* value) override {
+        if (!HasFocusThreadAccess()) return RPC_E_WRONG_THREAD;
+        if (name_scope_ == value) return S_OK;
+
+        IInspectable* const self = static_cast<IInspectable*>(
+            static_cast<wux::IUIElement*>(this));
+        if (value) value->AddRef();
+        if (value && !HStringEmpty(name_)) {
+            const HRESULT hr = value->Register(name_, self);
+            if (FAILED(hr)) {
+                value->Release();
+                return hr;
+            }
+        }
+        if (name_scope_ && !HStringEmpty(name_))
+            (void)name_scope_->Unregister(name_, self);
+        if (name_scope_) name_scope_->Release();
+        name_scope_ = value;
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE get_ActualWidth(DOUBLE* value) override {
         if (!value) return E_POINTER;
         *value = Layout()->render_size().width;
@@ -987,20 +1897,22 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE add_GettingFocus(
-        __FITypedEventHandler_2_Windows__CUI__CXaml__CUIElement_Windows__CUI__CXaml__CInput__CGettingFocusEventArgs* handler,
+        GettingFocusHandler* handler,
         EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        RegisterXamlFocusTarget(*this);
+        return AddTypedEvent(handler, token, getting_focus_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_GettingFocus(EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, getting_focus_handlers_);
     }
     HRESULT STDMETHODCALLTYPE add_LosingFocus(
-        __FITypedEventHandler_2_Windows__CUI__CXaml__CUIElement_Windows__CUI__CXaml__CInput__CLosingFocusEventArgs* handler,
+        LosingFocusHandler* handler,
         EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        RegisterXamlFocusTarget(*this);
+        return AddTypedEvent(handler, token, losing_focus_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_LosingFocus(EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, losing_focus_handlers_);
     }
     HRESULT STDMETHODCALLTYPE add_NoFocusCandidateFound(
         __FITypedEventHandler_2_Windows__CUI__CXaml__CUIElement_Windows__CUI__CXaml__CInput__CNoFocusCandidateFoundEventArgs* handler,
@@ -1034,9 +1946,10 @@ public:
     }
     HRESULT STDMETHODCALLTYPE get_XamlRoot(wux::IXamlRoot** value) override {
         if (!value) return E_POINTER;
-        *value = xaml_root_;
-        if (*value) (*value)->AddRef();
-        return S_OK;
+        if (xaml_root_) return CopyOwnXamlRoot(value);
+        // XamlRoot is inherited from the hosted visual root; descendants do
+        // not manufacture independent root identities.
+        return CopyInheritedXamlRoot(Layout(), value);
     }
     HRESULT STDMETHODCALLTYPE put_XamlRoot(wux::IXamlRoot* value) override {
         if (value) value->AddRef();
@@ -1312,7 +2225,13 @@ protected:
         if (!handler || !token) return E_INVALIDARG;
         token->value = InterlockedIncrement64(&next_event_token_);
         handler->AddRef();
-        handlers[token->value] = handler;
+        try {
+            handlers.emplace(token->value, handler);
+        } catch (...) {
+            handler->Release();
+            token->value = 0;
+            return E_OUTOFMEMORY;
+        }
         return S_OK;
     }
     template <class Handler>
@@ -1363,7 +2282,15 @@ protected:
         // layout manager passes a NULL target for LayoutUpdated, which is what
         // "every subscriber, about the pass rather than about an element"
         // looks like from the core side.
-        handler->Invoke(nullptr, nullptr);
+        const HRESULT result = handler->Invoke(nullptr, nullptr);
+        if (FAILED(result) &&
+            GetEnvironmentVariableW(L"OPENXAML_TRACE_VISUAL_TREE", nullptr, 0)) {
+            char message[160]{};
+            std::snprintf(message, sizeof(message),
+                          "OpenXaml event action=invoke-failed kind=LayoutUpdated error=0x%08lx\n",
+                          static_cast<unsigned long>(result));
+            OutputDebugStringA(message);
+        }
     }
 
     template <class Handler>
@@ -1372,8 +2299,9 @@ protected:
         handler->AddRef();
         auto* sender = static_cast<wux::IDependencyObject*>(this);
         const openxaml::EventToken registered = Layout()->events().Add(
-            event, [handler, sender](openxaml::Element&, openxaml::FrameworkEvent,
-                                     const openxaml::SizeChangedArgs& args) {
+            event, [this, handler, sender](openxaml::Element&, openxaml::FrameworkEvent raised,
+                                           const openxaml::SizeChangedArgs& args) {
+                TraceFrameworkEvent("raise", raised);
                 InvokeHandler(handler, sender, args);
             });
         if (registered == 0) {
@@ -1382,7 +2310,20 @@ protected:
         }
         handlers_.emplace(registered, handler);
         token->value = registered;
+        TraceFrameworkEvent("add", event);
         return S_OK;
+    }
+
+    void TraceFrameworkEvent(const char* action,
+                             openxaml::FrameworkEvent event) const noexcept {
+        if (!GetEnvironmentVariableW(L"OPENXAML_TRACE_VISUAL_TREE", nullptr, 0)) return;
+        char message[256]{};
+        std::snprintf(
+            message, sizeof(message),
+            "OpenXaml event action=%s kind=%s type=%s node_id=%llu\n",
+            action, openxaml::NameOf(event), Layout()->TypeName().c_str(),
+            static_cast<unsigned long long>(Layout()->render_node_id()));
+        OutputDebugStringA(message);
     }
 
     HRESULT RemoveEventHandler(openxaml::FrameworkEvent event, EventRegistrationToken token) {
@@ -1415,6 +2356,7 @@ protected:
         OPENXAML_QI_ARM(IID_OpenXamlWeakReferenceSource, IWeakReferenceSource)
         OPENXAML_QI_ARM(IID_IOpenXamlAutomationProperties,
                         IOpenXamlAutomationProperties)
+        OPENXAML_QI_ARM(IID_IOpenXamlNameScopeOwner, IOpenXamlNameScopeOwner)
         OPENXAML_QI_ARM(IID_IUnknown, wux::IUIElement)
         OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wux::IUIElement)
         if (IsEqualGUID(iid, IID_IOpenXamlNative)) {
@@ -1428,6 +2370,62 @@ protected:
     }
 
 private:
+    static bool HStringEmpty(HSTRING value) noexcept {
+        UINT32 length = 0;
+        (void)WindowsGetStringRawBuffer(value, &length);
+        return length == 0;
+    }
+    static bool SameHString(HSTRING left, HSTRING right) noexcept {
+        UINT32 left_length = 0;
+        UINT32 right_length = 0;
+        const wchar_t* left_text = WindowsGetStringRawBuffer(left, &left_length);
+        const wchar_t* right_text = WindowsGetStringRawBuffer(right, &right_length);
+        if (left_length != right_length) return false;
+        if (left_length == 0) return true;
+        return std::wmemcmp(left_text, right_text, left_length) == 0;
+    }
+
+    void TransformValueChanged(const openxaml::VisualTransform& value) override {
+        Layout()->set_visual_transform(value);
+    }
+    void ResetRenderTransform() {
+        if (render_transform_source_) {
+            render_transform_source_->Unsubscribe(render_transform_token_);
+            render_transform_source_->Release();
+            render_transform_source_ = nullptr;
+            render_transform_token_ = 0;
+        }
+        if (render_transform_) {
+            render_transform_->Release();
+            render_transform_ = nullptr;
+        }
+    }
+
+    template <class Handler, class Args>
+    void InvokeFocusChanging(std::map<LONGLONG, Handler*>& source,
+                             Args* args) noexcept {
+        try {
+            std::vector<Handler*> snapshot;
+            snapshot.reserve(source.size());
+            for (const auto& [_, handler] : source) {
+                handler->AddRef();
+                snapshot.push_back(handler);
+            }
+            wux::IUIElement* const sender =
+                static_cast<wux::IUIElement*>(this);
+            for (Handler* handler : snapshot) {
+                (void)handler->Invoke(sender, args);
+                boolean cancel = 0;
+                boolean handled = 0;
+                (void)args->get_Cancel(&cancel);
+                (void)args->get_Handled(&handled);
+                if (cancel || handled) break;
+            }
+            for (Handler* handler : snapshot) handler->Release();
+        } catch (...) {
+        }
+    }
+
     void EnsureLayoutPassCallback() {
         if (layout_callback_installed_) return;
         Layout()->SetLayoutPassCallback([this]() { RaiseFrameworkEvents(); });
@@ -1453,6 +2451,10 @@ private:
     }
 
     std::shared_ptr<WeakReferenceState> weak_state_;
+    IOpenXamlNameScope* name_scope_ = nullptr;
+    HSTRING name_ = nullptr;
+    DWORD owner_thread_id_ = 0;
+    ABI::Windows::UI::Core::ICoreDispatcher* owner_dispatcher_ = nullptr;
     wux::IResourceDictionary* resources_ = nullptr;
     wuxcp::IFlyoutBase* context_flyout_ = nullptr;
     wux::IXamlRoot* xaml_root_ = nullptr;
@@ -1477,7 +2479,34 @@ private:
     wuxi::KeyboardNavigationMode tab_focus_navigation_ =
         static_cast<wuxi::KeyboardNavigationMode>(0);
     LONGLONG next_event_token_ = 0;
+    wux::FocusState focus_state_ = wux::FocusState_Unfocused;
+    wuxm::ITransform* render_transform_ = nullptr;
+    IOpenXamlTransformSource* render_transform_source_ = nullptr;
+    LONGLONG render_transform_token_ = 0;
+    std::map<IUnknown*, openxaml::Element*> pending_detached_roots_;
     std::map<LONGLONG, IUnknown*> event_handlers_;
+    std::map<LONGLONG, wux::IRoutedEventHandler*> got_focus_handlers_;
+    std::map<LONGLONG, wux::IRoutedEventHandler*> lost_focus_handlers_;
+    std::map<LONGLONG, GettingFocusHandler*> getting_focus_handlers_;
+    std::map<LONGLONG, LosingFocusHandler*> losing_focus_handlers_;
+    std::map<LONGLONG, wuxi::IKeyEventHandler*> preview_key_down_handlers_;
+    std::map<LONGLONG, wuxi::IKeyEventHandler*> key_down_handlers_;
+    std::map<LONGLONG, wuxi::IKeyEventHandler*> preview_key_up_handlers_;
+    std::map<LONGLONG, wuxi::IKeyEventHandler*> key_up_handlers_;
+    using CharacterHandler =
+        __FITypedEventHandler_2_Windows__CUI__CXaml__CUIElement_Windows__CUI__CXaml__CInput__CCharacterReceivedRoutedEventArgs;
+    std::map<LONGLONG, CharacterHandler*> character_handlers_;
+    std::map<LONGLONG, wuxi::IPointerEventHandler*> pointer_pressed_handlers_;
+    std::map<LONGLONG, wuxi::IPointerEventHandler*> pointer_moved_handlers_;
+    std::map<LONGLONG, wuxi::IPointerEventHandler*> pointer_released_handlers_;
+    std::map<LONGLONG, wuxi::IPointerEventHandler*> pointer_entered_handlers_;
+    std::map<LONGLONG, wuxi::IPointerEventHandler*> pointer_exited_handlers_;
+    std::map<LONGLONG, wuxi::IPointerEventHandler*> pointer_capture_lost_handlers_;
+    std::map<LONGLONG, wuxi::IPointerEventHandler*> pointer_canceled_handlers_;
+    std::map<LONGLONG, wuxi::IPointerEventHandler*> pointer_wheel_handlers_;
+    std::map<LONGLONG, wuxi::ITappedEventHandler*> tapped_handlers_;
+    std::map<LONGLONG, wuxi::IDoubleTappedEventHandler*> double_tapped_handlers_;
+    std::set<UINT32> captured_pointer_ids_;
     std::map<LONGLONG, wux::IRoutedEventHandler*> loaded_handlers_;
     std::map<UINT32, HSTRING> automation_strings_;
     bool layout_callback_installed_ = false;
@@ -1495,10 +2524,6 @@ private:
 class BorderObject final : public XamlElement, public abi::NotImpl_IBorder {
 public:
     BorderObject() { children_.source = &child_holder_; }
-    ~BorderObject() override {
-        if (border_brush_) border_brush_->Release();
-        if (background_) background_->Release();
-    }
 
     openxaml::Element* Layout() override { return &children_; }
     const wchar_t* RuntimeClassName() const override {
@@ -1551,16 +2576,16 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_BorderBrush(wuxm::IBrush** value) override {
-        return GetBrush(border_brush_, value);
+        return border_brush_.Get(value);
     }
     HRESULT STDMETHODCALLTYPE put_BorderBrush(wuxm::IBrush* value) override {
-        return PutBrush(border_brush_, value);
+        return border_brush_.Assign(value);
     }
     HRESULT STDMETHODCALLTYPE get_Background(wuxm::IBrush** value) override {
-        return GetBrush(background_, value);
+        return background_.Get(value);
     }
     HRESULT STDMETHODCALLTYPE put_Background(wuxm::IBrush* value) override {
-        return PutBrush(background_, value);
+        return background_.Assign(value);
     }
     HRESULT STDMETHODCALLTYPE get_CornerRadius(wux::CornerRadius* value) override {
         if (!value) return E_POINTER;
@@ -1573,21 +2598,9 @@ public:
     }
 
 private:
-    static HRESULT GetBrush(wuxm::IBrush* source, wuxm::IBrush** value) {
-        if (!value) return E_POINTER;
-        *value = source;
-        if (*value) (*value)->AddRef();
-        return S_OK;
-    }
-    static HRESULT PutBrush(wuxm::IBrush*& target, wuxm::IBrush* value) {
-        if (value) value->AddRef();
-        if (target) target->Release();
-        target = value;
-        return S_OK;
-    }
     AbiBorder children_;
-    wuxm::IBrush* border_brush_ = nullptr;
-    wuxm::IBrush* background_ = nullptr;
+    BrushProjection border_brush_{children_, ProjectedBrushSlot::Border};
+    BrushProjection background_{children_, ProjectedBrushSlot::Background};
     wux::CornerRadius corner_radius_{};
     ChildCollection child_holder_{
         {::openxaml::iid::PIID_FIVector_1_Windows__CUI__CXaml__CUIElement,
@@ -1602,7 +2615,6 @@ template <class LayoutType>
 class PanelObject : public XamlElement, public abi::NotImpl_IPanel {
 public:
     PanelObject() { layout_.source = &children_; }
-    ~PanelObject() override { if (background_) background_->Release(); }
 
     openxaml::Element* Layout() override { return &layout_; }
 
@@ -1614,16 +2626,10 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_Background(wuxm::IBrush** value) override {
-        if (!value) return E_POINTER;
-        *value = background_;
-        if (*value) (*value)->AddRef();
-        return S_OK;
+        return background_.Get(value);
     }
     HRESULT STDMETHODCALLTYPE put_Background(wuxm::IBrush* value) override {
-        if (value) value->AddRef();
-        if (background_) background_->Release();
-        background_ = value;
-        return S_OK;
+        return background_.Assign(value);
     }
 
 protected:
@@ -1633,7 +2639,7 @@ protected:
     }
 
     LayoutType layout_;
-    wuxm::IBrush* background_ = nullptr;
+    BrushProjection background_{layout_, ProjectedBrushSlot::Background};
     ChildCollection children_{{::openxaml::iid::PIID_FIVector_1_Windows__CUI__CXaml__CUIElement,
                                ::openxaml::iid::PIID_FIIterable_1_Windows__CUI__CXaml__CUIElement,
                                ::openxaml::iid::PIID_FIIterator_1_Windows__CUI__CXaml__CUIElement},
@@ -1700,8 +2706,9 @@ class SwapChainPanelObject final : public PanelObject<AbiGrid>,
                                    public IOpenXamlSwapChainPanelNative2 {
 public:
     using PrimaryInterface = wuxc::ISwapChainPanel;
-    ~SwapChainPanelObject() override {
-        if (swap_chain_) swap_chain_->Release();
+    SwapChainPanelObject()
+        : external_surface_(std::make_shared<openxaml::ExternalSurfaceBinding>()) {
+        layout_.SetExternalSurfaceProvider(external_surface_);
     }
     const wchar_t* RuntimeClassName() const override {
         return L"Windows.UI.Xaml.Controls.SwapChainPanel";
@@ -1750,24 +2757,35 @@ public:
         return E_NOTIMPL;
     }
     HRESULT STDMETHODCALLTYPE SetSwapChain(IUnknown* value) override {
-        if (value) value->AddRef();
-        if (swap_chain_) swap_chain_->Release();
-        swap_chain_ = value;
-        swap_chain_handle_ = nullptr;
-        return S_OK;
+        const HRESULT hr = external_surface_->SetDxgiSwapChain(value);
+        if (SUCCEEDED(hr)) layout_.NotifyExternalSurfaceChanged();
+        TraceExternalSurfaceMutation("dxgi-swap-chain", hr);
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE SetSwapChainHandle(HANDLE value) override {
-        if (swap_chain_) {
-            swap_chain_->Release();
-            swap_chain_ = nullptr;
-        }
-        swap_chain_handle_ = value;
-        return S_OK;
+        const HRESULT hr = external_surface_->SetCompositionSurfaceHandle(value);
+        if (SUCCEEDED(hr)) layout_.NotifyExternalSurfaceChanged();
+        TraceExternalSurfaceMutation("composition-surface-handle", hr);
+        return hr;
     }
 
 private:
-    IUnknown* swap_chain_ = nullptr;
-    HANDLE swap_chain_handle_ = nullptr;
+    void TraceExternalSurfaceMutation(const char* source, HRESULT result) const noexcept {
+        if (!GetEnvironmentVariableW(L"OPENXAML_TRACE_VISUAL_TREE", nullptr, 0)) return;
+        const openxaml::ExternalSurfaceSnapshot snapshot = external_surface_->Snapshot();
+        char message[320]{};
+        std::snprintf(
+            message, sizeof(message),
+            "OpenXaml external source=%s result=0x%08lx generation=%llu "
+            "kind=%d bound=%s node_id=%llu\n",
+            source, static_cast<unsigned long>(result),
+            static_cast<unsigned long long>(snapshot.generation()),
+            static_cast<int>(snapshot.kind()), snapshot ? "true" : "false",
+            static_cast<unsigned long long>(layout_.render_node_id()));
+        OutputDebugStringA(message);
+    }
+
+    std::shared_ptr<openxaml::ExternalSurfaceBinding> external_surface_;
 };
 
 class ContentPresenterObject final : public XamlElement,
@@ -1776,9 +2794,6 @@ class ContentPresenterObject final : public XamlElement,
 public:
     using PrimaryInterface = wuxc::IContentPresenter;
     ContentPresenterObject() { layout_.source = &content_; }
-    ~ContentPresenterObject() override {
-        if (background_) background_->Release();
-    }
     openxaml::Element* Layout() override { return &layout_; }
     const wchar_t* RuntimeClassName() const override {
         return L"Windows.UI.Xaml.Controls.ContentPresenter";
@@ -1816,20 +2831,14 @@ public:
         return hr;
     }
     HRESULT STDMETHODCALLTYPE get_Background(wuxm::IBrush** value) override {
-        if (!value) return E_POINTER;
-        *value = background_;
-        if (*value) (*value)->AddRef();
-        return S_OK;
+        return background_.Get(value);
     }
     HRESULT STDMETHODCALLTYPE put_Background(wuxm::IBrush* value) override {
-        if (value) value->AddRef();
-        if (background_) background_->Release();
-        background_ = value;
-        return S_OK;
+        return background_.Assign(value);
     }
 private:
     ChildSourced<openxaml::ContentPresenter> layout_;
-    wuxm::IBrush* background_ = nullptr;
+    BrushProjection background_{layout_, ProjectedBrushSlot::Background};
     ChildCollection content_{{::openxaml::iid::PIID_FIVector_1_Windows__CUI__CXaml__CUIElement,
                               ::openxaml::iid::PIID_FIIterable_1_Windows__CUI__CXaml__CUIElement,
                               ::openxaml::iid::PIID_FIIterator_1_Windows__CUI__CXaml__CUIElement},
@@ -1839,6 +2848,9 @@ private:
 class ImageObject final : public XamlElement, public abi::NotImpl_IImage {
 public:
     using PrimaryInterface = wuxc::IImage;
+    ~ImageObject() override {
+        if (source_) source_->Release();
+    }
     openxaml::Element* Layout() override { return &layout_; }
     const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.Image"; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
@@ -1847,23 +2859,277 @@ public:
         return QueryElementInterface(iid, object);
     }
     OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_Source(wuxm::IImageSource** value) override {
+        if (!value) return E_POINTER;
+        *value = source_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Source(wuxm::IImageSource* value) override {
+        if (value == source_) return S_OK;
+        if (value) value->AddRef();
+
+        std::string type;
+        if (value) {
+            type = "Windows.UI.Xaml.Media.ImageSource";
+            HSTRING runtime_name = nullptr;
+            if (SUCCEEDED(value->GetRuntimeClassName(&runtime_name)) && runtime_name) {
+                type = Utf8FromHString(runtime_name);
+                WindowsDeleteString(runtime_name);
+            }
+        }
+
+        wuxm::IImageSource* previous = source_;
+        source_ = value;
+        layout_.set_source(value != nullptr, std::move(type));
+        if (previous) previous->Release();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Stretch(wuxm::Stretch* value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<wuxm::Stretch>(layout_.stretch());
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Stretch(wuxm::Stretch value) override {
+        if (value < wuxm::Stretch_None || value > wuxm::Stretch_UniformToFill)
+            return E_INVALIDARG;
+        layout_.set_stretch(static_cast<openxaml::ImageStretch>(value));
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_NineGrid(wux::Thickness* value) override {
+        if (!value) return E_POINTER;
+        const openxaml::Thickness& retained = layout_.nine_grid();
+        *value = {retained.left, retained.top, retained.right, retained.bottom};
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_NineGrid(wux::Thickness value) override {
+        if (!ValidNineGrid(value.Left) || !ValidNineGrid(value.Top) ||
+            !ValidNineGrid(value.Right) || !ValidNineGrid(value.Bottom))
+            return E_INVALIDARG;
+        layout_.set_nine_grid(
+            {value.Left, value.Top, value.Right, value.Bottom});
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE add_ImageFailed(
+        wux::IExceptionRoutedEventHandler* handler,
+        EventRegistrationToken* token) override {
+        return AddEvent(handler, token);
+    }
+    HRESULT STDMETHODCALLTYPE remove_ImageFailed(
+        EventRegistrationToken token) override {
+        return RemoveEvent(token);
+    }
+    HRESULT STDMETHODCALLTYPE add_ImageOpened(
+        wux::IRoutedEventHandler* handler,
+        EventRegistrationToken* token) override {
+        return AddEvent(handler, token);
+    }
+    HRESULT STDMETHODCALLTYPE remove_ImageOpened(
+        EventRegistrationToken token) override {
+        return RemoveEvent(token);
+    }
+
 private:
+    static bool ValidNineGrid(double value) {
+        return std::isfinite(value) && value >= 0.0;
+    }
+
     openxaml::Image layout_;
+    wuxm::IImageSource* source_ = nullptr;
 };
 
-class PathObject final : public XamlElement, public abi::NotImpl_IPath {
+template <class LayoutType>
+class ShapeObjectBase : public XamlElement, public wuxs::IShape {
+public:
+    ShapeObjectBase()
+        : fill_(layout_, ProjectedBrushSlot::Fill),
+          stroke_(layout_, ProjectedBrushSlot::Stroke) {}
+    ~ShapeObjectBase() override {
+        if (stroke_dash_array_) stroke_dash_array_->Release();
+    }
+
+    openxaml::Element* Layout() override { return &layout_; }
+
+    HRESULT QueryShapeInterface(REFIID iid, void** object) {
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Shapes_IShape,
+                        wuxs::IShape)
+        return QueryElementInterface(iid, object);
+    }
+
+    HRESULT STDMETHODCALLTYPE get_Fill(wuxm::IBrush** value) override {
+        return fill_.Get(value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Fill(wuxm::IBrush* value) override {
+        return fill_.Assign(value);
+    }
+    HRESULT STDMETHODCALLTYPE get_Stroke(wuxm::IBrush** value) override {
+        return stroke_.Get(value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Stroke(wuxm::IBrush* value) override {
+        return stroke_.Assign(value);
+    }
+    HRESULT STDMETHODCALLTYPE get_StrokeMiterLimit(DOUBLE* value) override {
+        return CopyDouble(layout_.stroke_miter_limit(), value);
+    }
+    HRESULT STDMETHODCALLTYPE put_StrokeMiterLimit(DOUBLE value) override {
+        if (!std::isfinite(value) || value < 1.0) return E_INVALIDARG;
+        if (layout_.stroke_miter_limit() == value) return S_OK;
+        layout_.set_stroke_miter_limit(value);
+        layout_.InvalidateRender(false);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_StrokeThickness(DOUBLE* value) override {
+        return CopyDouble(layout_.stroke_thickness(), value);
+    }
+    HRESULT STDMETHODCALLTYPE put_StrokeThickness(DOUBLE value) override {
+        if (!std::isfinite(value) || value < 0.0) return E_INVALIDARG;
+        if (layout_.stroke_thickness() == value) return S_OK;
+        layout_.set_stroke_thickness(value);
+        layout_.InvalidateRender(true);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_StrokeStartLineCap(
+        wuxm::PenLineCap* value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<wuxm::PenLineCap>(layout_.stroke_start_line_cap());
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_StrokeStartLineCap(
+        wuxm::PenLineCap value) override {
+        if (!ValidLineCap(value)) return E_INVALIDARG;
+        layout_.set_stroke_start_line_cap(
+            static_cast<openxaml::ShapeLineCap>(value));
+        layout_.InvalidateRender(false);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_StrokeEndLineCap(
+        wuxm::PenLineCap* value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<wuxm::PenLineCap>(layout_.stroke_end_line_cap());
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_StrokeEndLineCap(
+        wuxm::PenLineCap value) override {
+        if (!ValidLineCap(value)) return E_INVALIDARG;
+        layout_.set_stroke_end_line_cap(
+            static_cast<openxaml::ShapeLineCap>(value));
+        layout_.InvalidateRender(false);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_StrokeLineJoin(
+        wuxm::PenLineJoin* value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<wuxm::PenLineJoin>(layout_.stroke_line_join());
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_StrokeLineJoin(
+        wuxm::PenLineJoin value) override {
+        if (value < wuxm::PenLineJoin_Miter || value > wuxm::PenLineJoin_Round)
+            return E_INVALIDARG;
+        layout_.set_stroke_line_join(
+            static_cast<openxaml::ShapeLineJoin>(value));
+        layout_.InvalidateRender(false);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_StrokeDashOffset(DOUBLE* value) override {
+        return CopyDouble(layout_.stroke_dash_offset(), value);
+    }
+    HRESULT STDMETHODCALLTYPE put_StrokeDashOffset(DOUBLE value) override {
+        if (!std::isfinite(value)) return E_INVALIDARG;
+        if (layout_.stroke_dash_offset() == value) return S_OK;
+        layout_.set_stroke_dash_offset(value);
+        layout_.InvalidateRender(false);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_StrokeDashCap(
+        wuxm::PenLineCap* value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<wuxm::PenLineCap>(layout_.stroke_dash_cap());
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_StrokeDashCap(
+        wuxm::PenLineCap value) override {
+        if (!ValidLineCap(value)) return E_INVALIDARG;
+        layout_.set_stroke_dash_cap(static_cast<openxaml::ShapeLineCap>(value));
+        layout_.InvalidateRender(false);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_StrokeDashArray(
+        __FIVector_1_double** value) override {
+        if (!value) return E_POINTER;
+        *value = stroke_dash_array_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_StrokeDashArray(
+        __FIVector_1_double* value) override {
+        if (value) value->AddRef();
+        if (stroke_dash_array_) stroke_dash_array_->Release();
+        stroke_dash_array_ = value;
+        layout_.set_has_stroke_dash_array(value != nullptr);
+        layout_.InvalidateRender(false);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Stretch(wuxm::Stretch* value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<wuxm::Stretch>(layout_.shape_stretch());
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Stretch(wuxm::Stretch value) override {
+        if (value < wuxm::Stretch_None || value > wuxm::Stretch_UniformToFill)
+            return E_INVALIDARG;
+        if (layout_.shape_stretch() ==
+            static_cast<openxaml::ShapeStretch>(value)) return S_OK;
+        layout_.set_shape_stretch(static_cast<openxaml::ShapeStretch>(value));
+        layout_.InvalidateRender(true);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_GeometryTransform(
+        wuxm::ITransform** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (layout_.shape_stretch() != openxaml::ShapeStretch::None) {
+            TraceRuntime(
+                "OpenXaml: E_NOTIMPL IShape.get_GeometryTransform for stretched geometry\n");
+            return E_NOTIMPL;
+        }
+        auto* identity = new (std::nothrow) ScaleTransformObject();
+        if (!identity) return E_OUTOFMEMORY;
+        *value = static_cast<wuxm::ITransform*>(identity);
+        return S_OK;
+    }
+
+protected:
+    LayoutType layout_;
+
+private:
+    static HRESULT CopyDouble(double source, DOUBLE* value) noexcept {
+        if (!value) return E_POINTER;
+        *value = source;
+        return S_OK;
+    }
+    static bool ValidLineCap(wuxm::PenLineCap value) noexcept {
+        return value >= wuxm::PenLineCap_Flat &&
+               value <= wuxm::PenLineCap_Triangle;
+    }
+
+    BrushProjection fill_;
+    BrushProjection stroke_;
+    __FIVector_1_double* stroke_dash_array_ = nullptr;
+};
+
+class PathObject final : public ShapeObjectBase<openxaml::Path>,
+                         public abi::NotImpl_IPath {
 public:
     using PrimaryInterface = wuxs::IPath;
-    openxaml::Element* Layout() override { return &layout_; }
     const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Shapes.Path"; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
         if (!object) return E_POINTER;
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Shapes_IPath, wuxs::IPath)
-        return QueryElementInterface(iid, object);
+        return QueryShapeInterface(iid, object);
     }
     OPENXAML_COM_BOILERPLATE()
-private:
-    openxaml::Path layout_;
 };
 
 class PathIconObject final : public XamlElement, public abi::NotImpl_IPathIcon {
@@ -2073,7 +3339,6 @@ public:
 
     ContentControlObjectBase() { layout_.source = &content_; }
     ~ContentControlObjectBase() override {
-        if (background_) background_->Release();
         if (foreground_) foreground_->Release();
     }
     openxaml::Element* Layout() override { return &layout_; }
@@ -2124,10 +3389,10 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_Background(wuxm::IBrush** value) override {
-        return GetBrush(background_, value);
+        return background_.Get(value);
     }
     HRESULT STDMETHODCALLTYPE put_Background(wuxm::IBrush* value) override {
-        return PutBrush(background_, value);
+        return background_.Assign(value);
     }
     HRESULT STDMETHODCALLTYPE get_Foreground(wuxm::IBrush** value) override {
         return GetBrush(foreground_, value);
@@ -2138,6 +3403,22 @@ public:
     HRESULT STDMETHODCALLTYPE ApplyTemplate(boolean* result) override {
         if (!result) return E_POINTER;
         *result = layout_.ApplyTemplate() ? 1 : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_FocusState(wux::FocusState* value) override {
+        if (!value) return E_POINTER;
+        *value = IslandFocusState();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Focus(wux::FocusState state,
+                                    boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = 0;
+        if (state < wux::FocusState_Unfocused ||
+            state > wux::FocusState_Programmatic) {
+            return E_INVALIDARG;
+        }
+        *value = RequestXamlFocus(*this, state) ? 1 : 0;
         return S_OK;
     }
 
@@ -2162,7 +3443,7 @@ protected:
     }
 
     ChildSourced<LayoutType> layout_;
-    wuxm::IBrush* background_ = nullptr;
+    BrushProjection background_{layout_, ProjectedBrushSlot::Background};
     wuxm::IBrush* foreground_ = nullptr;
     ChildCollection content_{
         {::openxaml::iid::PIID_FIVector_1_Windows__CUI__CXaml__CUIElement,
@@ -2549,7 +3830,8 @@ struct IMuxcTabView : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE put_SelectedItem(void*) = 0;
     virtual HRESULT STDMETHODCALLTYPE ContainerFromItem(void*, void**) = 0;
     virtual HRESULT STDMETHODCALLTYPE ContainerFromIndex(INT32, void**) = 0;
-    virtual HRESULT STDMETHODCALLTYPE add_SelectionChanged(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_SelectionChanged(
+        wuxc::ISelectionChangedEventHandler*, EventRegistrationToken*) = 0;
     virtual HRESULT STDMETHODCALLTYPE remove_SelectionChanged(EventRegistrationToken) = 0;
     virtual HRESULT STDMETHODCALLTYPE add_TabDragStarting(void*, EventRegistrationToken*) = 0;
     virtual HRESULT STDMETHODCALLTYPE remove_TabDragStarting(EventRegistrationToken) = 0;
@@ -2565,6 +3847,68 @@ using InspectableCollection = Vector<
     __FIVector_1_IInspectable, __FIIterable_1_IInspectable,
     __FIIterator_1_IInspectable, IInspectable, __FIVectorView_1_IInspectable>;
 
+inline constexpr GUID IID_OpenXamlSelectionChangedEventArgs = {
+    0xc972d2dc, 0xb609, 0x4758,
+    {0x85, 0x1e, 0xa7, 0x99, 0xc2, 0x1d, 0xe9, 0x7d}};
+
+// SelectionChanged is the semantic bridge TabView uses to publish a newly
+// selected tab. The argument collections own stable references to the old and
+// new items so a handler may retain either collection after dispatch.
+class SelectionChangedEventArgsObject final
+    : public ComObject,
+      public wuxc::ISelectionChangedEventArgs {
+public:
+    SelectionChangedEventArgsObject(IInspectable* removed,
+                                    IInspectable* added)
+        : removed_({::openxaml::iid::PIID_FIVector_1_IInspectable,
+                    ::openxaml::iid::PIID_FIIterable_1_IInspectable,
+                    ::openxaml::iid::PIID_FIIterator_1_IInspectable},
+                   L"Windows.UI.Xaml.Controls.SelectionChangedEventArgs.RemovedItems",
+                   this),
+          added_({::openxaml::iid::PIID_FIVector_1_IInspectable,
+                  ::openxaml::iid::PIID_FIIterable_1_IInspectable,
+                  ::openxaml::iid::PIID_FIIterator_1_IInspectable},
+                 L"Windows.UI.Xaml.Controls.SelectionChangedEventArgs.AddedItems",
+                 this) {
+        if (removed) (void)removed_.Append(removed);
+        if (added) (void)added_.Append(added);
+    }
+
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.SelectionChangedEventArgs";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_OpenXamlSelectionChangedEventArgs,
+                        wuxc::ISelectionChangedEventArgs)
+        OPENXAML_QI_ARM(IID_IUnknown, wuxc::ISelectionChangedEventArgs)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable,
+                        wuxc::ISelectionChangedEventArgs)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_AddedItems(
+        __FIVector_1_IInspectable** value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<__FIVector_1_IInspectable*>(&added_);
+        (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_RemovedItems(
+        __FIVector_1_IInspectable** value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<__FIVector_1_IInspectable*>(&removed_);
+        (*value)->AddRef();
+        return S_OK;
+    }
+
+private:
+    InspectableCollection removed_;
+    InspectableCollection added_;
+};
+
 class TabViewObject final : public ContentControlObjectBase<openxaml::ContentControl>,
                             public IMuxcTabView {
 public:
@@ -2575,6 +3919,8 @@ public:
                       ::openxaml::iid::PIID_FIIterator_1_IInspectable},
                      L"Microsoft.UI.Xaml.Controls.TabView.TabItems", this) {}
     ~TabViewObject() override {
+        for (auto& [_, handler] : selection_changed_handlers_)
+            handler->Release();
         for (auto* value : {tab_strip_header_, tab_strip_header_template_,
                             tab_strip_footer_, tab_strip_footer_template_,
                             add_tab_command_, add_tab_parameter_, tab_items_source_,
@@ -2602,7 +3948,6 @@ public:
     }
     OPENXAML_MUXC_INT(TabWidthMode, tab_width_mode_)
     OPENXAML_MUXC_INT(CloseButtonOverlayMode, close_button_overlay_mode_)
-    OPENXAML_MUXC_INT(SelectedIndex, selected_index_)
 #undef OPENXAML_MUXC_INT
 
 #define OPENXAML_MUXC_BOOL(name, field)                                     \
@@ -2636,8 +3981,46 @@ public:
     OPENXAML_MUXC_OBJECT(TabItemsSource, tab_items_source_)
     OPENXAML_MUXC_OBJECT(TabItemTemplate, tab_item_template_)
     OPENXAML_MUXC_OBJECT(TabItemTemplateSelector, tab_item_template_selector_)
-    OPENXAML_MUXC_OBJECT(SelectedItem, selected_item_)
 #undef OPENXAML_MUXC_OBJECT
+
+    HRESULT STDMETHODCALLTYPE get_SelectedIndex(INT32* value) override {
+        if (!value) return E_POINTER;
+        *value = selected_index_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_SelectedIndex(INT32 value) override {
+        if (value < -1) return E_INVALIDARG;
+        IInspectable* item = nullptr;
+        if (value >= 0) {
+            const HRESULT hr = tab_items_.GetAt(static_cast<UINT32>(value), &item);
+            if (FAILED(hr)) return hr;
+        }
+        const HRESULT hr = Select(item, value);
+        if (item) item->Release();
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectedItem(void** value) override {
+        return GetObject(selected_item_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_SelectedItem(void* value) override {
+        auto* const item = static_cast<IInspectable*>(value);
+        INT32 index = -1;
+        if (item) {
+            const UINT32 count = tab_items_.Count();
+            for (UINT32 candidate = 0; candidate < count; ++candidate) {
+                IInspectable* existing = nullptr;
+                if (FAILED(tab_items_.GetAt(candidate, &existing)) || !existing)
+                    continue;
+                const bool match = SameIdentity(existing, item);
+                existing->Release();
+                if (match) {
+                    index = static_cast<INT32>(candidate);
+                    break;
+                }
+            }
+        }
+        return Select(item, index);
+    }
 
     HRESULT STDMETHODCALLTYPE get_TabItems(void** value) override {
         if (!value) return E_POINTER;
@@ -2674,14 +4057,79 @@ public:
     OPENXAML_MUXC_EVENT(TabDroppedOutside)
     OPENXAML_MUXC_EVENT(AddTabButtonClick)
     OPENXAML_MUXC_EVENT(TabItemsChanged)
-    OPENXAML_MUXC_EVENT(SelectionChanged)
     OPENXAML_MUXC_EVENT(TabDragStarting)
     OPENXAML_MUXC_EVENT(TabDragCompleted)
     OPENXAML_MUXC_EVENT(TabStripDragOver)
     OPENXAML_MUXC_EVENT(TabStripDrop)
 #undef OPENXAML_MUXC_EVENT
 
+    HRESULT STDMETHODCALLTYPE add_SelectionChanged(
+        wuxc::ISelectionChangedEventHandler* handler,
+        EventRegistrationToken* token) override {
+        return AddTypedEvent(handler, token, selection_changed_handlers_);
+    }
+    HRESULT STDMETHODCALLTYPE remove_SelectionChanged(
+        EventRegistrationToken token) override {
+        return RemoveTypedEvent(token, selection_changed_handlers_);
+    }
+
 private:
+    static bool SameIdentity(IUnknown* left, IUnknown* right) {
+        if (left == right) return true;
+        if (!left || !right) return false;
+        IUnknown* left_identity = nullptr;
+        IUnknown* right_identity = nullptr;
+        const HRESULT left_hr = left->QueryInterface(
+            IID_IUnknown, reinterpret_cast<void**>(&left_identity));
+        const HRESULT right_hr = right->QueryInterface(
+            IID_IUnknown, reinterpret_cast<void**>(&right_identity));
+        const bool same = SUCCEEDED(left_hr) && SUCCEEDED(right_hr) &&
+                          left_identity == right_identity;
+        if (left_identity) left_identity->Release();
+        if (right_identity) right_identity->Release();
+        return same;
+    }
+
+    HRESULT Select(IInspectable* item, INT32 index) {
+        if (SameIdentity(selected_item_, item)) {
+            selected_index_ = index;
+            return S_OK;
+        }
+
+        SelectionChangedEventArgsObject* arguments = nullptr;
+        std::vector<wuxc::ISelectionChangedEventHandler*> handlers;
+        try {
+            arguments = new SelectionChangedEventArgsObject(selected_item_, item);
+            handlers.reserve(selection_changed_handlers_.size());
+            for (const auto& [_, handler] : selection_changed_handlers_) {
+                handler->AddRef();
+                handlers.push_back(handler);
+            }
+        } catch (...) {
+            if (arguments) arguments->Release();
+            for (auto* handler : handlers) handler->Release();
+            return E_OUTOFMEMORY;
+        }
+
+        if (item) item->AddRef();
+        IInspectable* const removed = selected_item_;
+        selected_item_ = item;
+        selected_index_ = index;
+
+        HRESULT result = S_OK;
+        auto* const sender = static_cast<IInspectable*>(
+            static_cast<IMuxcTabView*>(this));
+        auto* const args = static_cast<wuxc::ISelectionChangedEventArgs*>(arguments);
+        for (auto* handler : handlers) {
+            const HRESULT invoked = handler->Invoke(sender, args);
+            if (FAILED(invoked) && SUCCEEDED(result)) result = invoked;
+        }
+        for (auto* handler : handlers) handler->Release();
+        arguments->Release();
+        if (removed) removed->Release();
+        return result;
+    }
+
     static HRESULT GetObject(IInspectable* object, void** value) {
         if (!value) return E_POINTER;
         *value = object;
@@ -2712,6 +4160,8 @@ private:
     IInspectable* tab_item_template_ = nullptr;
     IInspectable* tab_item_template_selector_ = nullptr;
     IInspectable* selected_item_ = nullptr;
+    std::map<LONGLONG, wuxc::ISelectionChangedEventHandler*>
+        selection_changed_handlers_;
     InspectableCollection tab_items_;
 };
 
@@ -2890,6 +4340,223 @@ private:
     IInspectable* command_parameter_ = nullptr;
 };
 
+inline constexpr GUID IID_IMuxcInfoBar = {
+    0x273ffde8, 0x9324, 0x55b7,
+    {0x9f, 0xfe, 0x7d, 0x99, 0x5a, 0x8a, 0xf5, 0x6b}};
+inline constexpr GUID IID_IMuxcInfoBarFactory = {
+    0x60618a60, 0x9be7, 0x5df5,
+    {0xbe, 0x0d, 0x93, 0x3d, 0x34, 0xdd, 0xb4, 0x4c}};
+
+// Handwritten from the pinned Microsoft.UI.Xaml WinMD projection. WinUI's
+// interfaces are not part of the Windows SDK headers used to build this DLL,
+// but Terminal consumes this exact default-interface vtable.
+struct IMuxcInfoBar : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_IsOpen(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsOpen(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Title(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Title(HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Message(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Message(HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Severity(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Severity(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IconSource(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IconSource(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsIconVisible(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsIconVisible(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsClosable(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsClosable(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_CloseButtonStyle(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_CloseButtonStyle(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_CloseButtonCommand(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_CloseButtonCommand(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_CloseButtonCommandParameter(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_CloseButtonCommandParameter(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ActionButton(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ActionButton(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Content(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Content(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ContentTemplate(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ContentTemplate(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_TemplateSettings(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_CloseButtonClick(
+        void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_CloseButtonClick(
+        EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Closing(
+        void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_Closing(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Closed(
+        void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_Closed(EventRegistrationToken) = 0;
+};
+
+struct IMuxcInfoBarFactory : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE CreateInstance(void*, void**, void**) = 0;
+};
+
+class InfoBarObject final
+    : public ContentControlObjectBase<openxaml::InfoBar>,
+      public IMuxcInfoBar {
+public:
+    using Base = ContentControlObjectBase<openxaml::InfoBar>;
+    using PrimaryInterface = IMuxcInfoBar;
+
+    InfoBarObject() {
+        // A closed InfoBar is absent from layout. x:Load controls whether the
+        // object exists at all; IsOpen controls the realized element once it
+        // has been materialized.
+        layout_.set_visibility(openxaml::Visibility::Collapsed);
+    }
+    ~InfoBarObject() override {
+        WindowsDeleteString(title_);
+        WindowsDeleteString(message_);
+        ReleaseObject(icon_source_);
+        ReleaseObject(close_button_style_);
+        ReleaseObject(close_button_command_);
+        ReleaseObject(close_button_command_parameter_);
+        ReleaseObject(action_button_);
+        ReleaseObject(content_template_);
+    }
+
+    const wchar_t* RuntimeClassName() const override {
+        return L"Microsoft.UI.Xaml.Controls.InfoBar";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IMuxcInfoBar, IMuxcInfoBar)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_IsOpen(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = is_open_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_IsOpen(boolean value) override {
+        const boolean next = value != 0;
+        if (is_open_ == next) return S_OK;
+        is_open_ = next;
+        layout_.set_visibility(next ? openxaml::Visibility::Visible
+                                    : openxaml::Visibility::Collapsed);
+        return S_OK;
+    }
+
+#define OPENXAML_INFOBAR_STRING(name, field)                               \
+    HRESULT STDMETHODCALLTYPE get_##name(HSTRING* value) override {        \
+        if (!value) return E_POINTER;                                       \
+        return WindowsDuplicateString(field, value);                        \
+    }                                                                       \
+    HRESULT STDMETHODCALLTYPE put_##name(HSTRING value) override {          \
+        HSTRING next = nullptr;                                             \
+        HRESULT hr = WindowsDuplicateString(value, &next);                  \
+        if (FAILED(hr)) return hr;                                          \
+        WindowsDeleteString(field);                                         \
+        field = next;                                                       \
+        layout_.InvalidateRender(true);                                     \
+        return S_OK;                                                        \
+    }
+    OPENXAML_INFOBAR_STRING(Title, title_)
+    OPENXAML_INFOBAR_STRING(Message, message_)
+#undef OPENXAML_INFOBAR_STRING
+
+    HRESULT STDMETHODCALLTYPE get_Severity(INT32* value) override {
+        if (!value) return E_POINTER;
+        *value = severity_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Severity(INT32 value) override {
+        if (value < 0 || value > 3) return E_INVALIDARG;
+        severity_ = value;
+        layout_.InvalidateRender(false);
+        return S_OK;
+    }
+
+#define OPENXAML_INFOBAR_BOOL(name, field, layout_change)                  \
+    HRESULT STDMETHODCALLTYPE get_##name(boolean* value) override {        \
+        if (!value) return E_POINTER;                                       \
+        *value = field;                                                     \
+        return S_OK;                                                        \
+    }                                                                       \
+    HRESULT STDMETHODCALLTYPE put_##name(boolean value) override {         \
+        field = value != 0;                                                 \
+        layout_.InvalidateRender(layout_change);                            \
+        return S_OK;                                                        \
+    }
+    OPENXAML_INFOBAR_BOOL(IsIconVisible, is_icon_visible_, true)
+    OPENXAML_INFOBAR_BOOL(IsClosable, is_closable_, true)
+#undef OPENXAML_INFOBAR_BOOL
+
+#define OPENXAML_INFOBAR_OBJECT(name, field, layout_change)                \
+    HRESULT STDMETHODCALLTYPE get_##name(void** value) override {          \
+        if (!value) return E_POINTER;                                       \
+        *value = field;                                                     \
+        if (field) field->AddRef();                                         \
+        return S_OK;                                                        \
+    }                                                                       \
+    HRESULT STDMETHODCALLTYPE put_##name(void* value) override {           \
+        auto* next = static_cast<IInspectable*>(value);                     \
+        if (next) next->AddRef();                                           \
+        ReleaseObject(field);                                               \
+        field = next;                                                       \
+        layout_.InvalidateRender(layout_change);                            \
+        return S_OK;                                                        \
+    }
+    OPENXAML_INFOBAR_OBJECT(IconSource, icon_source_, true)
+    OPENXAML_INFOBAR_OBJECT(CloseButtonStyle, close_button_style_, true)
+    OPENXAML_INFOBAR_OBJECT(CloseButtonCommand, close_button_command_, false)
+    OPENXAML_INFOBAR_OBJECT(CloseButtonCommandParameter,
+                            close_button_command_parameter_, false)
+    OPENXAML_INFOBAR_OBJECT(ActionButton, action_button_, true)
+    OPENXAML_INFOBAR_OBJECT(ContentTemplate, content_template_, true)
+#undef OPENXAML_INFOBAR_OBJECT
+
+    HRESULT STDMETHODCALLTYPE get_Content(void** value) override {
+        return Base::get_Content(reinterpret_cast<IInspectable**>(value));
+    }
+    HRESULT STDMETHODCALLTYPE put_Content(void* value) override {
+        return Base::put_Content(static_cast<IInspectable*>(value));
+    }
+    HRESULT STDMETHODCALLTYPE get_TemplateSettings(void** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        return S_OK;
+    }
+
+#define OPENXAML_INFOBAR_EVENT(name)                                      \
+    HRESULT STDMETHODCALLTYPE add_##name(                                 \
+        void* handler, EventRegistrationToken* token) override {          \
+        return AddEvent(static_cast<IUnknown*>(handler), token);           \
+    }                                                                      \
+    HRESULT STDMETHODCALLTYPE remove_##name(                              \
+        EventRegistrationToken token) override {                          \
+        return RemoveEvent(token);                                         \
+    }
+    OPENXAML_INFOBAR_EVENT(CloseButtonClick)
+    OPENXAML_INFOBAR_EVENT(Closing)
+    OPENXAML_INFOBAR_EVENT(Closed)
+#undef OPENXAML_INFOBAR_EVENT
+
+private:
+    static void ReleaseObject(IInspectable*& value) {
+        if (value) value->Release();
+        value = nullptr;
+    }
+
+    HSTRING title_ = nullptr;
+    HSTRING message_ = nullptr;
+    IInspectable* icon_source_ = nullptr;
+    IInspectable* close_button_style_ = nullptr;
+    IInspectable* close_button_command_ = nullptr;
+    IInspectable* close_button_command_parameter_ = nullptr;
+    IInspectable* action_button_ = nullptr;
+    IInspectable* content_template_ = nullptr;
+    boolean is_open_ = 0;
+    boolean is_icon_visible_ = 1;
+    boolean is_closable_ = 1;
+    INT32 severity_ = 0;
+};
+
 inline constexpr GUID IID_IMuxcProgressRing = {
     0x2670d03f, 0xe28c, 0x5652, {0xbe, 0xe2, 0xb5, 0x21, 0x2e, 0xbd, 0xf7, 0xff}};
 inline constexpr GUID IID_IMuxcProgressRingFactory = {
@@ -2968,7 +4635,7 @@ private:
     DOUBLE maximum_ = 100.0;
 };
 
-class UserControlObject final : public ContentControlObjectBase<openxaml::ContentControl>,
+class UserControlObject final : public ContentControlObjectBase<openxaml::UserControl>,
                                 public abi::NotImpl_IUserControl {
 public:
     using PrimaryInterface = wuxc::IUserControl;
@@ -3634,6 +5301,9 @@ private:
 inline constexpr GUID IID_IMuxcBitmapIconSource = {
     0xa6b6cccc, 0xea8f, 0x53ca,
     {0x83, 0x1f, 0x2a, 0xbe, 0x85, 0xcd, 0x6d, 0x8c}};
+inline constexpr GUID IID_IMuxcBitmapIconSourceFactory = {
+    0x7d484c14, 0xf5f6, 0x5e39,
+    {0xb4, 0xe4, 0xb6, 0x10, 0x8d, 0x2e, 0xe0, 0x95}};
 inline constexpr GUID IID_IMuxcIconSource = {
     0x6e3501ed, 0xdd31, 0x51e9,
     {0x8f, 0x14, 0x25, 0x61, 0xf9, 0x9c, 0x8a, 0x8f}};
@@ -3643,6 +5313,11 @@ struct IMuxcBitmapIconSource : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE put_UriSource(void*) = 0;
     virtual HRESULT STDMETHODCALLTYPE get_ShowAsMonochrome(boolean*) = 0;
     virtual HRESULT STDMETHODCALLTYPE put_ShowAsMonochrome(boolean) = 0;
+};
+struct IMuxcBitmapIconSourceFactory : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE CreateInstance(
+        IInspectable* base, IInspectable** inner,
+        IMuxcBitmapIconSource** value) = 0;
 };
 struct IMuxcIconSource : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE CreateIconElement(void**) = 0;
@@ -4256,6 +5931,10 @@ class ScrollBarObject final
       public abi::NotImpl_IRangeBase {
 public:
     using PrimaryInterface = wuxcp::IScrollBar;
+    using ValueChangedHandler = wuxcp::IRangeBaseValueChangedEventHandler;
+    ~ScrollBarObject() override {
+        for (auto& [_, handler] : value_changed_handlers_) handler->Release();
+    }
     const wchar_t* RuntimeClassName() const override {
         return L"Windows.UI.Xaml.Controls.Primitives.ScrollBar";
     }
@@ -4271,23 +5950,81 @@ public:
     }
     OPENXAML_COM_BOILERPLATE()
 
-#define OPENXAML_SCROLLBAR_DOUBLE(name, field)                         \
-    HRESULT STDMETHODCALLTYPE get_##name(DOUBLE* value) override {     \
-        if (!value) return E_POINTER;                                  \
-        *value = field;                                                \
-        return S_OK;                                                   \
-    }                                                                  \
-    HRESULT STDMETHODCALLTYPE put_##name(DOUBLE value) override {      \
-        field = value;                                                 \
-        return S_OK;                                                   \
+    HRESULT STDMETHODCALLTYPE get_Minimum(DOUBLE* value) override {
+        return CopyDouble(minimum_, value);
     }
-    OPENXAML_SCROLLBAR_DOUBLE(Minimum, minimum_)
-    OPENXAML_SCROLLBAR_DOUBLE(Maximum, maximum_)
-    OPENXAML_SCROLLBAR_DOUBLE(SmallChange, small_change_)
-    OPENXAML_SCROLLBAR_DOUBLE(LargeChange, large_change_)
-    OPENXAML_SCROLLBAR_DOUBLE(Value, value_)
-    OPENXAML_SCROLLBAR_DOUBLE(ViewportSize, viewport_size_)
-#undef OPENXAML_SCROLLBAR_DOUBLE
+    HRESULT STDMETHODCALLTYPE put_Minimum(DOUBLE value) override {
+        if (!ValidDouble(value)) return E_INVALIDARG;
+        const double old_minimum = minimum_;
+        const double old_maximum = maximum_;
+        if (value <= old_minimum) {
+            // Expanding the range publishes Minimum before an uncoerced Value
+            // is allowed to return to the newly available interval.
+            minimum_ = value;
+            return CoerceValue(value, old_maximum);
+        }
+
+        // Contracting the range publishes a required Maximum adjustment
+        // first, then Value, then Minimum. This ordering is observable from a
+        // reentrant ValueChanged handler and follows RangeBase::SetValue.
+        if (value > maximum_) maximum_ = value;
+        const HRESULT changed = CoerceValue(value, maximum_);
+        if (FAILED(changed)) return changed;
+        minimum_ = value;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Maximum(DOUBLE* value) override {
+        return CopyDouble(maximum_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Maximum(DOUBLE value) override {
+        if (!ValidDouble(value)) return E_INVALIDARG;
+        const double old_maximum = maximum_;
+        if (value >= old_maximum) {
+            // Expanding the range publishes Maximum before restoring the
+            // caller's uncoerced Value.
+            maximum_ = value;
+            return CoerceValue(minimum_, value);
+        }
+
+        // Contracting publishes the coerced Value while handlers can still
+        // observe the old Maximum, then commits the new bound.
+        const double coerced_maximum = std::max(value, minimum_);
+        const HRESULT changed = CoerceValue(minimum_, coerced_maximum);
+        if (FAILED(changed)) return changed;
+        maximum_ = coerced_maximum;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_SmallChange(DOUBLE* value) override {
+        return CopyDouble(small_change_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_SmallChange(DOUBLE value) override {
+        if (!ValidDouble(value)) return E_INVALIDARG;
+        small_change_ = value;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_LargeChange(DOUBLE* value) override {
+        return CopyDouble(large_change_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_LargeChange(DOUBLE value) override {
+        if (!ValidDouble(value)) return E_INVALIDARG;
+        large_change_ = value;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Value(DOUBLE* value) override {
+        return CopyDouble(value_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Value(DOUBLE value) override {
+        if (!ValidDouble(value)) return E_INVALIDARG;
+        uncoerced_value_ = value;
+        return CoerceValue(minimum_, maximum_);
+    }
+    HRESULT STDMETHODCALLTYPE get_ViewportSize(DOUBLE* value) override {
+        return CopyDouble(viewport_size_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_ViewportSize(DOUBLE value) override {
+        viewport_size_ = value;
+        return S_OK;
+    }
 
     HRESULT STDMETHODCALLTYPE get_Orientation(wuxc::Orientation* value) override {
         if (!value) return E_POINTER;
@@ -4312,10 +6049,10 @@ public:
     HRESULT STDMETHODCALLTYPE add_ValueChanged(
         wuxcp::IRangeBaseValueChangedEventHandler* handler,
         EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        return AddTypedEvent(handler, token, value_changed_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_ValueChanged(EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, value_changed_handlers_);
     }
     HRESULT STDMETHODCALLTYPE add_Scroll(
         wuxcp::IScrollEventHandler* handler, EventRegistrationToken* token) override {
@@ -4326,15 +6063,75 @@ public:
     }
 
 private:
+    static bool ValidDouble(double value) noexcept {
+        return std::isfinite(value);
+    }
+    static HRESULT CopyDouble(double source, DOUBLE* value) noexcept {
+        if (!value) return E_POINTER;
+        *value = source;
+        return S_OK;
+    }
+
+    HRESULT CoerceValue(double minimum, double maximum) {
+        const double coerced = std::max(std::min(uncoerced_value_, maximum),
+                                        minimum);
+        if (coerced == value_) return S_OK;
+        const double old_value = value_;
+        value_ = coerced;
+        return RaiseValueChanged(old_value, coerced);
+    }
+
+    HRESULT RaiseValueChanged(double old_value, double new_value) {
+        // Range values are projection state until a retained ScrollBar
+        // template owns a thumb. Do not fabricate a layout/render invalidation
+        // for a scene property that the current Element model does not read.
+        if (value_changed_handlers_.empty()) return S_OK;
+        std::vector<ValueChangedHandler*> snapshot;
+        try {
+            snapshot.reserve(value_changed_handlers_.size());
+        } catch (...) {
+            return E_OUTOFMEMORY;
+        }
+        for (const auto& [_, handler] : value_changed_handlers_) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+
+        IInspectable* const sender = static_cast<IInspectable*>(
+            static_cast<wuxcp::IScrollBar*>(this));
+        auto* args = new (std::nothrow) RangeBaseValueChangedEventArgsObject(
+            sender, old_value, new_value);
+        if (!args) {
+            for (ValueChangedHandler* handler : snapshot) handler->Release();
+            return E_OUTOFMEMORY;
+        }
+        auto* const event_args =
+            static_cast<wuxcp::IRangeBaseValueChangedEventArgs*>(args);
+        HRESULT result = S_OK;
+        try {
+            for (ValueChangedHandler* handler : snapshot) {
+                result = handler->Invoke(sender, event_args);
+                if (FAILED(result)) break;
+            }
+        } catch (...) {
+            result = E_FAIL;
+        }
+        event_args->Release();
+        for (ValueChangedHandler* handler : snapshot) handler->Release();
+        return result;
+    }
+
     DOUBLE minimum_ = 0.0;
     DOUBLE maximum_ = 1.0;
     DOUBLE small_change_ = 0.1;
     DOUBLE large_change_ = 1.0;
     DOUBLE value_ = 0.0;
+    DOUBLE uncoerced_value_ = 0.0;
     DOUBLE viewport_size_ = 0.0;
     wuxc::Orientation orientation_ = wuxc::Orientation_Vertical;
     wuxcp::ScrollingIndicatorMode indicator_mode_ =
         wuxcp::ScrollingIndicatorMode_None;
+    std::map<LONGLONG, ValueChangedHandler*> value_changed_handlers_;
 };
 
 class FontIconObject final : public XamlElement,
@@ -4431,15 +6228,15 @@ private:
     wuxm::IBrush* foreground_ = nullptr;
 };
 
-class RectangleObject final : public XamlElement, public abi::NotImpl_IRectangle {
+class RectangleObject final : public ShapeObjectBase<openxaml::Rectangle>,
+                              public abi::NotImpl_IRectangle {
 public:
     using PrimaryInterface = wuxs::IRectangle;
-    openxaml::Element* Layout() override { return &layout_; }
     const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Shapes.Rectangle"; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
         if (!object) return E_POINTER;
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Shapes_IRectangle, wuxs::IRectangle)
-        return QueryElementInterface(iid, object);
+        return QueryShapeInterface(iid, object);
     }
     OPENXAML_COM_BOILERPLATE()
     HRESULT STDMETHODCALLTYPE get_RadiusX(DOUBLE* value) override {
@@ -4455,7 +6252,6 @@ public:
     }
     HRESULT STDMETHODCALLTYPE put_RadiusY(DOUBLE value) override { radius_y_ = value; return S_OK; }
 private:
-    openxaml::Rectangle layout_;
     double radius_x_ = 0;
     double radius_y_ = 0;
 };

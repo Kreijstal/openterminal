@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "upstream": {
+    "commit": "cd612796060508219044ee4dd18ef2ad043486ec",
+    "license": "Apache-2.0",
+    "license_url": "https://github.com/unoplatform/uno.fonts/blob/cd612796060508219044ee4dd18ef2ad043486ec/LICENSE.md",
+    "repository": "https://github.com/unoplatform/uno.fonts"
+  },
+  "fonts": [
+    {
+      "aliases": [
+        "Segoe Fluent Icons",
+        "Segoe MDL2 Assets"
+      ],
+      "family": "Symbols",
+      "file": "uno-fluentui-assets.ttf",
+      "sha256": "2573f53b71ebee599dfc94c60e1ea848d6d20e7e777d2c65d063822850e738b6",
+      "url": "https://raw.githubusercontent.com/unoplatform/uno.fonts/cd612796060508219044ee4dd18ef2ad043486ec/webfonts/Uno%20Fluent%20Icons/uno-fluentui-assets.ttf"
+    }
+  ]
+}

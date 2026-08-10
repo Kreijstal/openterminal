@@ -72,6 +72,10 @@ void DumpObject(const std::shared_ptr<openxaml::xbf::Object>& object, std::size_
         std::cout << indent << "  [" << key << "] = ";
         DumpValue(value, depth + 2);
     }
+    if (object->deferred_content) {
+        std::cout << indent << "  <deferred> =\n";
+        DumpObject(object->deferred_content, depth + 2);
+    }
 }
 
 void DumpValue(const openxaml::xbf::Value& value, std::size_t depth) {

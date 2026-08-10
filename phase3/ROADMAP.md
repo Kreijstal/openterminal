@@ -35,9 +35,12 @@ independently-testable tracks.
 | 6 | render/composition backend (visual tree → swapchain; Wine-side) · DesktopWindowXamlSource island hosting · SwapChainPanel for TermControl | pixels on screen under Wine |
 | 7 | XBF loader parity, PRI resolution, aggregate metadata provider → TerminalApp/Settings pages load end-to-end | Windows Terminal UI boots |
 
-Waves 5–6 need new oracle *kinds* (input event traces, rendered-output
-probes), not just more layout cases — extending the probe is part of those
-waves, and the probe extension lands before the implementation it gates.
+Waves 5–6 need new oracle *kinds*, not just more layout cases. The focused
+rendered-output/visual-boundary probe is now implemented and runs twice in the
+Windows measurement workflow. Its exact pixel/visual/glyph acceptance comparator
+is wired into CI as an allowed-to-fail future gate until Wave 6 reaches green;
+the test itself has no tolerances or expected failures. Input event traces are
+still outstanding for Wave 5.
 
 Implementation status as of the Wave-2 baseline: the native Wave-3 binding,
 visual-state/storyboard and template mechanisms and the Wave-4 framework

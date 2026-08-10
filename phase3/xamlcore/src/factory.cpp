@@ -5,20 +5,30 @@
 // calls DllGetActivationFactory. Everything below that point is ours.
 
 #include "sdk.h"
+#include <dcomp.h>
+#include <d3d11.h>
+#include <dxgi.h>
 #include <roapi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
 #include "elements.h"
+#include "dcomp_scene_backend.h"
+#include "dwrite_text_provider.h"
 #include "fonts.h"
+#include "island_frame_cache.h"
+#include "resource_catalog.h"
+#include "strings.h"
 #include "xbf_object.h"
 
 namespace openxaml::winrt {
@@ -37,7 +47,49 @@ namespace wuxma = ABI::Windows::UI::Xaml::Media::Animation;
 namespace warc = ABI::Windows::ApplicationModel::Resources::Core;
 namespace wfc = ABI::Windows::Foundation::Collections;
 
+// DComp raster strata consume the same retained LocalText contract as the
+// existing GDI island cache. Keep the adapter at the host boundary: the
+// platform-neutral backend never learns about DirectWrite, and the authored
+// text colour/clip remain part of the request rather than host defaults.
+class IslandDwriteTextRasterizer final : public openxaml::render::TextRasterizer {
+public:
+    bool DrawText(const openxaml::render::TextRasterRequest& request,
+                  openxaml::render::Surface& surface,
+                  std::string& diagnostic) override {
+        openxaml::render::TextOp run;
+        run.bounds = request.bounds;
+        run.has_clip = request.has_clip;
+        run.clip = request.clip;
+        run.text = request.text.text;
+        run.font_family = request.text.font_family;
+        run.font_size = request.text.font_size;
+        run.baseline = request.text.baseline;
+        run.advances = request.text.advances;
+        run.wrap = request.text.wrap;
+        run.bold = request.text.bold;
+        run.language = request.text.language;
+        return openxaml::render::DrawDirectWriteTextRun(
+            surface, run, request.text.color, diagnostic);
+    }
+};
+
 bool g_xaml_manager_initialized = false;
+std::atomic<std::uint64_t> g_next_desktop_island_cookie{1};
+// MinGW's WinRT headers omit roerrorapi.h's standard HRESULT while the pinned
+// SDK copy cannot be included without its full shared-header payload.
+inline constexpr HRESULT kRoClosed = static_cast<HRESULT>(0x80000013UL);
+inline constexpr HRESULT kIllegalDelegateAssignment =
+    static_cast<HRESULT>(0x80000018UL);
+
+// Private identity carried only by the real per-island XamlRoot projection.
+// FocusManager uses it to reach that island's existing XamlFocusScope; there
+// is deliberately no second XamlRoot-to-focus registry.
+inline constexpr GUID IID_IOpenXamlXamlRoot = {
+    0x6f70656e, 0x7861, 0x6d6c,
+    {0x9e, 0x04, 0x78, 0x61, 0x6d, 0x6c, 0x72, 0x74}};
+struct IOpenXamlXamlRoot : IUnknown {
+    virtual HRESULT CopyFocusedElement(IInspectable** value) noexcept = 0;
+};
 
 // A factory that answers ActivateInstance with a new T, and optionally a
 // statics interface as well -- WinRT puts a class's static members on its
@@ -98,6 +150,16 @@ using PropertyIterator =
     wfc::__FIIterator_1___FIKeyValuePair_2_HSTRING_IInspectable_t;
 using PropertyMapChangedHandler =
     wfc::__FMapChangedEventHandler_2_HSTRING_IInspectable_t;
+using NamedResourcePair =
+    wfc::__FIKeyValuePair_2_HSTRING_Windows__CApplicationModel__CResources__CCore__CNamedResource_t;
+using NamedResourceIterator =
+    wfc::__FIIterator_1___FIKeyValuePair_2_HSTRING_Windows__CApplicationModel__CResources__CCore__CNamedResource_t;
+using NamedResourceIterable =
+    wfc::__FIIterable_1___FIKeyValuePair_2_HSTRING_Windows__CApplicationModel__CResources__CCore__CNamedResource_t;
+using NamedResourceMapView =
+    wfc::__FIMapView_2_HSTRING_Windows__CApplicationModel__CResources__CCore__CNamedResource_t;
+using ResourceCandidateVectorView =
+    wfc::__FIVectorView_1_Windows__CApplicationModel__CResources__CCore__CResourceCandidate_t;
 inline constexpr GUID IID_PropertySet = {
     0x8a43ed9f, 0xf4e6, 0x4421, {0xac, 0xf9, 0x1d, 0xab, 0x29, 0x86, 0x82, 0x0c}};
 inline constexpr GUID IID_PropertyMap = {
@@ -108,6 +170,31 @@ inline constexpr GUID IID_PropertyObservableMap = {
     0x236aac9d, 0xfb12, 0x5c4d, {0xa4, 0x1c, 0x9e, 0x44, 0x5f, 0xb4, 0xd7, 0xec}};
 inline constexpr GUID IID_PropertyIterable = {
     0xfe2f3d47, 0x5d47, 0x5499, {0x83, 0x74, 0x43, 0x0c, 0x7c, 0xda, 0x02, 0x04}};
+inline constexpr GUID IID_NamedResourceIterator = {
+    0x7fdcc3d7, 0xe13e, 0x5f76, {0xaf, 0xc6, 0x07, 0x69, 0xc4, 0x08, 0x63, 0x99}};
+inline constexpr GUID IID_NamedResourceIterable = {
+    0xbf16482e, 0x80ed, 0x51f0, {0xb9, 0xc9, 0x3a, 0x80, 0x4e, 0x2d, 0x64, 0x03}};
+inline constexpr GUID IID_NamedResourceMapView = {
+    0x4825d6c4, 0x835a, 0x5da1, {0x9b, 0xdd, 0x12, 0xe9, 0x7e, 0x16, 0xfb, 0x7a}};
+// MinGW parses the SDK's parameterized-interface uuid attributes but does not
+// provide __mingw_uuidof specializations for them. Keep the authoritative SDK
+// UUIDs explicit at the ABI boundary so QueryInterface does not acquire an
+// unresolved template symbol at link time.
+inline constexpr GUID IID_NamedResourcePair = {
+    0xbd4b0143, 0x3a22, 0x5ee2, {0x92, 0xed, 0x7b, 0xc3, 0xc1, 0x29, 0xe5, 0x2b}};
+inline constexpr GUID IID_ResourceCandidateVectorView = {
+    0xe28e92f0, 0x9ffb, 0x5ea7, {0x9f, 0xc9, 0xa7, 0x3b, 0xda, 0x47, 0x18, 0x86}};
+inline constexpr GUID IID_StringReference = {
+    0xfd416dfb, 0x2a07, 0x52eb, {0xaa, 0xe3, 0xdf, 0xce, 0x14, 0x11, 0x6c, 0x05}};
+
+// The prepared MinGW SDK headers instantiate only the IReference<T>
+// specializations used by their own metadata surface, and omit HSTRING. Keep
+// the one-method ABI explicit rather than relying on a missing compiler uuid
+// specialization. This is the standard Windows.Foundation.IReference<String>
+// interface identified by IID_StringReference above.
+struct StringReferenceAbi : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Value(HSTRING* value) = 0;
+};
 
 class ValueSetObject final : public ComObject,
                              public wfc::IPropertySet,
@@ -297,11 +384,230 @@ public:
     }
     OPENXAML_COM_BOILERPLATE()
     HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable**) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE GoToState(wuxc::IControl*, HSTRING, boolean,
+    HRESULT STDMETHODCALLTYPE GoToState(wuxc::IControl* control, HSTRING state,
+                                        boolean use_transitions,
                                         boolean* result) override {
         if (!result) return E_POINTER;
-        *result = 1;
+        *result = 0;
+        if (!control || !state) return E_INVALIDARG;
+        IOpenXamlNative* native = nullptr;
+        const HRESULT queried = control->QueryInterface(
+            IID_IOpenXamlNative, reinterpret_cast<void**>(&native));
+        if (FAILED(queried) || !native) return E_INVALIDARG;
+        openxaml::VisualStateManager* const manager =
+            native->LayoutElement()->visual_state_manager();
+        if (manager) {
+            *result = manager->GoToState(Utf8FromHString(state),
+                                         use_transitions != 0)
+                ? 1 : 0;
+        }
+        native->Release();
         return S_OK;
+    }
+};
+
+inline constexpr GUID IID_FocusMovementAsyncOperation = {
+    0x0ea4496b, 0x37de, 0x5e58,
+    {0x8b, 0x0d, 0x2c, 0x39, 0x90, 0xc4, 0xcb, 0xb2}};
+inline constexpr GUID IID_FocusAsyncInfo = {
+    0x00000036, 0x0000, 0x0000,
+    {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+
+class FocusMovementResultObject final
+    : public ComObject,
+      public abi::NotImpl_IFocusMovementResult {
+public:
+    using PrimaryInterface = wuxi::IFocusMovementResult;
+    explicit FocusMovementResultObject(bool succeeded) : succeeded_(succeeded) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Input.FocusMovementResult";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(
+            ::openxaml::iid::Windows_UI_Xaml_Input_IFocusMovementResult,
+            wuxi::IFocusMovementResult)
+        OPENXAML_QI_ARM(IID_IUnknown, wuxi::IFocusMovementResult)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable,
+                        wuxi::IFocusMovementResult)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Succeeded(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = succeeded_ ? 1 : 0;
+        return S_OK;
+    }
+
+private:
+    bool succeeded_;
+};
+
+class FocusMovementAsyncOperation final
+    : public ComObject,
+      public __FIAsyncOperation_1_Windows__CUI__CXaml__CInput__CFocusMovementResult,
+      public IAsyncInfo {
+public:
+    using Handler =
+        __FIAsyncOperationCompletedHandler_1_Windows__CUI__CXaml__CInput__CFocusMovementResult;
+    using Operation =
+        __FIAsyncOperation_1_Windows__CUI__CXaml__CInput__CFocusMovementResult;
+
+    explicit FocusMovementAsyncOperation(bool succeeded)
+        : succeeded_(succeeded), id_(NextId()) {}
+    ~FocusMovementAsyncOperation() override {
+        if (completed_) completed_->Release();
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.Foundation.IAsyncOperation`1<Windows.UI.Xaml.Input.FocusMovementResult>";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_FocusMovementAsyncOperation, Operation)
+        OPENXAML_QI_ARM(IID_FocusAsyncInfo, IAsyncInfo)
+        OPENXAML_QI_ARM(IID_IUnknown, Operation)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, Operation)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE put_Completed(Handler* handler) override {
+        if (closed_) return kRoClosed;
+        if (completed_) return kIllegalDelegateAssignment;
+        if (handler) handler->AddRef();
+        completed_ = handler;
+        if (!handler) return S_OK;
+        AddRef();
+        handler->AddRef();
+        const HRESULT hr = handler->Invoke(
+            static_cast<Operation*>(this), wf::AsyncStatus::Completed);
+        handler->Release();
+        Release();
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE get_Completed(Handler** handler) override {
+        if (!handler) return E_POINTER;
+        if (closed_) {
+            *handler = nullptr;
+            return kRoClosed;
+        }
+        *handler = completed_;
+        if (*handler) (*handler)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetResults(wuxi::IFocusMovementResult** result) override {
+        if (!result) return E_POINTER;
+        *result = nullptr;
+        if (closed_) return kRoClosed;
+        auto* value = new (std::nothrow) FocusMovementResultObject(succeeded_);
+        if (!value) return E_OUTOFMEMORY;
+        *result = static_cast<wuxi::IFocusMovementResult*>(value);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Id(UINT32* id) override {
+        if (!id) return E_POINTER;
+        *id = id_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Status(wf::AsyncStatus* status) override {
+        if (!status) return E_POINTER;
+        *status = closed_ ? wf::AsyncStatus::Canceled : wf::AsyncStatus::Completed;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_ErrorCode(HRESULT* error) override {
+        if (!error) return E_POINTER;
+        *error = closed_ ? kRoClosed : S_OK;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Cancel() override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE Close() override {
+        if (completed_) {
+            completed_->Release();
+            completed_ = nullptr;
+        }
+        closed_ = true;
+        return S_OK;
+    }
+
+private:
+    static UINT32 NextId() noexcept {
+        static std::atomic<UINT32> next{0};
+        UINT32 value = next.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (!value) value = next.fetch_add(1, std::memory_order_relaxed) + 1;
+        return value;
+    }
+
+    const bool succeeded_;
+    const UINT32 id_;
+    Handler* completed_ = nullptr;
+    bool closed_ = false;
+};
+
+class FocusManagerFactory final
+    : public ComObject,
+      public IActivationFactory,
+      public abi::NotImpl_IFocusManagerStatics5,
+      public abi::NotImpl_IFocusManagerStatics7 {
+public:
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Input.FocusManager";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(
+            ::openxaml::iid::Windows_UI_Xaml_Input_IFocusManagerStatics5,
+            wuxi::IFocusManagerStatics5)
+        OPENXAML_QI_ARM(
+            ::openxaml::iid::Windows_UI_Xaml_Input_IFocusManagerStatics7,
+            wuxi::IFocusManagerStatics7)
+        OPENXAML_QI_ARM(::openxaml::iid::IActivationFactory, IActivationFactory)
+        OPENXAML_QI_ARM(IID_IUnknown, IActivationFactory)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, IActivationFactory)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable**) override {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE TryFocusAsync(
+        wux::IDependencyObject* element, wux::FocusState state,
+        __FIAsyncOperation_1_Windows__CUI__CXaml__CInput__CFocusMovementResult**
+            operation) override {
+        if (!operation) return E_POINTER;
+        *operation = nullptr;
+        if (!element) return E_INVALIDARG;
+        bool focused = false;
+        if (state == wux::FocusState_Pointer ||
+            state == wux::FocusState_Keyboard ||
+            state == wux::FocusState_Programmatic) {
+            IOpenXamlNative* native = nullptr;
+            if (SUCCEEDED(element->QueryInterface(
+                    IID_IOpenXamlNative, reinterpret_cast<void**>(&native))) &&
+                native) {
+                focused = RequestXamlFocus(native->LayoutElement(), state);
+                native->Release();
+            }
+        }
+        auto* completed = new (std::nothrow) FocusMovementAsyncOperation(focused);
+        if (!completed) return E_OUTOFMEMORY;
+        *operation = static_cast<FocusMovementAsyncOperation::Operation*>(completed);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetFocusedElement(
+        wux::IXamlRoot* xaml_root, IInspectable** result) override {
+        if (!result) return E_POINTER;
+        *result = nullptr;
+        if (!xaml_root) return E_INVALIDARG;
+        IOpenXamlXamlRoot* projected = nullptr;
+        const HRESULT hr = xaml_root->QueryInterface(
+            IID_IOpenXamlXamlRoot, reinterpret_cast<void**>(&projected));
+        if (FAILED(hr) || !projected) return E_INVALIDARG;
+        const HRESULT copied = projected->CopyFocusedElement(result);
+        projected->Release();
+        return copied;
     }
 };
 
@@ -589,6 +895,55 @@ protected:
     }
 };
 
+class ScaleTransformActivationFactory final
+    : public Factory<ScaleTransformObject>, public wuxm::IScaleTransformStatics {
+public:
+    ScaleTransformActivationFactory()
+        : Factory(L"Windows.UI.Xaml.Media.ScaleTransform") {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Media_IScaleTransformStatics,
+                        wuxm::IScaleTransformStatics)
+        return Factory<ScaleTransformObject>::QueryInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_CenterXProperty(wux::IDependencyProperty** value) override {
+        return Property("CenterX", 0.0, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_CenterYProperty(wux::IDependencyProperty** value) override {
+        return Property("CenterY", 0.0, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_ScaleXProperty(wux::IDependencyProperty** value) override {
+        return Property("ScaleX", 1.0, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_ScaleYProperty(wux::IDependencyProperty** value) override {
+        return Property("ScaleY", 1.0, value);
+    }
+
+protected:
+    HRESULT QueryStatics(REFIID iid, void** object) override {
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Media_IScaleTransformStatics,
+                        wuxm::IScaleTransformStatics)
+        return E_NOINTERFACE;
+    }
+
+private:
+    static HRESULT Property(const char* name, double default_value,
+                            wux::IDependencyProperty** value) {
+        if (!value) return E_POINTER;
+        static std::map<std::string, const openxaml::DependencyProperty*> properties;
+        const std::string key{name};
+        const openxaml::DependencyProperty*& property = properties[key];
+        if (!property)
+            property = openxaml::RegisterProperty(
+                "ScaleTransform", key, {default_value, false, false});
+        *value = ProjectProperty(*property);
+        (*value)->AddRef();
+        return S_OK;
+    }
+};
+
 class PropertyChangedEventArgsActivationFactory final
     : public Factory<PropertyChangedEventArgsObject>,
       public abi::NotImpl_IPropertyChangedEventArgsFactory {
@@ -707,6 +1062,36 @@ public:
 protected:
     HRESULT QueryStatics(REFIID iid, void** object) override {
         OPENXAML_QI_ARM(IID_IMuxcProgressRingFactory, IMuxcProgressRingFactory)
+        return E_NOINTERFACE;
+    }
+};
+
+class InfoBarActivationFactory final
+    : public Factory<InfoBarObject>,
+      public IMuxcInfoBarFactory {
+public:
+    InfoBarActivationFactory()
+        : Factory(L"Microsoft.UI.Xaml.Controls.InfoBar") {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        return Factory<InfoBarObject>::QueryInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE CreateInstance(
+        void*, void** inner, void** value) override {
+        if (!inner || !value) return E_POINTER;
+        *inner = nullptr;
+        *value = nullptr;
+        auto* info_bar = new (std::nothrow) InfoBarObject();
+        if (!info_bar) return E_OUTOFMEMORY;
+        auto* projected = static_cast<IMuxcInfoBar*>(info_bar);
+        projected->AddRef();
+        *inner = static_cast<IInspectable*>(projected);
+        *value = projected;
+        return S_OK;
+    }
+protected:
+    HRESULT QueryStatics(REFIID iid, void** object) override {
+        OPENXAML_QI_ARM(IID_IMuxcInfoBarFactory, IMuxcInfoBarFactory)
         return E_NOINTERFACE;
     }
 };
@@ -892,6 +1277,29 @@ protected:
         OPENXAML_QI_ARM(
             ::openxaml::iid::Windows_UI_Xaml_Controls_IBitmapIconSourceFactory,
             wuxc::IBitmapIconSourceFactory)
+        return E_NOINTERFACE;
+    }
+};
+
+class MuxcBitmapIconSourceActivationFactory final
+    : public Factory<MuxcBitmapIconSourceObject>,
+      public IMuxcBitmapIconSourceFactory {
+public:
+    MuxcBitmapIconSourceActivationFactory()
+        : Factory(L"Microsoft.UI.Xaml.Controls.BitmapIconSource") {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        return Factory<MuxcBitmapIconSourceObject>::QueryInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE CreateInstance(
+        IInspectable*, IInspectable** inner,
+        IMuxcBitmapIconSource** value) override {
+        return CreateComposableObject<MuxcBitmapIconSourceObject>(inner, value);
+    }
+protected:
+    HRESULT QueryStatics(REFIID iid, void** object) override {
+        OPENXAML_QI_ARM(IID_IMuxcBitmapIconSourceFactory,
+                        IMuxcBitmapIconSourceFactory)
         return E_NOINTERFACE;
     }
 };
@@ -1671,7 +2079,8 @@ using InspectableMapAbi = __FIMap_2_IInspectable_IInspectable;
 using InspectableMapViewAbi = __FIMapView_2_IInspectable_IInspectable;
 
 class BoxedStringObject final : public ComObject,
-                                public abi::NotImpl_IPropertyValue {
+                                public abi::NotImpl_IPropertyValue,
+                                public StringReferenceAbi {
 public:
     explicit BoxedStringObject(std::string value) : value_(std::move(value)) {}
     const wchar_t* RuntimeClassName() const override {
@@ -1681,6 +2090,7 @@ public:
         if (!object) return E_POINTER;
         OPENXAML_QI_ARM(::openxaml::iid::Windows_Foundation_IPropertyValue,
                         wf::IPropertyValue)
+        OPENXAML_QI_ARM(IID_StringReference, StringReferenceAbi)
         OPENXAML_QI_ARM(IID_IUnknown, wf::IPropertyValue)
         OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wf::IPropertyValue)
         *object = nullptr;
@@ -1698,6 +2108,9 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetString(HSTRING* value) override {
+        return HStringFromUtf8(value_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_Value(HSTRING* value) override {
         return HStringFromUtf8(value_, value);
     }
 private:
@@ -3026,10 +3439,299 @@ private:
     HSTRING value_ = nullptr;
 };
 
+const ResourceCatalog& ConfiguredResourceCatalog() noexcept {
+    static const ResourceCatalog catalog = [] {
+        std::vector<std::filesystem::path> roots;
+        wchar_t configured[32768];
+        const DWORD configured_length = GetEnvironmentVariableW(
+            L"OPENXAML_XBF_ROOT", configured,
+            static_cast<DWORD>(sizeof(configured) / sizeof(configured[0])));
+        if (configured_length > 0 &&
+            configured_length < sizeof(configured) / sizeof(configured[0])) {
+            roots.emplace_back(configured);
+        }
+        wchar_t executable[32768];
+        const DWORD executable_length = GetModuleFileNameW(
+            nullptr, executable,
+            static_cast<DWORD>(sizeof(executable) / sizeof(executable[0])));
+        if (executable_length > 0 &&
+            executable_length < sizeof(executable) / sizeof(executable[0])) {
+            roots.push_back(std::filesystem::path(executable).parent_path());
+        }
+
+        try {
+            for (const auto& root : roots) {
+                const auto candidate = root / L"OpenXaml" / L"resources.json";
+                if (!std::filesystem::is_regular_file(candidate)) continue;
+                return LoadResourceCatalog(candidate.u8string());
+            }
+        } catch (const std::exception& error) {
+            std::string diagnostic = "OpenXaml resource catalog: ";
+            diagnostic += error.what();
+            diagnostic += "\n";
+            OutputDebugStringA(diagnostic.c_str());
+        }
+        return ResourceCatalog{};
+    }();
+    return catalog;
+}
+
+void TraceResourceMiss(const std::string& scope,
+                       const std::string& key) noexcept {
+    if (!GetEnvironmentVariableW(L"OPENXAML_TRACE_RESOURCES", nullptr, 0))
+        return;
+    std::string diagnostic = "OpenXaml resource miss scope=\"";
+    diagnostic += scope;
+    diagnostic += "\" key=\"";
+    diagnostic += key;
+    diagnostic += "\"\n";
+    OutputDebugStringA(diagnostic.c_str());
+}
+
+HRESULT CandidateFromUtf8(const std::string& text,
+                          warc::IResourceCandidate** value) {
+    if (!value) return E_POINTER;
+    *value = nullptr;
+    HSTRING string = nullptr;
+    const HRESULT converted = HStringFromUtf8(text, &string);
+    if (FAILED(converted)) return converted;
+    auto* candidate = new (std::nothrow) ResourceCandidateObject(string);
+    WindowsDeleteString(string);
+    if (!candidate) return E_OUTOFMEMORY;
+    *value = static_cast<warc::IResourceCandidate*>(candidate);
+    return S_OK;
+}
+
+class ResourceCandidateVectorViewObject final
+    : public ComObject,
+      public ResourceCandidateVectorView {
+public:
+    explicit ResourceCandidateVectorViewObject(std::string value)
+        : value_(std::move(value)) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"OpenXaml.ResourceCandidateVectorView";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        if (IsEqualGUID(iid, IID_ResourceCandidateVectorView) ||
+            IsEqualGUID(iid, IID_IUnknown) ||
+            IsEqualGUID(iid, ::openxaml::iid::IInspectable)) {
+            *object = static_cast<ResourceCandidateVectorView*>(this);
+            static_cast<ResourceCandidateVectorView*>(this)->AddRef();
+            return S_OK;
+        }
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE GetAt(UINT32 index,
+                                    warc::IResourceCandidate** value) override {
+        if (index != 0) {
+            if (value) *value = nullptr;
+            return value ? E_BOUNDS : E_POINTER;
+        }
+        return CandidateFromUtf8(value_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_Size(UINT32* value) override {
+        if (!value) return E_POINTER;
+        *value = 1;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE IndexOf(warc::IResourceCandidate* candidate,
+                                      UINT32* index, boolean* found) override {
+        if (!index || !found) return E_POINTER;
+        *index = 0;
+        *found = candidate ? 1 : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetMany(UINT32 start, UINT32 capacity,
+                                      warc::IResourceCandidate** values,
+                                      UINT32* actual) override {
+        if (!actual || (capacity && !values)) return E_POINTER;
+        *actual = 0;
+        if (start > 1) return E_BOUNDS;
+        if (start == 1 || capacity == 0) return S_OK;
+        const HRESULT hr = CandidateFromUtf8(value_, &values[0]);
+        if (SUCCEEDED(hr)) *actual = 1;
+        return hr;
+    }
+
+private:
+    std::string value_;
+};
+
+class NamedResourceObject final
+    : public ComObject,
+      public abi::NotImpl_INamedResource {
+public:
+    explicit NamedResourceObject(std::string value) : value_(std::move(value)) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.ApplicationModel.Resources.Core.NamedResource";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(
+            ::openxaml::iid::Windows_ApplicationModel_Resources_Core_INamedResource,
+            warc::INamedResource)
+        OPENXAML_QI_ARM(IID_IUnknown, warc::INamedResource)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, warc::INamedResource)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_Uri(wf::IUriRuntimeClass** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Candidates(
+        ResourceCandidateVectorView** value) override {
+        return Candidates(value);
+    }
+    HRESULT STDMETHODCALLTYPE Resolve(warc::IResourceCandidate** value) override {
+        return CandidateFromUtf8(value_, value);
+    }
+    HRESULT STDMETHODCALLTYPE ResolveForContext(
+        warc::IResourceContext*, warc::IResourceCandidate** value) override {
+        return Resolve(value);
+    }
+    HRESULT STDMETHODCALLTYPE ResolveAll(
+        ResourceCandidateVectorView** value) override {
+        return Candidates(value);
+    }
+    HRESULT STDMETHODCALLTYPE ResolveAllForContext(
+        warc::IResourceContext*, ResourceCandidateVectorView** value) override {
+        return Candidates(value);
+    }
+
+private:
+    HRESULT Candidates(ResourceCandidateVectorView** value) {
+        if (!value) return E_POINTER;
+        auto* view = new (std::nothrow) ResourceCandidateVectorViewObject(value_);
+        if (!view) {
+            *value = nullptr;
+            return E_OUTOFMEMORY;
+        }
+        *value = static_cast<ResourceCandidateVectorView*>(view);
+        return S_OK;
+    }
+    std::string value_;
+};
+
+class NamedResourcePairObject final : public ComObject,
+                                      public NamedResourcePair {
+public:
+    NamedResourcePairObject(std::string key, std::string value)
+        : key_(std::move(key)), value_(std::move(value)) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"OpenXaml.NamedResourcePair";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        if (IsEqualGUID(iid, IID_NamedResourcePair) ||
+            IsEqualGUID(iid, IID_IUnknown) ||
+            IsEqualGUID(iid, ::openxaml::iid::IInspectable)) {
+            *object = static_cast<NamedResourcePair*>(this);
+            static_cast<NamedResourcePair*>(this)->AddRef();
+            return S_OK;
+        }
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Key(HSTRING* value) override {
+        return HStringFromUtf8(key_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_Value(warc::INamedResource** value) override {
+        if (!value) return E_POINTER;
+        auto* resource = new (std::nothrow) NamedResourceObject(value_);
+        if (!resource) {
+            *value = nullptr;
+            return E_OUTOFMEMORY;
+        }
+        *value = static_cast<warc::INamedResource*>(resource);
+        return S_OK;
+    }
+
+private:
+    std::string key_;
+    std::string value_;
+};
+
+class NamedResourceIteratorObject final : public ComObject,
+                                          public NamedResourceIterator {
+public:
+    explicit NamedResourceIteratorObject(
+        std::vector<std::pair<std::string, std::string>> entries)
+        : entries_(std::move(entries)) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"OpenXaml.NamedResourceIterator";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        if (IsEqualGUID(iid, IID_NamedResourceIterator) ||
+            IsEqualGUID(iid, IID_IUnknown) ||
+            IsEqualGUID(iid, ::openxaml::iid::IInspectable)) {
+            *object = static_cast<NamedResourceIterator*>(this);
+            static_cast<NamedResourceIterator*>(this)->AddRef();
+            return S_OK;
+        }
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_Current(NamedResourcePair** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (index_ >= entries_.size()) return E_BOUNDS;
+        auto* pair = new (std::nothrow) NamedResourcePairObject(
+            entries_[index_].first, entries_[index_].second);
+        if (!pair) return E_OUTOFMEMORY;
+        *value = static_cast<NamedResourcePair*>(pair);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_HasCurrent(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = index_ < entries_.size();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE MoveNext(boolean* value) override {
+        if (!value) return E_POINTER;
+        if (index_ < entries_.size()) ++index_;
+        *value = index_ < entries_.size();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetMany(UINT32 capacity, NamedResourcePair** values,
+                                      UINT32* actual) override {
+        if (!actual || (capacity && !values)) return E_POINTER;
+        *actual = 0;
+        while (*actual < capacity && index_ < entries_.size()) {
+            auto* pair = new (std::nothrow) NamedResourcePairObject(
+                entries_[index_].first, entries_[index_].second);
+            if (!pair) return E_OUTOFMEMORY;
+            values[*actual] = static_cast<NamedResourcePair*>(pair);
+            ++*actual;
+            ++index_;
+        }
+        return S_OK;
+    }
+
+private:
+    std::vector<std::pair<std::string, std::string>> entries_;
+    std::size_t index_ = 0;
+};
+
 class ResourceMapObject final : public ComObject,
-                                public abi::NotImpl_IResourceMap {
+                                public abi::NotImpl_IResourceMap,
+                                public NamedResourceMapView,
+                                public NamedResourceIterable {
 public:
     using PrimaryInterface = warc::IResourceMap;
+    ResourceMapObject() = default;
+    explicit ResourceMapObject(std::string scope) : scope_(std::move(scope)) {}
     const wchar_t* RuntimeClassName() const override {
         return L"Windows.ApplicationModel.Resources.Core.ResourceMap";
     }
@@ -3037,10 +3739,12 @@ public:
         if (!object) return E_POINTER;
         OPENXAML_QI_ARM(::openxaml::iid::Windows_ApplicationModel_Resources_Core_IResourceMap,
                         warc::IResourceMap)
+        OPENXAML_QI_ARM(IID_NamedResourceMapView, NamedResourceMapView)
+        OPENXAML_QI_ARM(IID_NamedResourceIterable, NamedResourceIterable)
         OPENXAML_QI_ARM(IID_IUnknown, warc::IResourceMap)
         OPENXAML_QI_ARM(::openxaml::iid::IInspectable, warc::IResourceMap)
         *object = nullptr;
-        return E_NOINTERFACE;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
     }
     OPENXAML_COM_BOILERPLATE()
 
@@ -3058,18 +3762,80 @@ public:
         warc::IResourceCandidate** value) override {
         return Candidate(resource, value);
     }
-    HRESULT STDMETHODCALLTYPE GetSubtree(HSTRING, warc::IResourceMap** map) override {
+    HRESULT STDMETHODCALLTYPE GetSubtree(HSTRING name, warc::IResourceMap** map) override {
         if (!map) return E_POINTER;
-        *map = static_cast<warc::IResourceMap*>(new ResourceMapObject());
+        std::string nested = Utf8FromHString(name);
+        if (!scope_.empty() && !nested.empty()) nested = scope_ + "/" + nested;
+        auto* subtree = new (std::nothrow) ResourceMapObject(std::move(nested));
+        if (!subtree) {
+            *map = nullptr;
+            return E_OUTOFMEMORY;
+        }
+        *map = static_cast<warc::IResourceMap*>(subtree);
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE Lookup(HSTRING key, warc::INamedResource** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        const std::string resource_key = Utf8FromHString(key);
+        const std::string* resource = ConfiguredResourceCatalog().Find(
+            scope_, resource_key);
+        if (!resource) {
+            TraceResourceMiss(scope_, resource_key);
+            return E_BOUNDS;
+        }
+        auto* named = new (std::nothrow) NamedResourceObject(*resource);
+        if (!named) return E_OUTOFMEMORY;
+        *value = static_cast<warc::INamedResource*>(named);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Size(UINT32* value) override {
+        if (!value) return E_POINTER;
+        const std::size_t size = ConfiguredResourceCatalog().Size(scope_);
+        if (size > std::numeric_limits<UINT32>::max()) return E_BOUNDS;
+        *value = static_cast<UINT32>(size);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE HasKey(HSTRING key, boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = ConfiguredResourceCatalog().Has(scope_, Utf8FromHString(key));
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Split(NamedResourceMapView** first,
+                                    NamedResourceMapView** second) override {
+        if (!first || !second) return E_POINTER;
+        *first = static_cast<NamedResourceMapView*>(this);
+        (*first)->AddRef();
+        *second = nullptr;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE First(NamedResourceIterator** value) override {
+        if (!value) return E_POINTER;
+        auto* iterator = new (std::nothrow) NamedResourceIteratorObject(
+            ConfiguredResourceCatalog().Entries(scope_));
+        if (!iterator) {
+            *value = nullptr;
+            return E_OUTOFMEMORY;
+        }
+        *value = static_cast<NamedResourceIterator*>(iterator);
         return S_OK;
     }
 
 private:
-    static HRESULT Candidate(HSTRING resource, warc::IResourceCandidate** value) {
+    HRESULT Candidate(HSTRING key, warc::IResourceCandidate** value) const {
         if (!value) return E_POINTER;
-        *value = static_cast<warc::IResourceCandidate*>(new ResourceCandidateObject(resource));
-        return S_OK;
+        const std::string resource_key = Utf8FromHString(key);
+        const std::string* resource = ConfiguredResourceCatalog().Find(
+            scope_, resource_key);
+        if (!resource) {
+            TraceResourceMiss(scope_, resource_key);
+            *value = nullptr;
+            return E_BOUNDS;
+        }
+        return CandidateFromUtf8(*resource, value);
     }
+    std::string scope_;
 };
 
 class ResourceContextObject final : public ComObject,
@@ -3228,14 +3994,181 @@ inline constexpr GUID IID_OpenXamlDesktopWindowXamlSourceNative = {
     0x3cbcf1bf, 0x2f76, 0x4e9c,
     {0x96, 0xab, 0xe8, 0x4b, 0x37, 0x97, 0x25, 0x54}};
 
+// A XamlRoot is the identity of one island, not a process-global focus key.
+// It deliberately borrows the source-owned content pointers: content itself
+// retains this projection through IUIElement10, so owning it here would form
+// a COM cycle. DesktopWindowXamlSource clears the borrowed pointers before it
+// releases either object. The mutex lets a retained XamlRoot safely observe
+// that detached state from another apartment.
+class XamlRootObject final
+    : public ComObject,
+      public abi::NotImpl_IXamlRoot,
+      public IOpenXamlXamlRoot {
+public:
+    using ChangedHandler =
+        __FITypedEventHandler_2_Windows__CUI__CXaml__CXamlRoot_Windows__CUI__CXaml__CXamlRootChangedEventArgs;
+
+    ~XamlRootObject() override {
+        for (auto& [_, handler] : changed_handlers_) handler->Release();
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.XamlRoot";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IXamlRoot,
+                        wux::IXamlRoot)
+        OPENXAML_QI_ARM(IID_IOpenXamlXamlRoot, IOpenXamlXamlRoot)
+        OPENXAML_QI_ARM(IID_IUnknown, wux::IXamlRoot)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wux::IXamlRoot)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    void SetContent(wux::IUIElement* content, IOpenXamlNative* native) noexcept {
+        std::lock_guard<std::mutex> guard(mutex_);
+        content_ = content;
+        native_ = native;
+    }
+    void SetHostVisible(bool visible) noexcept {
+        std::lock_guard<std::mutex> guard(mutex_);
+        host_visible_ = visible;
+    }
+    void NotifyChanged() noexcept {
+        std::vector<ChangedHandler*> handlers;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            handlers.reserve(changed_handlers_.size());
+            for (const auto& [_, handler] : changed_handlers_) {
+                handler->AddRef();
+                handlers.push_back(handler);
+            }
+        }
+        AddRef();
+        for (ChangedHandler* handler : handlers) {
+            (void)handler->Invoke(static_cast<wux::IXamlRoot*>(this), nullptr);
+            handler->Release();
+        }
+        Release();
+    }
+
+    HRESULT STDMETHODCALLTYPE get_Content(wux::IUIElement** value) override {
+        if (!value) return E_POINTER;
+        std::lock_guard<std::mutex> guard(mutex_);
+        *value = content_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Size(wf::Size* value) override {
+        if (!value) return E_POINTER;
+        IOpenXamlNative* native = CopyNative();
+        if (!native) {
+            *value = {};
+            return S_OK;
+        }
+        const openxaml::Size size = native->LayoutElement()->render_size();
+        native->Release();
+        *value = {static_cast<FLOAT>(size.width),
+                  static_cast<FLOAT>(size.height)};
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_RasterizationScale(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        IOpenXamlNative* native = CopyNative();
+        if (!native) {
+            *value = 1.0;
+            return S_OK;
+        }
+        *value = native->LayoutElement()->dpi_scale_x;
+        native->Release();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_IsHostVisible(boolean* value) override {
+        if (!value) return E_POINTER;
+        std::lock_guard<std::mutex> guard(mutex_);
+        *value = host_visible_ ? 1 : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_UIContext(
+        ABI::Windows::UI::IUIContext** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE add_Changed(ChangedHandler* handler,
+                                           EventRegistrationToken* token) override {
+        if (!handler || !token) return E_INVALIDARG;
+        std::lock_guard<std::mutex> guard(mutex_);
+        token->value = ++next_token_;
+        handler->AddRef();
+        changed_handlers_.emplace(token->value, handler);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE remove_Changed(EventRegistrationToken token) override {
+        ChangedHandler* removed = nullptr;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            const auto found = changed_handlers_.find(token.value);
+            if (found == changed_handlers_.end()) return S_OK;
+            removed = found->second;
+            changed_handlers_.erase(found);
+        }
+        removed->Release();
+        return S_OK;
+    }
+    HRESULT CopyFocusedElement(IInspectable** value) noexcept override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        IOpenXamlNative* native = CopyNative();
+        if (!native) return S_OK;
+        const HRESULT hr = CopyFocusedXamlElementForRoot(
+            native->LayoutElement(), value);
+        native->Release();
+        return hr;
+    }
+
+private:
+    IOpenXamlNative* CopyNative() noexcept {
+        std::lock_guard<std::mutex> guard(mutex_);
+        IOpenXamlNative* value = native_;
+        if (value) value->AddRef();
+        return value;
+    }
+
+    std::mutex mutex_;
+    wux::IUIElement* content_ = nullptr;
+    IOpenXamlNative* native_ = nullptr;
+    bool host_visible_ = false;
+    LONGLONG next_token_ = 0;
+    std::map<LONGLONG, ChangedHandler*> changed_handlers_;
+};
+
 class DesktopWindowXamlSourceObject final
     : public ComObject,
       public abi::NotImpl_IDesktopWindowXamlSource,
       public abi::NotImpl_IClosable,
-      public IDesktopWindowXamlSourceNative {
+      public IDesktopWindowXamlSourceNative,
+      public IOpenXamlIslandDiagnostics {
 public:
     using PrimaryInterface = wuxh::IDesktopWindowXamlSource;
-    ~DesktopWindowXamlSourceObject() override { Close(); }
+    DesktopWindowXamlSourceObject()
+        : host_state_(std::make_shared<HostState>(
+              g_next_desktop_island_cookie.fetch_add(1,
+                                                     std::memory_order_relaxed))),
+          invalidation_sink_(std::make_shared<openxaml::RenderInvalidationSink>(
+              MakeInvalidationCallback(host_state_))),
+          input_manager_(std::make_shared<IslandInputManager>()),
+          focus_scope_(std::make_shared<XamlFocusScope>(input_manager_)),
+          xaml_root_(new XamlRootObject()) {
+        input_manager_->Attach(focus_scope_);
+        input_manager_->SetHostFocusRequester(
+            MakeHostFocusRequester(host_state_));
+    }
+    ~DesktopWindowXamlSourceObject() override {
+        Close();
+        xaml_root_->Release();
+    }
     const wchar_t* RuntimeClassName() const override {
         return L"Windows.UI.Xaml.Hosting.DesktopWindowXamlSource";
     }
@@ -3247,6 +4180,8 @@ public:
         OPENXAML_QI_ARM(::openxaml::iid::Windows_Foundation_IClosable, wf::IClosable)
         OPENXAML_QI_ARM(IID_OpenXamlDesktopWindowXamlSourceNative,
                         IDesktopWindowXamlSourceNative)
+        OPENXAML_QI_ARM(IID_IOpenXamlIslandDiagnostics,
+                        IOpenXamlIslandDiagnostics)
         OPENXAML_QI_ARM(IID_IUnknown, wuxh::IDesktopWindowXamlSource)
         OPENXAML_QI_ARM(::openxaml::iid::IInspectable,
                         wuxh::IDesktopWindowXamlSource)
@@ -3262,11 +4197,163 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE put_Content(wux::IUIElement* value) override {
-        if (value) value->AddRef();
-        if (content_) content_->Release();
+        if (closed_) return kRoClosed;
+        if (!value && !content_) return S_OK;
+
+        IOpenXamlNative* next_native = nullptr;
+        IUnknown* next_identity = nullptr;
+        wux::IUIElement10* next_root_slot = nullptr;
+        if (value) {
+            const HRESULT identity_query = value->QueryInterface(
+                IID_IUnknown, reinterpret_cast<void**>(&next_identity));
+            if (FAILED(identity_query) || !next_identity) return E_INVALIDARG;
+            const HRESULT query = value->QueryInterface(
+                IID_IOpenXamlNative, reinterpret_cast<void**>(&next_native));
+            if (FAILED(query) || !next_native) {
+                next_identity->Release();
+                return E_INVALIDARG;
+            }
+            const HRESULT root_slot_query = value->QueryInterface(
+                ::openxaml::iid::Windows_UI_Xaml_IUIElement10,
+                reinterpret_cast<void**>(&next_root_slot));
+            if (FAILED(root_slot_query) || !next_root_slot) {
+                next_native->Release();
+                next_identity->Release();
+                return E_INVALIDARG;
+            }
+            if (content_identity_ && next_identity == content_identity_) {
+                // Interface pointer equality is not COM identity. Preserve the
+                // existing projection and sink when the same COM object is
+                // handed back through a different interface pointer.
+                next_root_slot->Release();
+                next_native->Release();
+                next_identity->Release();
+                return S_OK;
+            }
+            if (!next_native->LayoutElement()->AttachRenderInvalidationSink(
+                    invalidation_sink_)) {
+                next_root_slot->Release();
+                next_native->Release();
+                next_identity->Release();
+                return E_INVALIDARG;
+            }
+            if (!focus_scope_->CanAttachRoot(next_native->LayoutElement())) {
+                next_native->LayoutElement()->DetachRenderInvalidationSink(
+                    invalidation_sink_);
+                next_root_slot->Release();
+                next_native->Release();
+                next_identity->Release();
+                return E_INVALIDARG;
+            }
+            // Keep one independent transaction reference to every projection
+            // across AttachRoot. LostFocus/PointerCaptureLost user code may
+            // re-enter put_Content and release all member-owned references.
+            // The additional references below are the member ownership being
+            // published; the QI references remain local until this call ends.
+            value->AddRef();
+            next_native->AddRef();
+            next_identity->AddRef();
+            next_root_slot->AddRef();
+        }
+
+        wux::IUIElement* previous_content = content_;
+        IOpenXamlNative* previous_native = content_native_;
+        IUnknown* previous_identity = content_identity_;
+        wux::IUIElement10* previous_root_slot = content_root_slot_;
         content_ = value;
-        LayoutContent();
-        if (child_) InvalidateRect(child_, nullptr, FALSE);
+        content_native_ = next_native;
+        content_identity_ = next_identity;
+        content_root_slot_ = next_root_slot;
+        ++content_epoch_;
+        const std::uint64_t transaction_epoch = content_epoch_;
+
+        auto transaction_is_current = [&]() noexcept {
+            return content_epoch_ == transaction_epoch && content_ == value &&
+                   content_native_ == next_native &&
+                   content_identity_ == next_identity &&
+                   content_root_slot_ == next_root_slot;
+        };
+        auto release_transaction_locals = [&]() noexcept {
+            if (next_root_slot) next_root_slot->Release();
+            if (next_native) next_native->Release();
+            if (next_identity) next_identity->Release();
+        };
+        auto release_previous_locals = [&]() noexcept {
+            // A reentrant transaction may have reattached the original root.
+            // In that case its new member references own the projection and
+            // the outer call must only drop its locals, not detach live state.
+            const bool reattached = previous_identity &&
+                content_identity_ == previous_identity;
+            if (!reattached && previous_root_slot)
+                (void)previous_root_slot->put_XamlRoot(nullptr);
+            if (!reattached && previous_native)
+                previous_native->LayoutElement()->DetachRenderInvalidationSink(
+                    invalidation_sink_);
+            if (previous_native) previous_native->Release();
+            if (previous_identity) previous_identity->Release();
+            if (previous_root_slot) previous_root_slot->Release();
+            if (previous_content) previous_content->Release();
+        };
+
+        // Publish the logical focus root after the no-fail pointer commit but
+        // before releasing the old tree. A LostFocus handler may re-enter and
+        // replace content; the scope's reconciliation is identity-safe and
+        // the strong locals below keep both transaction roots alive.
+        const bool root_attached = focus_scope_->AttachRoot(
+            next_native ? next_native->LayoutElement() : nullptr);
+
+        // AttachRoot raises balanced loss/capture events. If a handler chose
+        // another root, that inner transaction wins and the outer call must
+        // not publish XamlRoot, detach its replacement, or rebuild its frame.
+        if (!transaction_is_current()) {
+            release_previous_locals();
+            release_transaction_locals();
+            return S_OK;
+        }
+
+        if (!root_attached) {
+            // CanAttachRoot succeeded on this UI thread, so this can only be
+            // a concurrent foreign-island claim. Restore the prior content
+            // without disturbing its render attachment.
+            content_ = previous_content;
+            content_native_ = previous_native;
+            content_identity_ = previous_identity;
+            content_root_slot_ = previous_root_slot;
+            previous_content = nullptr;
+            previous_native = nullptr;
+            previous_identity = nullptr;
+            previous_root_slot = nullptr;
+            ++content_epoch_;
+            if (next_native) {
+                next_native->LayoutElement()->DetachRenderInvalidationSink(
+                    invalidation_sink_);
+            }
+            // Drop the four member references that were rejected. The
+            // independent transaction QI references remain until afterwards.
+            if (next_native) next_native->Release();
+            if (next_root_slot) next_root_slot->Release();
+            if (next_identity) next_identity->Release();
+            if (value) value->Release();
+            release_transaction_locals();
+            return E_INVALIDARG;
+        }
+
+        // Publish exactly one XamlRoot identity for this island. Descendants
+        // inherit it by walking their retained visual_parent chain, so this
+        // updates the whole tree without a parallel projection registry.
+        if (previous_root_slot) (void)previous_root_slot->put_XamlRoot(nullptr);
+        xaml_root_->SetContent(value, next_native);
+        if (next_root_slot) {
+            (void)next_root_slot->put_XamlRoot(
+                static_cast<wux::IXamlRoot*>(xaml_root_));
+        }
+
+        release_previous_locals();
+
+        CancelPendingInvalidation();
+        if (child_) RebuildFrame(true, true, "content");
+        xaml_root_->NotifyChanged();
+        release_transaction_locals();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_HasFocus(boolean* value) override {
@@ -3291,23 +4378,91 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE Close() override {
-        put_Content(nullptr);
-        if (child_) {
-            DestroyWindow(child_);
+        if (!closed_) {
+            closed_ = true;
+            DisableHostState();
+            xaml_root_->SetHostVisible(false);
+            input_manager_->ClearHostFocusRequester();
+            input_manager_->ClearHostPointerCaptureCallbacks();
+            input_manager_->OnHostFocusChanged(false);
+            invalidation_sink_->Close();
+            DetachAndReleaseContent();
+            ReleaseDcompPresenter();
+            input_manager_->Detach(focus_scope_);
+            xaml_root_->NotifyChanged();
+        }
+
+        const HWND window = child_;
+        if (window && !DestroyWindow(window)) {
+            const DWORD error = GetLastError();
+            // The HWND may belong to a different thread. Retire the binding
+            // even when that thread must perform the eventual destruction;
+            // its remaining messages then have no pointer to this object.
+            if (window_binding_) {
+                window_binding_->Retire(this);
+                window_binding_ = nullptr;
+            }
+            DisableHostState();
             child_ = nullptr;
+            return HRESULT_FROM_WIN32(error);
         }
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE AttachToWindow(HWND parent) override {
+        if (closed_) return kRoClosed;
         if (!parent || !IsWindow(parent)) return E_INVALIDARG;
         if (child_) return HRESULT_FROM_WIN32(ERROR_ALREADY_INITIALIZED);
         const HRESULT class_hr = EnsureWindowClass();
         if (FAILED(class_hr)) return class_hr;
-        child_ = CreateWindowExW(0, WindowClassName(), L"OpenXaml Island", WS_CHILD,
+        auto* binding = new (std::nothrow) WindowBinding(this);
+        if (!binding) return E_OUTOFMEMORY;
+        window_binding_ = binding;
+        child_ = CreateWindowExW(WS_EX_LAYERED, WindowClassName(),
+                                 L"OpenXaml Island", WS_CHILD,
                                  0, 0, 1, 1, parent, nullptr,
-                                 GetModuleHandleW(nullptr), this);
-        return child_ ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+                                 GetModuleHandleW(nullptr), binding);
+        if (!child_) {
+            const DWORD error = GetLastError();
+            // WM_NCDESTROY owns deletion once WM_NCCREATE installed the
+            // binding. If creation failed before that point it remains ours.
+            if (window_binding_ == binding) {
+                window_binding_ = nullptr;
+                delete binding;
+            }
+            return HRESULT_FROM_WIN32(error);
+        }
+        EnableHostState(child_);
+        presentation_mode_ = PresentationMode::Undecided;
+        const HRESULT dcomp_attach = InitializeDcompPresenter(child_);
+        if (FAILED(dcomp_attach)) {
+            presentation_mode_ = PresentationMode::Cpu;
+            TraceDcompFallback("initialize", dcomp_attach);
+        } else {
+            openxaml::render::DcompUpdateResult probe;
+            if (ProbeDcompPresenter(child_, probe)) {
+                presentation_mode_ = PresentationMode::Dcomp;
+                TraceDcompState("probe", "attach", probe);
+            } else {
+                // Backend selection is based only on a complete transparent
+                // compositor transaction. The current Content is deliberately
+                // absent from this probe, so an authored/render semantic can
+                // never permanently classify DirectComposition unavailable.
+                TraceDcompState("probe-failed", "attach", probe);
+                TraceDcompFallback("probe",
+                                   FAILED(probe.error) ? probe.error : E_FAIL);
+                ReleaseDcompPresenter();
+            }
+        }
+        xaml_root_->SetHostVisible(IsWindowVisible(child_) != FALSE);
+        input_manager_->SetHostFocusRequester(
+            MakeHostFocusRequester(host_state_));
+        input_manager_->SetHostPointerCaptureCallbacks(
+            MakeHostPointerCaptureRequester(host_state_),
+            MakeHostPointerCaptureReleaser(host_state_));
+        RebuildFrame(true, true, "attach");
+        xaml_root_->NotifyChanged();
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_WindowHandle(HWND* value) override {
         if (!value) return E_POINTER;
@@ -3315,7 +4470,219 @@ public:
         return child_ ? S_OK : E_UNEXPECTED;
     }
 
+    HRESULT STDMETHODCALLTYPE GetFrameGeneration(std::uint64_t* value) override {
+        if (!value) return E_POINTER;
+        *value = presentation_mode_ == PresentationMode::Dcomp && dcomp_backend_
+            ? dcomp_backend_->generation() : frame_cache_.generation();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetFrameExtent(INT32* width, INT32* height) override {
+        if (!width || !height) return E_POINTER;
+        if (presentation_mode_ == PresentationMode::Dcomp && dcomp_backend_) {
+            const openxaml::Size extent = dcomp_backend_->extent();
+            *width = static_cast<INT32>(extent.width);
+            *height = static_cast<INT32>(extent.height);
+        } else {
+            *width = frame_cache_.width();
+            *height = frame_cache_.height();
+        }
+        return S_OK;
+    }
+
 private:
+    static constexpr UINT kRebuildMessage = WM_APP + 0x347;
+
+    enum class PresentationMode {
+        Undecided,
+        Dcomp,
+        Cpu,
+    };
+
+    struct HostState {
+        explicit HostState(std::uint64_t value) : cookie(value) {}
+
+        std::mutex mutex;
+        const std::uint64_t cookie;
+        HWND window = nullptr;
+        bool enabled = false;
+        bool message_posted = false;
+        bool layout_dirty = false;
+        std::uint64_t epoch = 1;
+        std::uint64_t message_generation = 0;
+    };
+
+    class FramePublishGuard final : public openxaml::render::DcompPublishGuard {
+    public:
+        FramePublishGuard(DesktopWindowXamlSourceObject* owner, HWND window,
+                          std::uint64_t host_epoch,
+                          std::uint64_t content_epoch,
+                          IOpenXamlNative* native, IUnknown* identity) noexcept
+            : owner_(owner), window_(window), host_epoch_(host_epoch),
+              content_epoch_(content_epoch), native_(native), identity_(identity) {}
+
+        bool CanPublish() noexcept override {
+            return owner_ && owner_->IsCurrentFrameTarget(
+                window_, host_epoch_, content_epoch_, native_, identity_);
+        }
+
+    private:
+        DesktopWindowXamlSourceObject* owner_ = nullptr;
+        HWND window_ = nullptr;
+        std::uint64_t host_epoch_ = 0;
+        std::uint64_t content_epoch_ = 0;
+        IOpenXamlNative* native_ = nullptr;
+        IUnknown* identity_ = nullptr;
+    };
+
+    struct WindowBinding {
+        explicit WindowBinding(DesktopWindowXamlSourceObject* value)
+            : host(value) {}
+
+        DesktopWindowXamlSourceObject* Acquire() noexcept {
+            std::lock_guard<std::mutex> guard(mutex);
+            if (!host || !host->TryRetain()) return nullptr;
+            return host;
+        }
+
+        void Retire(DesktopWindowXamlSourceObject* expected) noexcept {
+            std::lock_guard<std::mutex> guard(mutex);
+            if (host == expected) host = nullptr;
+        }
+
+        std::mutex mutex;
+        // Nonowning: a permanent HWND -> source reference would form a cycle.
+        // Acquire converts this pointer to a strong call reference while the
+        // mutex prevents final teardown from retiring it concurrently.
+        DesktopWindowXamlSourceObject* host = nullptr;
+    };
+
+    struct WindowHostLease {
+        explicit WindowHostLease(WindowBinding* binding) noexcept
+            : host(binding ? binding->Acquire() : nullptr) {}
+        ~WindowHostLease() {
+            if (host) host->ReleaseOne();
+        }
+        DesktopWindowXamlSourceObject* host = nullptr;
+    };
+
+    struct PaintSession {
+        explicit PaintSession(HWND value) : window(value), dc(BeginPaint(window, &paint)) {}
+        ~PaintSession() {
+            if (dc) EndPaint(window, &paint);
+        }
+
+        HWND window;
+        PAINTSTRUCT paint{};
+        HDC dc = nullptr;
+    };
+
+    static std::function<void(bool)> MakeInvalidationCallback(
+        const std::shared_ptr<HostState>& state) {
+        const std::weak_ptr<HostState> weak_state = state;
+        return [weak_state](bool layout) {
+            const std::shared_ptr<HostState> locked = weak_state.lock();
+            if (!locked) return;
+
+            HWND window = nullptr;
+            std::uint64_t cookie = 0;
+            std::uint64_t generation = 0;
+            {
+                std::lock_guard<std::mutex> guard(locked->mutex);
+                if (!locked->enabled || !locked->window) return;
+                locked->layout_dirty = locked->layout_dirty || layout;
+                if (locked->message_posted) return;
+                locked->message_posted = true;
+                ++locked->message_generation;
+                window = locked->window;
+                cookie = locked->cookie;
+                generation = locked->message_generation;
+            }
+
+            if (PostMessageW(window, kRebuildMessage,
+                             static_cast<WPARAM>(cookie),
+                             static_cast<LPARAM>(generation))) {
+                return;
+            }
+            std::lock_guard<std::mutex> guard(locked->mutex);
+            if (locked->cookie == cookie &&
+                locked->message_generation == generation) {
+                locked->message_posted = false;
+            }
+        };
+    }
+
+    static std::function<bool()> MakeHostFocusRequester(
+        const std::shared_ptr<HostState>& state) {
+        const std::weak_ptr<HostState> weak_state = state;
+        return [weak_state]() -> bool {
+            const std::shared_ptr<HostState> locked = weak_state.lock();
+            if (!locked) return false;
+            HWND window = nullptr;
+            std::uint64_t cookie = 0;
+            std::uint64_t epoch = 0;
+            {
+                std::lock_guard<std::mutex> guard(locked->mutex);
+                if (!locked->enabled || !locked->window) return false;
+                window = locked->window;
+                cookie = locked->cookie;
+                epoch = locked->epoch;
+            }
+
+            (void)SetFocus(window);
+            const bool user32_succeeded = GetFocus() == window;
+
+            std::lock_guard<std::mutex> guard(locked->mutex);
+            return user32_succeeded && locked->enabled &&
+                   locked->window == window && locked->cookie == cookie &&
+                   locked->epoch == epoch;
+        };
+    }
+
+    static std::function<bool()> MakeHostPointerCaptureRequester(
+        const std::shared_ptr<HostState>& state) {
+        const std::weak_ptr<HostState> weak_state = state;
+        return [weak_state]() -> bool {
+            const std::shared_ptr<HostState> locked = weak_state.lock();
+            if (!locked) return false;
+            HWND window = nullptr;
+            std::uint64_t cookie = 0;
+            std::uint64_t epoch = 0;
+            {
+                std::lock_guard<std::mutex> guard(locked->mutex);
+                if (!locked->enabled || !locked->window) return false;
+                window = locked->window;
+                cookie = locked->cookie;
+                epoch = locked->epoch;
+            }
+            (void)SetCapture(window);
+            const bool user32_succeeded = GetCapture() == window;
+            bool current = false;
+            {
+                std::lock_guard<std::mutex> guard(locked->mutex);
+                current = user32_succeeded && locked->enabled &&
+                    locked->window == window && locked->cookie == cookie &&
+                    locked->epoch == epoch;
+            }
+            if (!current && GetCapture() == window) (void)ReleaseCapture();
+            return current;
+        };
+    }
+
+    static std::function<void()> MakeHostPointerCaptureReleaser(
+        const std::shared_ptr<HostState>& state) {
+        const std::weak_ptr<HostState> weak_state = state;
+        return [weak_state]() {
+            const std::shared_ptr<HostState> locked = weak_state.lock();
+            if (!locked) return;
+            HWND window = nullptr;
+            {
+                std::lock_guard<std::mutex> guard(locked->mutex);
+                window = locked->window;
+            }
+            if (window && GetCapture() == window) (void)ReleaseCapture();
+        };
+    }
+
     static const wchar_t* WindowClassName() {
         return L"OpenXaml.DesktopWindowXamlSource";
     }
@@ -3332,51 +4699,782 @@ private:
         return error == ERROR_CLASS_ALREADY_EXISTS ? S_OK : HRESULT_FROM_WIN32(error);
     }
     static LRESULT CALLBACK WindowProc(HWND window, UINT message,
-                                       WPARAM wparam, LPARAM lparam) {
-        auto* self = reinterpret_cast<DesktopWindowXamlSourceObject*>(
+                                       WPARAM wparam, LPARAM lparam) noexcept {
+        try {
+            return WindowProcImpl(window, message, wparam, lparam);
+        } catch (const std::exception& error) {
+            TraceRuntime("OpenXaml: desktop island window procedure failed: ");
+            TraceRuntime(error.what());
+            TraceRuntime("\n");
+        } catch (...) {
+            TraceRuntime("OpenXaml: desktop island window procedure failed\n");
+        }
+        return DefWindowProcW(window, message, wparam, lparam);
+    }
+
+    static LRESULT WindowProcImpl(HWND window, UINT message,
+                                  WPARAM wparam, LPARAM lparam) {
+        auto* binding = reinterpret_cast<WindowBinding*>(
             GetWindowLongPtrW(window, GWLP_USERDATA));
         if (message == WM_NCCREATE) {
             const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
-            self = static_cast<DesktopWindowXamlSourceObject*>(create->lpCreateParams);
+            binding = static_cast<WindowBinding*>(create->lpCreateParams);
+            SetLastError(ERROR_SUCCESS);
             SetWindowLongPtrW(window, GWLP_USERDATA,
-                              reinterpret_cast<LONG_PTR>(self));
+                              reinterpret_cast<LONG_PTR>(binding));
+            if (GetLastError() != ERROR_SUCCESS) return FALSE;
         }
+        WindowHostLease lease(binding);
+        DesktopWindowXamlSourceObject* const self = lease.host;
         switch (message) {
+            case WM_SETFOCUS:
+                if (self) self->input_manager_->OnHostFocusChanged(true);
+                return 0;
+            case WM_KILLFOCUS:
+                if (self) self->input_manager_->OnHostFocusChanged(false);
+                return 0;
+            case WM_KEYDOWN:
+            case WM_KEYUP:
+            case WM_SYSKEYDOWN:
+            case WM_SYSKEYUP:
+                if (self) {
+                    const IslandInputResult result =
+                        self->input_manager_->ForwardKeyMessage(
+                            message, wparam, lparam);
+                    if (result.handled) return 0;
+                }
+                break;
+            case WM_CHAR:
+            case WM_SYSCHAR:
+            case WM_UNICHAR:
+                if (self) {
+                    const IslandInputResult result =
+                        self->input_manager_->ForwardCharacterMessage(
+                            message, wparam, lparam);
+                    if (result.handled) return 0;
+                }
+                break;
+            case WM_MOUSEMOVE:
+            case WM_LBUTTONDOWN:
+            case WM_LBUTTONUP:
+            case WM_LBUTTONDBLCLK:
+            case WM_RBUTTONDOWN:
+            case WM_RBUTTONUP:
+            case WM_RBUTTONDBLCLK:
+            case WM_MBUTTONDOWN:
+            case WM_MBUTTONUP:
+            case WM_MBUTTONDBLCLK:
+            case WM_XBUTTONDOWN:
+            case WM_XBUTTONUP:
+            case WM_XBUTTONDBLCLK:
+            case WM_MOUSEWHEEL:
+            case WM_MOUSEHWHEEL:
+                if (self) {
+                    const IslandInputResult result =
+                        self->input_manager_->ForwardPointerMessage(
+                            window, message, wparam, lparam);
+                    if (result.handled) return 0;
+                }
+                break;
+            case WM_CAPTURECHANGED:
+                if (self && reinterpret_cast<HWND>(lparam) != window)
+                    self->input_manager_->OnHostPointerCaptureLost();
+                break;
+            case WM_CANCELMODE:
+                if (self) self->input_manager_->OnHostPointerCanceled();
+                break;
             case WM_SIZE:
-                if (self) self->LayoutContent();
-                InvalidateRect(window, nullptr, FALSE);
+                if (self) self->OnSize();
+                return 0;
+            case WM_SHOWWINDOW:
+                if (self) self->OnHostVisibilityChanged(wparam != 0);
+                break;
+            case kRebuildMessage:
+                if (self) self->OnInvalidationMessage(
+                    static_cast<std::uint64_t>(wparam),
+                    static_cast<std::uint64_t>(lparam));
                 return 0;
             case WM_ERASEBKGND:
                 return 1;
             case WM_PAINT: {
-                PAINTSTRUCT paint{};
-                HDC dc = BeginPaint(window, &paint);
-                RECT client{};
-                GetClientRect(window, &client);
-                HBRUSH background = CreateSolidBrush(RGB(12, 12, 12));
-                FillRect(dc, &client, background);
-                DeleteObject(background);
-                EndPaint(window, &paint);
+                PaintSession paint(window);
+                // A committed DirectComposition tree is presented by the
+                // compositor. WM_PAINT remains balanced, but must not replay
+                // a CPU frame over that tree or walk retained XAML state.
+                if (paint.dc && self &&
+                    self->presentation_mode_ != PresentationMode::Dcomp) {
+                    self->PresentFrame(window);
+                }
                 return 0;
             }
             case WM_NCDESTROY:
                 SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+                if (binding) binding->Retire(self);
+                if (self) self->OnWindowDestroyed(window, binding);
+                delete binding;
                 break;
         }
         return DefWindowProcW(window, message, wparam, lparam);
     }
-    void LayoutContent() {
-        if (!child_ || !content_) return;
+
+    static bool FrameTraceEnabled() noexcept {
+        return GetEnvironmentVariableW(L"OPENXAML_TRACE_FRAMES", nullptr, 0) != 0;
+    }
+
+    static void TraceFrameDetails(
+        const char* kind, const std::vector<std::string>& diagnostics) {
+        for (std::size_t index = 1; index < diagnostics.size(); ++index) {
+            std::string line = "OpenXaml frame ";
+            line += kind;
+            line.push_back(' ');
+            line += diagnostics[index];
+            line.push_back('\n');
+            OutputDebugStringA(line.c_str());
+        }
+    }
+
+    void TraceFrameState(const char* event, const char* reason = nullptr) const {
+        if (!FrameTraceEnabled()) return;
+        const std::vector<std::string> diagnostics = frame_cache_.DiagnosticsLines();
+        std::string line = "OpenXaml frame event=";
+        line += event;
+        if (reason) {
+            line += " reason=";
+            line += reason;
+        }
+        line.push_back(' ');
+        line += diagnostics.front();
+        line.push_back('\n');
+        OutputDebugStringA(line.c_str());
+        TraceFrameDetails("diagnostic", diagnostics);
+    }
+
+    void PresentFrame(HWND window) noexcept {
+        POINT screen_origin{0, 0};
+        if (!ClientToScreen(window, &screen_origin)) {
+            TraceRuntime("OpenXaml: desktop island origin mapping failed\n");
+            return;
+        }
+        const openxaml::render::FramePresentResult result =
+            frame_cache_.PresentLayeredChild(window, screen_origin);
+        if (result.presented) {
+            if (traced_present_generation_ != frame_cache_.generation()) {
+                TraceFrameState("present");
+                if (FrameTraceEnabled()) {
+                    traced_present_generation_ = frame_cache_.generation();
+                }
+            }
+            return;
+        }
+        char diagnostic[96]{};
+        std::snprintf(diagnostic, sizeof(diagnostic),
+                      "OpenXaml: desktop island frame present failed: %lu\n",
+                      static_cast<unsigned long>(result.error));
+        TraceRuntime(diagnostic);
+        if (FrameTraceEnabled()) {
+            const std::vector<std::string> diagnostics =
+                frame_cache_.DiagnosticsLines();
+            std::string line = "OpenXaml frame event=present-failed error=" +
+                std::to_string(static_cast<unsigned long>(result.error)) + " " +
+                diagnostics.front() + "\n";
+            OutputDebugStringA(line.c_str());
+            TraceFrameDetails("diagnostic", diagnostics);
+        }
+    }
+
+    void OnWindowDestroyed(HWND window, WindowBinding* binding) {
+        if (window_binding_ == binding) window_binding_ = nullptr;
+        if (child_ == window) {
+            ReleaseDcompPresenter();
+            DisableHostState();
+            child_ = nullptr;
+        }
+        xaml_root_->SetHostVisible(false);
+        // Disable the reciprocal SetFocus callback before LostFocus user code
+        // runs. A reentrant Focus during WM_NCDESTROY must not target an HWND
+        // whose numeric value is about to become reusable.
+        input_manager_->OnHostFocusChanged(false);
+        input_manager_->ClearHostPointerCaptureCallbacks();
+        xaml_root_->NotifyChanged();
+    }
+
+    void EnableHostState(HWND window) {
+        std::lock_guard<std::mutex> guard(host_state_->mutex);
+        host_state_->window = window;
+        host_state_->enabled = true;
+        host_state_->message_posted = false;
+        host_state_->layout_dirty = false;
+        ++host_state_->epoch;
+        ++host_state_->message_generation;
+    }
+
+    void DisableHostState() {
+        std::lock_guard<std::mutex> guard(host_state_->mutex);
+        host_state_->enabled = false;
+        host_state_->window = nullptr;
+        host_state_->message_posted = false;
+        host_state_->layout_dirty = false;
+        ++host_state_->epoch;
+        ++host_state_->message_generation;
+    }
+
+    void CancelPendingInvalidation() {
+        std::lock_guard<std::mutex> guard(host_state_->mutex);
+        host_state_->message_posted = false;
+        host_state_->layout_dirty = false;
+        ++host_state_->message_generation;
+    }
+
+    bool TakePendingInvalidation(std::uint64_t cookie,
+                                 std::uint64_t generation,
+                                 bool* layout) {
+        std::lock_guard<std::mutex> guard(host_state_->mutex);
+        if (!host_state_->enabled || host_state_->window != child_ ||
+            host_state_->cookie != cookie || !host_state_->message_posted ||
+            host_state_->message_generation != generation) {
+            return false;
+        }
+        *layout = host_state_->layout_dirty;
+        host_state_->message_posted = false;
+        host_state_->layout_dirty = false;
+        return true;
+    }
+
+    void OnInvalidationMessage(std::uint64_t cookie,
+                               std::uint64_t generation) {
+        bool layout = false;
+        if (!TakePendingInvalidation(cookie, generation, &layout)) return;
+        RebuildFrame(layout, false,
+                     layout ? "layout-invalidation" : "render-invalidation");
+    }
+
+    void OnSize() {
+        if (!child_) return;
+        CancelPendingInvalidation();
+        RebuildFrame(true, false, "resize");
+        xaml_root_->NotifyChanged();
+    }
+
+    void OnHostVisibilityChanged(bool visible) {
+        xaml_root_->SetHostVisible(visible);
+        xaml_root_->NotifyChanged();
+    }
+
+    HRESULT InitializeDcompPresenter(HWND window) noexcept {
+        if (!window) return E_INVALIDARG;
+        if (dcomp_backend_) return HRESULT_FROM_WIN32(ERROR_ALREADY_INITIALIZED);
+
+        ID3D11Device* rendering_device = nullptr;
+        IDXGIDevice* dxgi_device = nullptr;
+        IDCompositionDesktopDevice* device = nullptr;
+        IDCompositionTarget* target = nullptr;
+        HRESULT result = D3D11CreateDevice(
+            nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
+            &rendering_device, nullptr, nullptr);
+        if (SUCCEEDED(result)) {
+            result = rendering_device->QueryInterface(
+                __uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgi_device));
+        }
+        if (SUCCEEDED(result)) {
+            // IDCompositionDevice::CreateSurface requires a rendering device.
+            // Passing the island's BGRA-capable DXGI device also keeps CPU
+            // strata and imported swap-chain content on the same adapter.
+            result = DCompositionCreateDevice2(
+                dxgi_device, __uuidof(IDCompositionDesktopDevice),
+                reinterpret_cast<void**>(&device));
+        }
+        if (SUCCEEDED(result)) {
+            // The island-owned child HWND is the composition and clipping
+            // boundary. Binding to Terminal's parent would merge lifetimes,
+            // z-order and invalidation domains belonging to different hosts.
+            result = device->CreateTargetForHwnd(window, FALSE, &target);
+        }
+        if (FAILED(result)) {
+            if (target) target->Release();
+            if (device) device->Release();
+            if (dxgi_device) dxgi_device->Release();
+            if (rendering_device) rendering_device->Release();
+            return result;
+        }
+
+        try {
+            auto platform =
+                std::make_shared<openxaml::render::WindowsDcompPlatform>(
+                    device, target);
+            dcomp_backend_ =
+                std::make_unique<openxaml::render::DcompSceneBackend>(
+                    std::move(platform));
+        } catch (...) {
+            target->Release();
+            device->Release();
+            dxgi_device->Release();
+            rendering_device->Release();
+            return E_OUTOFMEMORY;
+        }
+        target->Release();
+        device->Release();
+        dxgi_device->Release();
+        rendering_device->Release();
+        return S_OK;
+    }
+
+    static void TraceDcompFallback(const char* stage, HRESULT error) noexcept {
+        if (!FrameTraceEnabled()) return;
+        char line[160]{};
+        std::snprintf(line, sizeof(line),
+                      "OpenXaml frame event=backend-fallback backend=cpu "
+                      "from=dcomp stage=%s error=0x%08lx\n",
+                      stage, static_cast<unsigned long>(error));
+        OutputDebugStringA(line);
+    }
+
+    void ReleaseDcompPresenter() noexcept {
+        if (dcomp_backend_) {
+            // Detach is best effort during teardown. Even if Commit cannot be
+            // serviced (the current Wine boundary), releasing the target
+            // removes the HWND association and drops every retained external
+            // surface before the HWND can be recycled.
+            (void)dcomp_backend_->Detach();
+            dcomp_backend_.reset();
+        }
+        if (presentation_mode_ == PresentationMode::Dcomp ||
+            presentation_mode_ == PresentationMode::Undecided) {
+            presentation_mode_ = PresentationMode::Cpu;
+        }
+    }
+
+    bool NextDcompVersions(
+        const openxaml::render::SceneSnapshot& scene,
+        std::vector<openxaml::render::DcompNodeVersion>& versions) noexcept {
+        if (dcomp_scene_version_ ==
+            std::numeric_limits<std::uint64_t>::max()) {
+            return false;
+        }
+        ++dcomp_scene_version_;
+        try {
+            versions.reserve(scene.nodes().size());
+            for (const openxaml::render::VisualNode& node : scene.nodes()) {
+                // Element currently publishes stable NodeIds but not a
+                // per-node mutation generation. A fresh checked frame ticket
+                // for every node is conservative and truthful: it disables
+                // reuse without claiming state is unchanged.
+                versions.push_back({node.id, dcomp_scene_version_});
+            }
+        } catch (...) {
+            versions.clear();
+            return false;
+        }
+        return true;
+    }
+
+    bool TryCommitDcompFrame(
+        const openxaml::Element* root, openxaml::Size surface,
+        openxaml::render::DcompUpdateResult& update,
+        openxaml::render::DcompPublishGuard* publish_guard = nullptr) noexcept {
+        if (!dcomp_backend_) return false;
+        try {
+            std::shared_ptr<const openxaml::render::SceneSnapshot> scene;
+            if (root) {
+                openxaml::render::DisplayList list =
+                    openxaml::render::Build(*root, surface);
+                TraceDcompDisplayList(list);
+                scene = std::move(list.scene);
+                dcomp_refusals_ = std::move(list.refusals);
+            } else {
+                // A null Content is still a complete transparent frame. Its
+                // synthetic root lets the first DComp Commit negotiate the
+                // backend before any CPU pixels have been presented.
+                openxaml::render::VisualNode visual;
+                visual.id = openxaml::render::NodeId{
+                    std::numeric_limits<std::uint64_t>::max()};
+                visual.local_bounds = {0.0, 0.0, surface.width, surface.height};
+                auto probe_content =
+                    std::make_shared<openxaml::render::LocalDisplayList>();
+                // Selecting DirectComposition must prove the complete path
+                // used by ordinary XAML content, not merely CreateVisual and
+                // Commit. A fully transparent fill still has concrete bounds,
+                // so the retained backend rasterizes and uploads one CPU
+                // surface without changing the pixels shown during attach.
+                // Backends that cannot CreateSurface/BeginDraw therefore fail
+                // here and take the transactional CPU fallback before any
+                // authored frame is entrusted to them.
+                probe_content->commands.push_back(
+                    openxaml::render::LocalFillRect{
+                        {0.0, 0.0, surface.width, surface.height},
+                        openxaml::Color{0, 0, 0, 0}});
+                visual.content = std::move(probe_content);
+                scene = std::make_shared<openxaml::render::SceneSnapshot>(
+                    surface, visual.id,
+                    std::vector<openxaml::render::VisualNode>{std::move(visual)});
+                dcomp_refusals_.clear();
+            }
+            if (!scene) return false;
+
+            std::vector<openxaml::render::DcompNodeVersion> versions;
+            if (!NextDcompVersions(*scene, versions)) return false;
+            IslandDwriteTextRasterizer text;
+            update = dcomp_backend_->Update(*scene, versions, &text, publish_guard);
+            return update.committed && SUCCEEDED(update.error);
+        } catch (...) {
+            return false;
+        }
+    }
+
+    static void TraceDcompDisplayList(
+        const openxaml::render::DisplayList& list) noexcept {
+        if (!FrameTraceEnabled()) return;
+        try {
+            constexpr std::size_t kMaximumNodes = 256;
+            const std::size_t count =
+                std::min(list.geometry.size(), kMaximumNodes);
+            const auto* nodes = list.scene ? &list.scene->nodes() : nullptr;
+            for (std::size_t index = 0; index < count; ++index) {
+                const auto& geometry = list.geometry[index];
+                std::size_t commands = 0;
+                std::uint64_t node_id = 0;
+                if (nodes && index < nodes->size()) {
+                    const auto& node = (*nodes)[index];
+                    node_id = node.id.value;
+                    if (node.content) commands = node.content->commands.size();
+                }
+                char values[320]{};
+                std::snprintf(
+                    values, sizeof(values),
+                    "OpenXaml frame event=scene-node index=%zu id=%llu "
+                    "type=%s layout=%s visible=%s slot=%.3f,%.3f,%.3f,%.3f "
+                    "actual=%.3f,%.3f origin=%.3f,%.3f opacity=%.6f z=%d "
+                    "commands=%zu path=",
+                    index, static_cast<unsigned long long>(node_id),
+                    geometry.type.c_str(),
+                    geometry.has_layout_storage ? "true" : "false",
+                    geometry.visible ? "true" : "false", geometry.slot.x,
+                    geometry.slot.y, geometry.slot.width, geometry.slot.height,
+                    geometry.actual.width, geometry.actual.height,
+                    geometry.abs_x, geometry.abs_y, geometry.opacity,
+                    static_cast<int>(geometry.z_index), commands);
+                std::string line(values);
+                constexpr std::size_t kMaximumLine = 480;
+                const std::size_t remaining =
+                    line.size() < kMaximumLine ? kMaximumLine - line.size() : 0;
+                if (geometry.path.size() <= remaining) {
+                    line += geometry.path;
+                } else if (remaining > 3) {
+                    line += "...";
+                    line.append(geometry.path,
+                                geometry.path.size() - (remaining - 3),
+                                remaining - 3);
+                }
+                line.push_back('\n');
+                OutputDebugStringA(line.c_str());
+            }
+            if (list.geometry.size() > count) {
+                char line[160]{};
+                std::snprintf(
+                    line, sizeof(line),
+                    "OpenXaml frame event=scene-node-truncated total=%zu emitted=%zu\n",
+                    list.geometry.size(), count);
+                OutputDebugStringA(line);
+            }
+        } catch (...) {
+            TraceRuntime("OpenXaml: scene-node diagnostics unavailable\n");
+        }
+    }
+
+    bool ProbeDcompPresenter(
+        HWND window, openxaml::render::DcompUpdateResult& update) noexcept {
+        if (!window || !dcomp_backend_) return false;
         RECT client{};
-        if (!GetClientRect(child_, &client)) return;
-        IOpenXamlNative* native = nullptr;
-        const HRESULT hr = content_->QueryInterface(
-            IID_IOpenXamlNative, reinterpret_cast<void**>(&native));
-        if (SUCCEEDED(hr)) {
-            native->PerformLayout(
+        if (!GetClientRect(window, &client)) return false;
+        std::uint64_t host_epoch = 0;
+        {
+            std::lock_guard<std::mutex> guard(host_state_->mutex);
+            if (!host_state_->enabled || host_state_->window != window) return false;
+            host_epoch = host_state_->epoch;
+        }
+        const std::uint64_t content_epoch = content_epoch_;
+        IOpenXamlNative* const native = content_native_;
+        IUnknown* const identity = content_identity_;
+        FramePublishGuard guard(this, window, host_epoch, content_epoch, native,
+                                identity);
+        const openxaml::Size size{
+            static_cast<double>(client.right - client.left),
+            static_cast<double>(client.bottom - client.top)};
+        return TryCommitDcompFrame(nullptr, size, update, &guard);
+    }
+
+    void TraceDcompState(const char* event, const char* reason,
+                         const openxaml::render::DcompUpdateResult& update) const {
+        if (!FrameTraceEnabled()) return;
+        std::string line = "OpenXaml frame event=";
+        line += event;
+        line += " reason=";
+        line += reason;
+        line += " backend=dcomp generation=" +
+            std::to_string(update.generation);
+        line += " extent=" + std::to_string(static_cast<int>(update.extent.width)) +
+            "x" + std::to_string(static_cast<int>(update.extent.height));
+        line += " refusals=" + std::to_string(dcomp_refusals_.size());
+        line += " render_issues=" + std::to_string(update.render_issues.size());
+        line += " dcomp_issues=" + std::to_string(update.issues.size());
+        if (FAILED(update.error)) {
+            char error[16]{};
+            std::snprintf(error, sizeof(error), "0x%08lx",
+                          static_cast<unsigned long>(update.error));
+            line += " error=";
+            line += error;
+        }
+        line.push_back('\n');
+        OutputDebugStringA(line.c_str());
+
+        std::string stats = "OpenXaml frame event=scene-stats reason=";
+        stats += reason;
+        stats += " backend=dcomp generation=" +
+            std::to_string(update.generation);
+        stats += " nodes=" + std::to_string(update.stats.scene_nodes);
+        stats += " visible_nodes=" +
+            std::to_string(update.stats.visible_nodes);
+        stats += " commands=" + std::to_string(update.stats.scene_commands);
+        stats += " fills=" + std::to_string(update.stats.fill_commands);
+        stats += " image_brushes=" +
+            std::to_string(update.stats.image_brush_commands);
+        stats += " text=" + std::to_string(update.stats.text_commands);
+        stats += " external=" +
+            std::to_string(update.stats.external_surface_commands);
+        stats += " visuals_created=" +
+            std::to_string(update.stats.created_visuals);
+        stats += " nodes_reused=" +
+            std::to_string(update.stats.reused_nodes);
+        stats += " cpu_uploaded=" +
+            std::to_string(update.stats.uploaded_cpu_surfaces);
+        stats += " cpu_reused=" +
+            std::to_string(update.stats.reused_cpu_surfaces);
+        stats += " external_imported=" +
+            std::to_string(update.stats.imported_external_surfaces);
+        stats += " external_reused=" +
+            std::to_string(update.stats.reused_external_surfaces);
+        stats.push_back('\n');
+        OutputDebugStringA(stats.c_str());
+
+        constexpr std::size_t kMaximumLine = 240;
+        for (std::size_t index = 0; index < update.issues.size(); ++index) {
+            const auto& issue = update.issues[index];
+            char prefix[192]{};
+            const int prefix_length = std::snprintf(
+                prefix, sizeof(prefix),
+                "OpenXaml frame event=dcomp-issue reason=%s index=%zu node=%llu command=%zu error=0x%08lx message=\"",
+                reason, index,
+                static_cast<unsigned long long>(issue.node.value),
+                issue.command_index,
+                static_cast<unsigned long>(issue.error));
+            if (prefix_length <= 0) continue;
+            std::string detail(prefix,
+                               std::min<std::size_t>(
+                                   static_cast<std::size_t>(prefix_length),
+                                   sizeof(prefix) - 1));
+            const std::size_t suffix_size = 2; // closing quote and newline
+            const std::size_t remaining = detail.size() + suffix_size < kMaximumLine
+                ? kMaximumLine - detail.size() - suffix_size
+                : 0;
+            for (char character : issue.message) {
+                if (detail.size() >= kMaximumLine - suffix_size || !remaining) break;
+                detail.push_back(character == '\n' || character == '\r' ? ' ' : character);
+            }
+            detail += "\"\n";
+            OutputDebugStringA(detail.c_str());
+        }
+    }
+
+    void RebuildFrame(bool layout, bool content_transaction, const char* reason) {
+        if (!child_) return;
+        HWND const window = child_;
+        std::uint64_t epoch = 0;
+        {
+            std::lock_guard<std::mutex> guard(host_state_->mutex);
+            if (!host_state_->enabled || host_state_->window != window) return;
+            epoch = host_state_->epoch;
+        }
+        RECT client{};
+        if (!GetClientRect(window, &client)) return;
+        const openxaml::Size size{
+            static_cast<double>(client.right - client.left),
+            static_cast<double>(client.bottom - client.top)};
+
+        IOpenXamlNative* const native = content_native_;
+        IUnknown* const identity = content_identity_;
+        const std::uint64_t content_epoch = content_epoch_;
+        const std::uint64_t expected_generation = frame_cache_.generation();
+        if (native) native->AddRef();
+        if (identity) identity->AddRef();
+
+        bool layout_failed = false;
+        if (native) {
+            if (layout && FAILED(native->PerformLayout(
                 static_cast<double>(client.right - client.left),
-                static_cast<double>(client.bottom - client.top));
-            native->Release();
+                static_cast<double>(client.bottom - client.top)))) {
+                TraceRuntime("OpenXaml: desktop island layout failed\n");
+                layout_failed = true;
+            }
+            if (!layout_failed &&
+                !IsCurrentFrameTarget(window, epoch, content_epoch, native,
+                                      identity)) {
+                native->Release();
+                identity->Release();
+                return;
+            }
+        }
+
+        if (!layout_failed && presentation_mode_ != PresentationMode::Cpu &&
+            dcomp_backend_) {
+            openxaml::render::DcompUpdateResult update;
+            FramePublishGuard publish_guard(this, window, epoch, content_epoch,
+                                            native, identity);
+            if (TryCommitDcompFrame(
+                    native ? native->LayoutElement() : nullptr, size, update,
+                    &publish_guard)) {
+                if (presentation_mode_ == PresentationMode::Undecided)
+                    presentation_mode_ = PresentationMode::Dcomp;
+                const bool still_current = IsCurrentFrameTarget(
+                    window, epoch, content_epoch, native, identity);
+                if (native) native->Release();
+                if (identity) identity->Release();
+                if (still_current) {
+                    TraceDcompState("commit", reason, update);
+                    InvalidateRect(window, nullptr, FALSE);
+                }
+                return;
+            }
+
+            TraceDcompState("commit-failed", reason, update);
+            if (presentation_mode_ == PresentationMode::Undecided) {
+                // AttachToWindow performs the only capability probe using an
+                // unconditional transparent scene. Reaching this state with
+                // authored Content is therefore not evidence that DComp is
+                // unavailable; preserve the presenter and retry after the
+                // retained semantic or stale transaction changes.
+                if (native) native->Release();
+                if (identity) identity->Release();
+                return;
+            } else {
+                // DirectComposition commits are atomic. Once selected, keep
+                // the last committed tree when an update fails rather than
+                // overlaying it with an unrelated layered-window frame.
+                if (native) native->Release();
+                if (identity) identity->Release();
+                return;
+            }
+        }
+
+        openxaml::render::IslandFrameCache candidate;
+        bool built = false;
+        if (!native) {
+            // RebuildClear is the no-content counterpart of Rebuild: it
+            // commits a full-client transparent frame and never retains a
+            // visual-tree pointer.
+            built = candidate.RebuildClear(size, openxaml::Color{});
+        } else if (!layout_failed) {
+            built = candidate.Rebuild(*native->LayoutElement(), size,
+                                      openxaml::Color{});
+        }
+
+        if (!built) {
+            TraceFrameBuildFailure(layout_failed ? "the island layout pass failed"
+                                                  : candidate.last_build_error(),
+                                   reason, candidate);
+            if (content_transaction &&
+                IsCurrentFrameTarget(window, epoch, content_epoch, native,
+                                     identity)) {
+                // A mutation/resize failure keeps the last good frame. A root
+                // transaction must not display the previous root as the new
+                // content, so its deterministic fallback is transparent.
+                openxaml::render::IslandFrameCache clear_candidate;
+                if (clear_candidate.RebuildClear(size, openxaml::Color{}) &&
+                    frame_cache_.PublishFrom(std::move(clear_candidate),
+                                             expected_generation)) {
+                    TraceFrameState("commit-fallback", reason);
+                    InvalidateRect(window, nullptr, FALSE);
+                }
+            }
+            if (native) native->Release();
+            if (identity) identity->Release();
+            return;
+        }
+
+        if (!IsCurrentFrameTarget(window, epoch, content_epoch, native, identity)) {
+            if (native) native->Release();
+            if (identity) identity->Release();
+            return;
+        }
+
+        const bool published = frame_cache_.PublishFrom(
+            std::move(candidate), expected_generation);
+        const bool still_current = published &&
+            IsCurrentFrameTarget(window, epoch, content_epoch, native, identity);
+        if (native) native->Release();
+        if (identity) identity->Release();
+        if (still_current) {
+            TraceFrameState("commit", reason);
+            InvalidateRect(window, nullptr, FALSE);
+        }
+    }
+
+    bool IsCurrentFrameTarget(HWND window, std::uint64_t epoch,
+                              std::uint64_t content_epoch,
+                              IOpenXamlNative* native,
+                              IUnknown* identity) const {
+        std::lock_guard<std::mutex> guard(host_state_->mutex);
+        return host_state_->enabled && host_state_->window == window &&
+               host_state_->epoch == epoch && child_ == window &&
+               content_epoch_ == content_epoch && content_native_ == native &&
+               content_identity_ == identity;
+    }
+
+    void TraceFrameBuildFailure(
+        const std::string& error, const char* reason,
+        const openxaml::render::IslandFrameCache& attempted) const {
+        TraceRuntime("OpenXaml: desktop island frame rebuild failed: ");
+        TraceRuntime(error.c_str());
+        TraceRuntime("\n");
+        if (!FrameTraceEnabled()) return;
+        const std::vector<std::string> committed = frame_cache_.DiagnosticsLines();
+        const std::vector<std::string> attempted_lines = attempted.DiagnosticsLines();
+        std::string line = "OpenXaml frame event=build-failed reason=";
+        line += reason;
+        line += " committed={" + committed.front() + "} attempted={" +
+                attempted_lines.front() + "}\n";
+        OutputDebugStringA(line.c_str());
+        TraceFrameDetails("committed", committed);
+        TraceFrameDetails("attempted", attempted_lines);
+    }
+
+    void DetachAndReleaseContent() {
+        ++content_epoch_;
+        if (content_native_) {
+            focus_scope_->DetachRoot(content_native_->LayoutElement());
+        } else {
+            focus_scope_->DetachRoot(nullptr);
+        }
+        if (content_root_slot_) {
+            (void)content_root_slot_->put_XamlRoot(nullptr);
+        }
+        xaml_root_->SetContent(nullptr, nullptr);
+        if (content_native_) {
+            content_native_->LayoutElement()->DetachRenderInvalidationSink(
+                invalidation_sink_);
+            content_native_->Release();
+            content_native_ = nullptr;
+        }
+        if (content_identity_) {
+            content_identity_->Release();
+            content_identity_ = nullptr;
+        }
+        if (content_root_slot_) {
+            content_root_slot_->Release();
+            content_root_slot_ = nullptr;
+        }
+        if (content_) {
+            content_->Release();
+            content_ = nullptr;
         }
     }
 
@@ -3387,7 +5485,24 @@ private:
     }
 
     wux::IUIElement* content_ = nullptr;
+    IOpenXamlNative* content_native_ = nullptr;
+    IUnknown* content_identity_ = nullptr;
+    wux::IUIElement10* content_root_slot_ = nullptr;
+    std::uint64_t content_epoch_ = 0;
     HWND child_ = nullptr;
+    WindowBinding* window_binding_ = nullptr;
+    bool closed_ = false;
+    std::shared_ptr<HostState> host_state_;
+    std::shared_ptr<openxaml::RenderInvalidationSink> invalidation_sink_;
+    std::shared_ptr<IslandInputManager> input_manager_;
+    std::shared_ptr<XamlFocusScope> focus_scope_;
+    XamlRootObject* xaml_root_ = nullptr;
+    PresentationMode presentation_mode_ = PresentationMode::Cpu;
+    std::unique_ptr<openxaml::render::DcompSceneBackend> dcomp_backend_;
+    std::uint64_t dcomp_scene_version_ = 0;
+    std::vector<openxaml::render::Refusal> dcomp_refusals_;
+    openxaml::render::IslandFrameCache frame_cache_;
+    std::uint64_t traced_present_generation_ = 0;
     LONGLONG next_token_ = 0;
 };
 
@@ -3703,6 +5818,10 @@ VisualStateManagerFactory& TheVisualStateManagerFactory() {
     static VisualStateManagerFactory factory;
     return factory;
 }
+FocusManagerFactory& TheFocusManagerFactory() {
+    static FocusManagerFactory factory;
+    return factory;
+}
 TimelineFactory& TheTimelineFactory() {
     static TimelineFactory factory;
     return factory;
@@ -3825,9 +5944,8 @@ Factory<MenuFlyoutSubItemObject>& MenuFlyoutSubItemFactory() {
         L"Windows.UI.Xaml.Controls.MenuFlyoutSubItem");
     return factory;
 }
-Factory<MuxcBitmapIconSourceObject>& MuxcBitmapIconSourceFactory() {
-    static Factory<MuxcBitmapIconSourceObject> factory(
-        L"Microsoft.UI.Xaml.Controls.BitmapIconSource");
+MuxcBitmapIconSourceActivationFactory& MuxcBitmapIconSourceFactory() {
+    static MuxcBitmapIconSourceActivationFactory factory;
     return factory;
 }
 BitmapIconSourceActivationFactory& BitmapIconSourceFactory() {
@@ -3848,6 +5966,10 @@ Factory<ImageBrushObject>& ImageBrushFactory() {
 }
 SolidColorBrushActivationFactory& SolidColorBrushFactory() {
     static SolidColorBrushActivationFactory factory;
+    return factory;
+}
+ScaleTransformActivationFactory& ScaleTransformFactory() {
+    static ScaleTransformActivationFactory factory;
     return factory;
 }
 PropertyChangedEventArgsActivationFactory& PropertyChangedEventArgsFactory() {
@@ -3988,6 +6110,10 @@ ProgressRingActivationFactory& TheProgressRingFactory() {
     static ProgressRingActivationFactory factory;
     return factory;
 }
+InfoBarActivationFactory& TheInfoBarFactory() {
+    static InfoBarActivationFactory factory;
+    return factory;
+}
 AppBarButtonActivationFactory& TheAppBarButtonFactory() {
     static AppBarButtonActivationFactory factory;
     return factory;
@@ -4033,6 +6159,17 @@ PropertyMetadataFactory& ThePropertyMetadataFactory() {
 // fails when it measures, naming the family it could not find, which is a
 // better failure than refusing to load the DLL at all.
 void EnsureFontMetrics() {
+    static const bool runtime_provider = [] {
+        std::string diagnostic;
+        const bool installed =
+            openxaml::render::InstallDirectWriteRuntimeTextProvider(diagnostic);
+        if (!installed) {
+            TraceRuntime("OpenXaml: DirectWrite text provider unavailable: ");
+            TraceRuntime(diagnostic.c_str());
+            TraceRuntime("\n");
+        }
+        return installed;
+    }();
     static const int loaded = [] {
         char path[4096];
         const DWORD length =
@@ -4040,6 +6177,7 @@ void EnsureFontMetrics() {
         if (length == 0 || length >= sizeof path) return 0;
         return openxaml::LoadFontDirectory(openxaml::FontLibrary::Default(), path);
     }();
+    (void)runtime_provider;
     (void)loaded;
 }
 
@@ -4058,6 +6196,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
     }
     if (wcscmp(name, L"Windows.UI.Xaml.VisualStateManager") == 0)
         return &TheVisualStateManagerFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Input.FocusManager") == 0)
+        return &TheFocusManagerFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Media.Animation.Timeline") == 0)
         return &TheTimelineFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Automation.AutomationProperties") == 0)
@@ -4110,6 +6250,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &TheCommandBarFlyoutFactory();
     if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.ProgressRing") == 0)
         return &TheProgressRingFactory();
+    if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.InfoBar") == 0)
+        return &TheInfoBarFactory();
     if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.BitmapIconSource") == 0)
         return &MuxcBitmapIconSourceFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.Page") == 0)
@@ -4154,6 +6296,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &TheFontFamilyFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Media.ImageBrush") == 0)
         return &ImageBrushFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Media.ScaleTransform") == 0)
+        return &ScaleTransformFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Media.SolidColorBrush") == 0)
         return &SolidColorBrushFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.ColumnDefinition") == 0)
@@ -4298,7 +6442,20 @@ wux::GridLength ConstantGridLength(const xbf::Constant& value) {
 HRESULT BuildXbfObject(const std::shared_ptr<xbf::Object>& graph,
                        IInspectable* existing,
                        wuxmk::IComponentConnector* connector,
+                       IOpenXamlNameScope* name_scope,
                        IInspectable** result);
+
+HRESULT MakeWeakReference(IUnknown* object, IWeakReference** value) {
+    if (!object || !value) return E_INVALIDARG;
+    *value = nullptr;
+    IWeakReferenceSource* source = nullptr;
+    HRESULT hr = object->QueryInterface(
+        IID_OpenXamlWeakReferenceSource,
+        reinterpret_cast<void**>(&source));
+    if (SUCCEEDED(hr)) hr = source->GetWeakReference(value);
+    if (source) source->Release();
+    return hr;
+}
 
 HRESULT AppendPanelChild(IInspectable* parent, IInspectable* child) {
     wuxc::IPanel* panel = nullptr;
@@ -4311,6 +6468,28 @@ HRESULT AppendPanelChild(IInspectable* parent, IInspectable* child) {
     wux::IUIElement* element = nullptr;
     hr = Query(child, ::openxaml::iid::Windows_UI_Xaml_IUIElement, &element);
     if (SUCCEEDED(hr)) hr = children->Append(element);
+    if (element) element->Release();
+    children->Release();
+    return hr;
+}
+
+HRESULT InsertPanelChild(IInspectable* parent, IInspectable* child,
+                         unsigned logical_index) {
+    wuxc::IPanel* panel = nullptr;
+    HRESULT hr = Query(parent, ::openxaml::iid::Windows_UI_Xaml_Controls_IPanel,
+                       &panel);
+    if (FAILED(hr)) return hr;
+    __FIVector_1_Windows__CUI__CXaml__CUIElement* children = nullptr;
+    hr = panel->get_Children(&children);
+    panel->Release();
+    if (FAILED(hr)) return hr;
+
+    wux::IUIElement* element = nullptr;
+    hr = Query(child, ::openxaml::iid::Windows_UI_Xaml_IUIElement, &element);
+    unsigned size = 0;
+    if (SUCCEEDED(hr)) hr = children->get_Size(&size);
+    if (SUCCEEDED(hr))
+        hr = children->InsertAt(std::min(logical_index, size), element);
     if (element) element->Release();
     children->Release();
     return hr;
@@ -4339,6 +6518,49 @@ HRESULT AppendGridDefinition(IInspectable* parent, IInspectable* child, bool col
             hr = Query(child, ::openxaml::iid::Windows_UI_Xaml_Controls_IRowDefinition,
                        &definition);
             if (SUCCEEDED(hr)) hr = definitions->Append(definition);
+            if (definition) definition->Release();
+            definitions->Release();
+        }
+    }
+    grid->Release();
+    return hr;
+}
+
+HRESULT InsertGridDefinition(IInspectable* parent, IInspectable* child,
+                             bool column, unsigned logical_index) {
+    wuxc::IGrid* grid = nullptr;
+    HRESULT hr = Query(parent, ::openxaml::iid::Windows_UI_Xaml_Controls_IGrid,
+                       &grid);
+    if (FAILED(hr)) return hr;
+    if (column) {
+        __FIVector_1_Windows__CUI__CXaml__CControls__CColumnDefinition* definitions =
+            nullptr;
+        hr = grid->get_ColumnDefinitions(&definitions);
+        if (SUCCEEDED(hr)) {
+            wuxc::IColumnDefinition* definition = nullptr;
+            hr = Query(child,
+                       ::openxaml::iid::Windows_UI_Xaml_Controls_IColumnDefinition,
+                       &definition);
+            unsigned size = 0;
+            if (SUCCEEDED(hr)) hr = definitions->get_Size(&size);
+            if (SUCCEEDED(hr))
+                hr = definitions->InsertAt(std::min(logical_index, size), definition);
+            if (definition) definition->Release();
+            definitions->Release();
+        }
+    } else {
+        __FIVector_1_Windows__CUI__CXaml__CControls__CRowDefinition* definitions =
+            nullptr;
+        hr = grid->get_RowDefinitions(&definitions);
+        if (SUCCEEDED(hr)) {
+            wuxc::IRowDefinition* definition = nullptr;
+            hr = Query(child,
+                       ::openxaml::iid::Windows_UI_Xaml_Controls_IRowDefinition,
+                       &definition);
+            unsigned size = 0;
+            if (SUCCEEDED(hr)) hr = definitions->get_Size(&size);
+            if (SUCCEEDED(hr))
+                hr = definitions->InsertAt(std::min(logical_index, size), definition);
             if (definition) definition->Release();
             definitions->Release();
         }
@@ -4393,6 +6615,15 @@ HRESULT SetSingleChild(IInspectable* parent, IInspectable* child,
         button->Release();
         return hr;
     }
+    if (property == "Microsoft.UI.Xaml.Controls.InfoBar.ActionButton") {
+        IMuxcInfoBar* info_bar = nullptr;
+        HRESULT hr = parent->QueryInterface(
+            IID_IMuxcInfoBar, reinterpret_cast<void**>(&info_bar));
+        if (FAILED(hr)) return hr;
+        hr = info_bar->put_ActionButton(child);
+        info_bar->Release();
+        return hr;
+    }
     if (property == "Windows.UI.Xaml.Controls.Panel.Background") {
         wuxc::IPanel* panel = nullptr;
         HRESULT hr = Query(parent, ::openxaml::iid::Windows_UI_Xaml_Controls_IPanel,
@@ -4403,6 +6634,25 @@ HRESULT SetSingleChild(IInspectable* parent, IInspectable* child,
         if (SUCCEEDED(hr)) hr = panel->put_Background(brush);
         if (brush) brush->Release();
         panel->Release();
+        return hr;
+    }
+    if (property == "Windows.UI.Xaml.Shapes.Shape.Fill" ||
+        property == "Windows.UI.Xaml.Shapes.Shape.Stroke") {
+        wuxs::IShape* shape = nullptr;
+        HRESULT hr = Query(parent,
+                           ::openxaml::iid::Windows_UI_Xaml_Shapes_IShape,
+                           &shape);
+        if (FAILED(hr)) return hr;
+        wuxm::IBrush* brush = nullptr;
+        hr = Query(child, ::openxaml::iid::Windows_UI_Xaml_Media_IBrush,
+                   &brush);
+        if (SUCCEEDED(hr)) {
+            hr = EndsWith(property, ".Fill")
+                ? shape->put_Fill(brush)
+                : shape->put_Stroke(brush);
+        }
+        if (brush) brush->Release();
+        shape->Release();
         return hr;
     }
     if (property == "Windows.UI.Xaml.Application.Resources") {
@@ -4461,8 +6711,163 @@ HRESULT SetSingleChild(IInspectable* parent, IInspectable* child,
     return hr;
 }
 
+HRESULT InsertDeferredCollectionChild(const std::string& property,
+                                      IInspectable* parent,
+                                      IInspectable* child,
+                                      unsigned logical_index) {
+    if (property == "Windows.UI.Xaml.Controls.Panel.Children")
+        return InsertPanelChild(parent, child, logical_index);
+    if (property == "Windows.UI.Xaml.Controls.Grid.ColumnDefinitions")
+        return InsertGridDefinition(parent, child, true, logical_index);
+    if (property == "Windows.UI.Xaml.Controls.Grid.RowDefinitions")
+        return InsertGridDefinition(parent, child, false, logical_index);
+    return E_NOTIMPL;
+}
+
+class DeferredXbfMaterializer final : public IOpenXamlDeferredMaterializer {
+public:
+    static HRESULT Create(const std::shared_ptr<xbf::Object>& graph,
+                          IInspectable* parent,
+                          wuxmk::IComponentConnector* connector,
+                          std::string property,
+                          unsigned logical_index,
+                          DeferredXbfMaterializer** value) noexcept {
+        if (!graph || !parent || !value) return E_INVALIDARG;
+        *value = nullptr;
+        IWeakReference* parent_reference = nullptr;
+        HRESULT hr = MakeWeakReference(parent, &parent_reference);
+        if (FAILED(hr)) return hr;
+
+        IWeakReference* connector_reference = nullptr;
+        if (connector) {
+            hr = MakeWeakReference(connector, &connector_reference);
+            if (FAILED(hr)) {
+                parent_reference->Release();
+                return hr;
+            }
+        }
+
+        auto* materializer = new (std::nothrow) DeferredXbfMaterializer(
+            graph, parent_reference, connector_reference, std::move(property),
+            logical_index);
+        parent_reference->Release();
+        if (connector_reference) connector_reference->Release();
+        if (!materializer) return E_OUTOFMEMORY;
+        *value = materializer;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (IsEqualGUID(iid, IID_IUnknown) ||
+            IsEqualGUID(iid, IID_IOpenXamlDeferredMaterializer)) {
+            *value = static_cast<IOpenXamlDeferredMaterializer*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return static_cast<ULONG>(InterlockedIncrement(&references_));
+    }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining =
+            static_cast<ULONG>(InterlockedDecrement(&references_));
+        if (!remaining) delete this;
+        return remaining;
+    }
+
+    HRESULT STDMETHODCALLTYPE Materialize(
+        IOpenXamlNameScope* name_scope,
+        IInspectable** value) noexcept override {
+        if (!name_scope || !value) return E_INVALIDARG;
+        *value = nullptr;
+        try {
+            IInspectable* parent = nullptr;
+            HRESULT hr = parent_reference_->Resolve(
+                ::openxaml::iid::IInspectable, &parent);
+            if (FAILED(hr) || !parent) return hr;
+
+            wuxmk::IComponentConnector* connector = nullptr;
+            if (connector_reference_) {
+                IInspectable* identity = nullptr;
+                hr = connector_reference_->Resolve(
+                    ::openxaml::iid::IInspectable, &identity);
+                if (FAILED(hr) || !identity) {
+                    parent->Release();
+                    return hr;
+                }
+                hr = identity->QueryInterface(
+                    kComponentConnectorIid,
+                    reinterpret_cast<void**>(&connector));
+                identity->Release();
+                if (FAILED(hr)) {
+                    parent->Release();
+                    return hr;
+                }
+            }
+
+            IInspectable* child = nullptr;
+            hr = BuildXbfObject(
+                graph_, nullptr, connector, name_scope, &child);
+            if (connector) connector->Release();
+            if (SUCCEEDED(hr)) {
+                hr = InsertDeferredCollectionChild(
+                    property_, parent, child, logical_index_);
+            }
+            parent->Release();
+            if (FAILED(hr)) {
+                if (child) child->Release();
+                return hr;
+            }
+            *value = child;
+            return S_OK;
+        } catch (...) {
+            return E_OUTOFMEMORY;
+        }
+    }
+
+private:
+    DeferredXbfMaterializer(std::shared_ptr<xbf::Object> graph,
+                           IWeakReference* parent_reference,
+                           IWeakReference* connector_reference,
+                           std::string property,
+                           unsigned logical_index)
+        : graph_(std::move(graph)),
+          parent_reference_(parent_reference),
+          connector_reference_(connector_reference),
+          property_(std::move(property)),
+          logical_index_(logical_index) {
+        parent_reference_->AddRef();
+        if (connector_reference_) connector_reference_->AddRef();
+    }
+    ~DeferredXbfMaterializer() {
+        parent_reference_->Release();
+        if (connector_reference_) connector_reference_->Release();
+    }
+
+    LONG references_ = 1;
+    std::shared_ptr<xbf::Object> graph_;
+    IWeakReference* parent_reference_ = nullptr;
+    IWeakReference* connector_reference_ = nullptr;
+    std::string property_;
+    unsigned logical_index_ = 0;
+};
+
+std::string XbfObjectName(const std::shared_ptr<xbf::Object>& graph) {
+    if (!graph) return {};
+    const auto found = graph->properties.find(
+        "Windows.UI.Xaml.DependencyObject.Name");
+    if (found == graph->properties.end() ||
+        found->second.kind != xbf::Value::Kind::Constant)
+        return {};
+    return found->second.constant.string_value;
+}
+
 HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
-                        IInspectable* parent, wuxmk::IComponentConnector* connector) {
+                        IInspectable* parent, wuxmk::IComponentConnector* connector,
+                        IOpenXamlNameScope* name_scope) {
     if (!value.object) return E_INVALIDARG;
     IOpenXamlResourceDictionary* resources = nullptr;
     const bool merged =
@@ -4474,15 +6879,44 @@ HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
                                              reinterpret_cast<void**>(&resources));
         if (FAILED(hr)) return hr;
     }
+    unsigned logical_index = 0;
     for (const auto& item : value.object->items) {
         if (item.kind != xbf::Value::Kind::Object || !item.object) continue;
         // x:Load="False" is encoded as an internal DeferredElement whose
         // payload lives in a custom-runtime-data substream. It is a marker,
         // not an activatable WinRT class, and stays absent from the live
         // collection until the owning generated binding requests it.
-        if (item.object->type == "Windows.UI.Xaml.Internal.DeferredElement") continue;
+        if (item.object->type == "Windows.UI.Xaml.Internal.DeferredElement") {
+            if (!item.object->deferred_content || !name_scope) {
+                if (resources) resources->Release();
+                return E_UNEXPECTED;
+            }
+            const std::string deferred_name =
+                XbfObjectName(item.object->deferred_content);
+            if (deferred_name.empty()) {
+                if (resources) resources->Release();
+                return E_NOTIMPL;
+            }
+            DeferredXbfMaterializer* materializer = nullptr;
+            HRESULT hr = DeferredXbfMaterializer::Create(
+                item.object->deferred_content, parent, connector, property,
+                logical_index, &materializer);
+            HSTRING name = nullptr;
+            if (SUCCEEDED(hr)) hr = HStringFromUtf8(deferred_name, &name);
+            if (SUCCEEDED(hr))
+                hr = name_scope->RegisterDeferred(name, materializer);
+            WindowsDeleteString(name);
+            if (materializer) materializer->Release();
+            if (FAILED(hr)) {
+                if (resources) resources->Release();
+                return hr;
+            }
+            ++logical_index;
+            continue;
+        }
         IInspectable* child = nullptr;
-        HRESULT hr = BuildXbfObject(item.object, nullptr, connector, &child);
+        HRESULT hr = BuildXbfObject(
+            item.object, nullptr, connector, name_scope, &child);
         if (FAILED(hr)) {
             if (resources) resources->Release();
             return hr;
@@ -4525,12 +6959,14 @@ HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
             if (resources) resources->Release();
             return hr;
         }
+        ++logical_index;
     }
     if (themes) {
         for (const auto& [key, item] : value.object->dictionary) {
             if (item.kind != xbf::Value::Kind::Object || !item.object) continue;
             IInspectable* child = nullptr;
-            HRESULT hr = BuildXbfObject(item.object, nullptr, connector, &child);
+            HRESULT hr = BuildXbfObject(
+                item.object, nullptr, connector, name_scope, &child);
             if (FAILED(hr)) {
                 resources->Release();
                 return hr;
@@ -4549,9 +6985,25 @@ HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
 
 HRESULT ApplyConstantProperty(const std::string& property, const xbf::Constant& value,
                               IInspectable* object) {
-    if (property == "x:ConnectionId" ||
-        property == "Windows.UI.Xaml.DependencyObject.Name" ||
-        property == "x:Uid") return S_OK;
+    if (property == "x:ConnectionId" || property == "x:Uid") return S_OK;
+
+    if (property == "Windows.UI.Xaml.DependencyObject.Name") {
+        wux::IFrameworkElement* framework = nullptr;
+        HRESULT hr = Query(
+            object, ::openxaml::iid::Windows_UI_Xaml_IFrameworkElement,
+            &framework);
+        // Some non-FrameworkElement XBF nodes can carry the dependency-object
+        // name directive. Their projection does not yet expose a namescope;
+        // do not turn an otherwise valid resource into a load failure.
+        if (hr == E_NOINTERFACE) return S_OK;
+        if (FAILED(hr)) return hr;
+        HSTRING name = nullptr;
+        hr = HStringFromUtf8(value.string_value, &name);
+        if (SUCCEEDED(hr)) hr = framework->put_Name(name);
+        WindowsDeleteString(name);
+        framework->Release();
+        return hr;
+    }
 
     if (property == "Windows.UI.Xaml.ResourceDictionary.Source") {
         IOpenXamlResourceDictionary* dictionary = nullptr;
@@ -4577,6 +7029,26 @@ HRESULT ApplyConstantProperty(const std::string& property, const xbf::Constant& 
             static_cast<BYTE>(argb & 0xff)};
         hr = brush->put_Color(color);
         brush->Release();
+        return hr;
+    }
+
+    if (property.rfind("Microsoft.UI.Xaml.Controls.InfoBar.", 0) == 0) {
+        IMuxcInfoBar* info_bar = nullptr;
+        HRESULT hr = object->QueryInterface(
+            IID_IMuxcInfoBar, reinterpret_cast<void**>(&info_bar));
+        if (FAILED(hr)) return hr;
+        const std::string name = property.substr(property.rfind('.') + 1);
+        if (name == "IsOpen")
+            hr = info_bar->put_IsOpen(ConstantInteger(value) != 0);
+        else if (name == "IsIconVisible")
+            hr = info_bar->put_IsIconVisible(ConstantInteger(value) != 0);
+        else if (name == "IsClosable")
+            hr = info_bar->put_IsClosable(ConstantInteger(value) != 0);
+        else if (name == "Severity")
+            hr = info_bar->put_Severity(ConstantInteger(value));
+        else
+            hr = S_OK;
+        info_bar->Release();
         return hr;
     }
 
@@ -4647,6 +7119,39 @@ HRESULT ApplyConstantProperty(const std::string& property, const xbf::Constant& 
         if (panel) panel->Release();
         return hr;
     }
+    if (property.rfind("Windows.UI.Xaml.Shapes.Shape.", 0) == 0) {
+        wuxs::IShape* shape = nullptr;
+        HRESULT hr = Query(object,
+                           ::openxaml::iid::Windows_UI_Xaml_Shapes_IShape,
+                           &shape);
+        if (FAILED(hr)) return hr;
+        const std::string name = property.substr(property.rfind('.') + 1);
+        if (name == "StrokeMiterLimit")
+            hr = shape->put_StrokeMiterLimit(ConstantNumber(value));
+        else if (name == "StrokeThickness")
+            hr = shape->put_StrokeThickness(ConstantNumber(value));
+        else if (name == "StrokeStartLineCap")
+            hr = shape->put_StrokeStartLineCap(
+                static_cast<wuxm::PenLineCap>(ConstantInteger(value)));
+        else if (name == "StrokeEndLineCap")
+            hr = shape->put_StrokeEndLineCap(
+                static_cast<wuxm::PenLineCap>(ConstantInteger(value)));
+        else if (name == "StrokeLineJoin")
+            hr = shape->put_StrokeLineJoin(
+                static_cast<wuxm::PenLineJoin>(ConstantInteger(value)));
+        else if (name == "StrokeDashOffset")
+            hr = shape->put_StrokeDashOffset(ConstantNumber(value));
+        else if (name == "StrokeDashCap")
+            hr = shape->put_StrokeDashCap(
+                static_cast<wuxm::PenLineCap>(ConstantInteger(value)));
+        else if (name == "Stretch")
+            hr = shape->put_Stretch(
+                static_cast<wuxm::Stretch>(ConstantInteger(value)));
+        else
+            hr = S_OK;
+        shape->Release();
+        return hr;
+    }
     if (property == "Windows.UI.Xaml.Controls.TextBlock.Text" ||
         property == "Windows.UI.Xaml.Controls.TextBlock.FontSize") {
         wuxc::ITextBlock* text = nullptr;
@@ -4677,16 +7182,18 @@ HRESULT ApplyConstantProperty(const std::string& property, const xbf::Constant& 
 }
 
 HRESULT ApplyXbfProperty(const std::string& property, const xbf::Value& value,
-                         IInspectable* object, wuxmk::IComponentConnector* connector) {
+                         IInspectable* object, wuxmk::IComponentConnector* connector,
+                         IOpenXamlNameScope* name_scope) {
     if (value.kind == xbf::Value::Kind::Constant)
         return ApplyConstantProperty(property, value.constant, object);
     if (value.kind != xbf::Value::Kind::Object || !value.object) return S_OK;
     if (value.object->type.size() >= 6 &&
         value.object->type.compare(value.object->type.size() - 6, 6, "#value") == 0)
-        return ApplyCollection(property, value, object, connector);
+        return ApplyCollection(property, value, object, connector, name_scope);
 
     IInspectable* child = nullptr;
-    HRESULT hr = BuildXbfObject(value.object, nullptr, connector, &child);
+    HRESULT hr = BuildXbfObject(
+        value.object, nullptr, connector, name_scope, &child);
     if (FAILED(hr)) return hr;
     hr = SetSingleChild(object, child, property);
     child->Release();
@@ -4696,6 +7203,7 @@ HRESULT ApplyXbfProperty(const std::string& property, const xbf::Value& value,
 HRESULT BuildXbfObject(const std::shared_ptr<xbf::Object>& graph,
                        IInspectable* existing,
                        wuxmk::IComponentConnector* connector,
+                       IOpenXamlNameScope* name_scope,
                        IInspectable** result) {
     if (!graph || !result) return E_INVALIDARG;
     *result = nullptr;
@@ -4708,8 +7216,28 @@ HRESULT BuildXbfObject(const std::shared_ptr<xbf::Object>& graph,
         return hr;
     }
 
+    IOpenXamlNameScopeOwner* named = nullptr;
+    hr = object->QueryInterface(
+        IID_IOpenXamlNameScopeOwner, reinterpret_cast<void**>(&named));
+    if (SUCCEEDED(hr)) {
+        hr = named->AttachNameScope(name_scope);
+        named->Release();
+        if (FAILED(hr)) {
+            TraceXbfFailure("namescope", graph->type, hr);
+            object->Release();
+            return hr;
+        }
+    } else if (hr == E_NOINTERFACE) {
+        hr = S_OK;
+    } else {
+        TraceXbfFailure("namescope-query", graph->type, hr);
+        object->Release();
+        return hr;
+    }
+
     for (const auto& [property, value] : graph->properties) {
-        hr = ApplyXbfProperty(property, value, object, connector);
+        hr = ApplyXbfProperty(
+            property, value, object, connector, name_scope);
         if (FAILED(hr)) {
             TraceXbfFailure("property", property, hr);
             object->Release();
@@ -4735,7 +7263,8 @@ HRESULT BuildXbfObject(const std::shared_ptr<xbf::Object>& graph,
                             "Microsoft.UI.Xaml.Controls.CommandBarFlyout")
                         continue;
                     IInspectable* child = nullptr;
-                    hr = BuildXbfObject(value.object, nullptr, connector, &child);
+                    hr = BuildXbfObject(
+                        value.object, nullptr, connector, name_scope, &child);
                     if (FAILED(hr)) break;
                     hr = dictionary->InsertResource(key.c_str(), child);
                     child->Release();
@@ -4801,8 +7330,15 @@ HRESULT MaterializeXbfImpl(const std::shared_ptr<xbf::Object>& graph,
     (void)component->QueryInterface(kComponentConnectorIid,
                                     reinterpret_cast<void**>(&connector));
     IInspectable* root = nullptr;
-    const HRESULT hr = BuildXbfObject(graph, component, connector, &root);
+    auto* name_scope = new (std::nothrow) XamlNameScope();
+    if (!name_scope) {
+        if (connector) connector->Release();
+        return E_OUTOFMEMORY;
+    }
+    const HRESULT hr = BuildXbfObject(
+        graph, component, connector, name_scope, &root);
     if (root) root->Release();
+    name_scope->Release();
     if (connector) connector->Release();
     return hr;
 }

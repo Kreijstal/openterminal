@@ -19,6 +19,7 @@ ABI::Windows::UI::Xaml::IUIElement4
 ABI::Windows::UI::Xaml::IUIElement5
 ABI::Windows::UI::Xaml::IFrameworkElement
 ABI::Windows::UI::Xaml::IFrameworkElement2
+ABI::Windows::UI::Xaml::IRoutedEventArgs
 ABI::Windows::UI::Xaml::Media::IBrush
 ABI::Windows::UI::Xaml::Media::IImageBrush
 ABI::Windows::UI::Xaml::Media::ISolidColorBrush
@@ -160,6 +161,7 @@ ABI::Windows::ApplicationModel::Resources::Core::IResourceManager
 ABI::Windows::ApplicationModel::Resources::Core::IResourceManagerStatics
 ABI::Windows::ApplicationModel::Resources::Core::IResourceMap
 ABI::Windows::ApplicationModel::Resources::Core::IResourceCandidate
+ABI::Windows::ApplicationModel::Resources::Core::INamedResource
 ABI::Windows::ApplicationModel::Resources::Core::IResourceContext
 ABI::Windows::ApplicationModel::Resources::Core::IResourceContextStatics
 ABI::Windows::ApplicationModel::Resources::Core::IResourceContextStatics2
@@ -169,6 +171,7 @@ ABI::Windows::UI::Xaml::Hosting::IDesktopWindowXamlSource
 ABI::Windows::UI::Xaml::Hosting::IDesktopWindowXamlSourceFactory
 ABI::Windows::UI::Xaml::Controls::IGridFactory
 ABI::Windows::UI::Xaml::Controls::Primitives::IRangeBase
+ABI::Windows::UI::Xaml::Controls::Primitives::IRangeBaseValueChangedEventArgs
 ABI::Windows::UI::Xaml::Controls::Primitives::IScrollBar
 ABI::Windows::UI::Xaml::Controls::IAppBarButton
 ABI::Windows::UI::Xaml::Controls::ICommandBarElement
@@ -180,4 +183,8 @@ ABI::Windows::UI::Xaml::Controls::Primitives::ISelectorItem
 ABI::Windows::UI::Xaml::IGridLengthHelper
 ABI::Windows::UI::Xaml::IGridLengthHelperStatics
 ABI::Windows::UI::Xaml::IVisualStateManagerStatics
+ABI::Windows::UI::Xaml::Input::IFocusManagerStatics5
+ABI::Windows::UI::Xaml::Input::IFocusManagerStatics7
+ABI::Windows::UI::Xaml::Input::IFocusMovementResult
+ABI::Windows::UI::Xaml::IXamlRoot
 ABI::Windows::UI::Xaml::Media::Animation::ITimelineStatics

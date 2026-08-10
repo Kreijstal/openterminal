@@ -18,7 +18,11 @@ Windows.UI.Xaml.IUIElement7
 Windows.UI.Xaml.IUIElement10
 Windows.UI.Xaml.IFrameworkElement
 Windows.UI.Xaml.IFrameworkElement2
+Windows.UI.Xaml.IRoutedEventArgs
 Windows.UI.Xaml.Media.IGeneralTransform
+Windows.UI.Xaml.Media.ITransform
+Windows.UI.Xaml.Media.IScaleTransform
+Windows.UI.Xaml.Media.IScaleTransformStatics
 Windows.UI.Xaml.Media.IBrush
 Windows.UI.Xaml.Media.IImageBrush
 Windows.UI.Xaml.Media.ISolidColorBrush
@@ -40,6 +44,7 @@ Windows.UI.Xaml.Controls.ISwapChainPanelStatics
 Windows.UI.Xaml.Controls.IImage
 Windows.UI.Xaml.Controls.IPathIcon
 Windows.UI.Xaml.Shapes.IPath
+Windows.UI.Xaml.Shapes.IShape
 Windows.UI.Xaml.Controls.IColumnDefinition
 Windows.UI.Xaml.Controls.IRowDefinition
 Windows.UI.Xaml.Controls.IControl
@@ -125,6 +130,7 @@ Windows.ApplicationModel.Resources.Core.IResourceManager
 Windows.ApplicationModel.Resources.Core.IResourceManagerStatics
 Windows.ApplicationModel.Resources.Core.IResourceMap
 Windows.ApplicationModel.Resources.Core.IResourceCandidate
+Windows.ApplicationModel.Resources.Core.INamedResource
 Windows.ApplicationModel.Resources.Core.IResourceContext
 Windows.ApplicationModel.Resources.Core.IResourceContextStatics
 Windows.ApplicationModel.Resources.Core.IResourceContextStatics2
@@ -134,6 +140,10 @@ Windows.UI.Xaml.Controls.IGridFactory
 Windows.UI.Xaml.IGridLengthHelper
 Windows.UI.Xaml.IGridLengthHelperStatics
 Windows.UI.Xaml.IVisualStateManagerStatics
+Windows.UI.Xaml.Input.IFocusManagerStatics5
+Windows.UI.Xaml.Input.IFocusManagerStatics7
+Windows.UI.Xaml.Input.IFocusMovementResult
+Windows.UI.Xaml.IXamlRoot
 Windows.UI.Xaml.Media.Animation.ITimelineStatics
 Windows.UI.Xaml.Automation.IAutomationPropertiesStatics
 Windows.UI.Xaml.Automation.IAutomationPropertiesStatics2
@@ -180,6 +190,7 @@ __FIMapView_2_IInspectable_IInspectable
 __FIMap_2_IInspectable_IInspectable
 
 Windows.UI.Xaml.Controls.Primitives.IRangeBase
+Windows.UI.Xaml.Controls.Primitives.IRangeBaseValueChangedEventArgs
 Windows.UI.Xaml.Controls.Primitives.IScrollBar
 Windows.UI.Xaml.Controls.IAppBarButton
 Windows.UI.Xaml.Controls.IAppBarButtonFactory

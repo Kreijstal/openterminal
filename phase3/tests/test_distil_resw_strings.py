@@ -16,6 +16,7 @@ from distil_resw_strings import (  # noqa: E402
     canonical_remote,
     distil,
     read_file,
+    runtime_scope,
     split_key,
 )
 
@@ -107,8 +108,14 @@ class DistilTest(unittest.TestCase):
                  "PATH": "/usr/bin:/bin"},
         )
 
-    def write(self, project: str, locale: str, entries: list[tuple[str, str]]) -> None:
-        path = self.repo / "src" / "cascadia" / project / "Resources" / locale / "Resources.resw"
+    def write(
+        self,
+        project: str,
+        locale: str,
+        entries: list[tuple[str, str]],
+        filename: str = "Resources.resw",
+    ) -> None:
+        path = self.repo / "src" / "cascadia" / project / "Resources" / locale / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(resw(entries), encoding="utf-8")
 
@@ -127,6 +134,51 @@ class DistilTest(unittest.TestCase):
         self.assertEqual(list(table["code_keys"]), ["ErrorTitle"])
         self.assertEqual(table["totals"],
                          {"uids": 2, "uid_properties": 3, "code_keys": 1, "unsplittable": 0})
+        self.assertEqual(table["runtime_resources"]["App/Resources"], {
+            "Caption.Text": "Hello",
+            "ErrorTitle": "Something went wrong",
+            "SaveButton.Content": "Save",
+            "SaveButton.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name": "Save",
+        })
+
+    def test_runtime_catalog_keeps_component_scopes_and_values(self) -> None:
+        self.write("TerminalSettingsModel", "en-US", [("CopyText", "Copy")])
+        self.write("TerminalControl", "en-US", [("CopyText", "Copy selection")])
+        table = distil(self.repo, "en-US")
+        self.assertEqual(
+            table["runtime_resources"]
+                 ["Microsoft.Terminal.Settings.Model/Resources"]["CopyText"],
+            "Copy",
+        )
+        self.assertEqual(
+            table["runtime_resources"]
+                 ["Microsoft.Terminal.Control/Resources"]["CopyText"],
+            "Copy selection",
+        )
+
+    def test_package_and_terminal_app_share_one_runtime_map(self) -> None:
+        self.write("CascadiaPackage", "en-US", [("PackageName", "Terminal")])
+        self.write("TerminalApp", "en-US", [("WindowTitle", "Terminal")])
+        resources = distil(self.repo, "en-US")["runtime_resources"]
+        self.assertEqual(resources["TerminalApp/Resources"], {
+            "PackageName": "Terminal",
+            "WindowTitle": "Terminal",
+        })
+
+    def test_named_resw_file_keeps_its_resource_map_name(self) -> None:
+        self.write("TerminalApp", "en-US", [("WindowTitle", "Terminal")])
+        self.write(
+            "TerminalApp",
+            "en-US",
+            [("AppName", "Windows Terminal")],
+            "ContextMenu.resw",
+        )
+        resources = distil(self.repo, "en-US")["runtime_resources"]
+        self.assertEqual(
+            resources["TerminalApp/ContextMenu"],
+            {"AppName": "Windows Terminal"},
+        )
+        self.assertNotIn("AppName", resources["TerminalApp/Resources"])
 
     def test_merges_projects_and_records_every_file(self) -> None:
         self.write("App", "en-US", [("A.Text", "one")])

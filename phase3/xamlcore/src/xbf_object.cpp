@@ -310,6 +310,20 @@ private:
                 }
                 break;
             }
+
+            const bool deferred_element =
+                target->type == "Windows.UI.Xaml.Internal.DeferredElement" ||
+                target->type == "stable-type:746";
+            const bool deferred_version =
+                node.custom_data_version == 745 ||
+                node.custom_data_version == 6 ||
+                node.custom_data_version == 9;
+            if (deferred_element && deferred_version && node.substream >= 0 &&
+                static_cast<std::size_t>(node.substream) != stream_index_) {
+                target->deferred_content =
+                    Writer(document_, static_cast<std::size_t>(node.substream)).Run();
+                break;
+            }
             target->properties["x:CustomRuntimeData"] =
                 Value::Named(Value::Kind::Object,
                              "version:" + std::to_string(node.custom_data_version) +
@@ -338,6 +352,7 @@ std::size_t Count(const ObjectPtr& object, std::set<const Object*>& visited) {
     for (const auto& [_, value] : object->properties) add(value);
     for (const auto& value : object->items) add(value);
     for (const auto& [_, value] : object->dictionary) add(value);
+    count += Count(object->deferred_content, visited);
     return count;
 }
 

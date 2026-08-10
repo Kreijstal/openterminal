@@ -41,12 +41,29 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# WinRT library resource scopes do not always match the source directory name.
+# These are the scopes each pinned Terminal component declares through
+# UTILS_DEFINE_LIBRARY_RESOURCE_SCOPE in its init.cpp. CascadiaPackage and the
+# TerminalApp library both contribute to the package's TerminalApp map.
+PROJECT_RESOURCE_SCOPES = {
+    "CascadiaPackage": "TerminalApp/Resources",
+    "TerminalApp": "TerminalApp/Resources",
+    "TerminalConnection": "Microsoft.Terminal.TerminalConnection/Resources",
+    "TerminalControl": "Microsoft.Terminal.Control/Resources",
+    "TerminalSettingsEditor": "Microsoft.Terminal.Settings.Editor/Resources",
+    "TerminalSettingsModel": "Microsoft.Terminal.Settings.Model/Resources",
+    "UIHelpers": "Microsoft.Terminal.UI/Resources",
+}
 
 # Where Terminal keeps them: one directory per locale under each project's
-# Resources/. Anchored at src/cascadia so that a stray .resw elsewhere in the
-# tree -- a test fixture, a vendored dependency -- cannot silently join the map.
-RESW_GLOB = "src/cascadia/*/Resources/{locale}/Resources.resw"
+# Resources/. Most projects have the default Resources.resw map; TerminalApp
+# also has ContextMenu.resw, which is addressed at runtime as
+# TerminalApp/ContextMenu. Anchored at src/cascadia so that a stray .resw
+# elsewhere in the tree -- a test fixture, a vendored dependency -- cannot
+# silently join the catalog.
+RESW_GLOB = "src/cascadia/*/Resources/{locale}/*.resw"
 
 # The namespace qualifier WinUI puts in front of an attached property's owner.
 # It names the metadata the property comes from and is not part of the spelling
@@ -121,6 +138,16 @@ def read_file(path: Path) -> list[tuple[str, str]]:
     return entries
 
 
+def runtime_scope(project: str, path: Path) -> str:
+    """Return the WinRT ResourceMap subtree represented by one .resw file."""
+    base = PROJECT_RESOURCE_SCOPES.get(project, f"{project}/Resources")
+    map_name = path.stem
+    if map_name == "Resources":
+        return base
+    prefix, separator, _ = base.rpartition("/")
+    return f"{prefix}/{map_name}" if separator else f"{project}/{map_name}"
+
+
 def distil(repo: Path, locale: str) -> dict[str, Any]:
     files = sorted(repo.glob(RESW_GLOB.format(locale=locale)))
     if not files:
@@ -131,10 +158,24 @@ def distil(repo: Path, locale: str) -> dict[str, Any]:
     unsplittable: list[dict[str, str]] = []
     properties: Counter[str] = Counter()
     origin: dict[tuple[str, str], str] = {}
+    runtime_resources: dict[str, dict[str, str]] = {}
+    runtime_origin: dict[tuple[str, str], str] = {}
 
     for path in files:
         source = path.relative_to(repo).as_posix()
+        project = path.relative_to(repo / "src" / "cascadia").parts[0]
+        scope = runtime_scope(project, path)
+        scoped = runtime_resources.setdefault(scope, {})
         for name, value in read_file(path):
+            previous_runtime = runtime_origin.get((scope, name))
+            if previous_runtime is not None and scoped[name] != value:
+                raise SystemExit(
+                    f"{scope}/{name} is defined differently in "
+                    f"{previous_runtime} and {source}"
+                )
+            runtime_origin[(scope, name)] = source
+            scoped[name] = value
+
             split = split_key(name)
             if split is None:
                 if "." in name:
@@ -181,6 +222,14 @@ def distil(repo: Path, locale: str) -> dict[str, Any]:
         # Which properties the table actually sets, most-used first. This is the
         # list an implementation has to grow to make the table do anything.
         "properties": dict(properties.most_common()),
+        # The exact ResourceMap subtree -> key -> localized value catalog used
+        # by the WinRT runtime. Unlike code_keys above, this retains values and
+        # project scopes; flattening them would make equal key names in two
+        # component PRI maps ambiguous.
+        "runtime_resources": {
+            scope: dict(sorted(values.items()))
+            for scope, values in sorted(runtime_resources.items())
+        },
     }
 
 

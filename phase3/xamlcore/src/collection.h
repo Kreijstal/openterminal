@@ -97,6 +97,11 @@ public:
     Vector(const Iids& iids, const wchar_t* name, ComObject* owner = nullptr)
         : iids_(iids), name_(name), owner_(owner) {}
     ~Vector() override {
+        // Do not call a virtual owner hook here: this member can be destroyed
+        // while its owner is already in derived teardown. The projected child
+        // still knows its live visual parent, and member declaration order
+        // keeps that parent's layout object alive until after this collection.
+        for (auto& entry : entries_) DetachProjected(entry.projected);
         for (auto& entry : entries_) entry.item->Release();
     }
 
@@ -152,50 +157,81 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE Append(ItemAbi* item) override {
+        if (!item) return E_INVALIDARG;
+        if (Contains(item)) return E_INVALIDARG;
+        const HRESULT validation = Validate(nullptr, item);
+        if (FAILED(validation)) return validation;
         Entry entry;
         const HRESULT hr = Adopt(item, &entry);
         if (FAILED(hr)) return hr;
         entries_.push_back(entry);
         Rebuild();
+        Changed(item);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE InsertAt(unsigned index, ItemAbi* item) override {
         if (index > entries_.size()) return E_BOUNDS;
+        if (!item) return E_INVALIDARG;
+        if (Contains(item)) return E_INVALIDARG;
+        const HRESULT validation = Validate(nullptr, item);
+        if (FAILED(validation)) return validation;
         Entry entry;
         const HRESULT hr = Adopt(item, &entry);
         if (FAILED(hr)) return hr;
         entries_.insert(entries_.begin() + index, entry);
         Rebuild();
+        Changed(item);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetAt(unsigned index, ItemAbi* item) override {
         if (index >= entries_.size()) return E_BOUNDS;
+        if (!item) return E_INVALIDARG;
+        if (entries_[index].item == item) return S_OK;
+        if (Contains(item)) return E_INVALIDARG;
+        ItemAbi* removed = entries_[index].item;
+        const HRESULT validation = Validate(removed, item);
+        if (FAILED(validation)) return validation;
         Entry entry;
         const HRESULT hr = Adopt(item, &entry);
         if (FAILED(hr)) return hr;
-        entries_[index].item->Release();
+        Removing(removed);
         entries_[index] = entry;
         Rebuild();
+        Removed(removed);
+        Changed(item);
+        removed->Release();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE RemoveAt(unsigned index) override {
         if (index >= entries_.size()) return E_BOUNDS;
-        entries_[index].item->Release();
+        ItemAbi* removed = entries_[index].item;
+        Removing(removed);
         entries_.erase(entries_.begin() + index);
         Rebuild();
+        Removed(removed);
+        Changed(nullptr);
+        removed->Release();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE RemoveAtEnd() override {
         if (entries_.empty()) return E_BOUNDS;
-        entries_.back().item->Release();
+        ItemAbi* removed = entries_.back().item;
+        Removing(removed);
         entries_.pop_back();
         Rebuild();
+        Removed(removed);
+        Changed(nullptr);
+        removed->Release();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE Clear() override {
-        for (auto& entry : entries_) entry.item->Release();
+        for (auto& entry : entries_) Removing(entry.item);
+        std::vector<Entry> removed = std::move(entries_);
         entries_.clear();
         Rebuild();
+        for (auto& entry : removed) Removed(entry.item);
+        Changed(nullptr);
+        for (auto& entry : removed) entry.item->Release();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetView(ViewAbi**) override { return E_NOTIMPL; }
@@ -216,6 +252,44 @@ private:
         ItemAbi* item;
         typename Traits::Projected projected;
     };
+
+    template <class Projected>
+    static void DetachProjected(Projected) {}
+
+    static void DetachProjected(openxaml::Element* child) {
+        if (child && child->visual_parent())
+            child->visual_parent()->DetachVisualChild(*child);
+    }
+
+    static IUnknown* Identity(ItemAbi* item) {
+        return static_cast<IUnknown*>(item);
+    }
+
+    bool Contains(ItemAbi* item) const {
+        for (const Entry& entry : entries_)
+            if (entry.item == item) return true;
+        return false;
+    }
+
+    HRESULT Validate(ItemAbi* removed, ItemAbi* added) {
+        return owner_ ? owner_->ValidateOwnedCollectionChange(
+                            removed ? Identity(removed) : nullptr,
+                            added ? Identity(added) : nullptr)
+                      : S_OK;
+    }
+
+    void Removing(ItemAbi* item) {
+        if (owner_) owner_->OnOwnedCollectionRemoving(Identity(item));
+    }
+
+    void Removed(ItemAbi* item) {
+        if (owner_) owner_->OnOwnedCollectionRemoved(Identity(item));
+    }
+
+    void Changed(ItemAbi* item) {
+        if (owner_)
+            owner_->OnOwnedCollectionChanged(item ? Identity(item) : nullptr);
+    }
 
     // A collection can only hold objects this DLL created: laying out an
     // element means owning its layout state, and a foreign implementation of

@@ -59,6 +59,15 @@ LAYOUT_SOURCES = ["property.cpp", "events.cpp", "element.cpp", "border.cpp", "co
 LAYOUT_SOURCES += ["binding.cpp", "visual_state.cpp", "default_styles.cpp",
                    "advanced_controls.cpp"]
 
+# DesktopWindowXamlSource compiles an arranged layout tree into an immutable
+# CPU frame and presents its cached DIB from WM_PAINT. Keep this in step with
+# render/CMakeLists.txt and build_render.py.
+RENDER_SOURCES = ["display_list.cpp", "scene.cpp", "surface.cpp",
+                  "cpu_raster_backend.cpp", "case_runner.cpp"]
+GDI_RENDER_SOURCES = ["gdi_target.cpp", "dwrite_text_provider.cpp",
+                      "island_frame_cache.cpp"]
+DCOMP_RENDER_SOURCES = ["dcomp_scene_backend.cpp"]
+
 # The classes the DLL claims. Registering a class it does not implement would
 # route a caller to us and then fail at DllGetActivationFactory, which is worse
 # than not being registered at all.
@@ -67,6 +76,7 @@ RUNTIME_CLASSES = [
     "Windows.UI.Colors",
     "Windows.UI.ViewManagement.AccessibilitySettings",
     "Windows.UI.Xaml.VisualStateManager",
+    "Windows.UI.Xaml.Input.FocusManager",
     "Windows.UI.Xaml.DispatcherTimer",
     "Windows.UI.Xaml.Media.Animation.Timeline",
     "Windows.UI.Xaml.Controls.Border",
@@ -97,6 +107,7 @@ RUNTIME_CLASSES = [
     "Microsoft.UI.Xaml.Controls.SplitButton",
     "Microsoft.UI.Xaml.Controls.CommandBarFlyout",
     "Microsoft.UI.Xaml.Controls.ProgressRing",
+    "Microsoft.UI.Xaml.Controls.InfoBar",
     "Microsoft.UI.Xaml.Controls.BitmapIconSource",
     "Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider",
     "Windows.System.DispatcherQueue",
@@ -141,6 +152,7 @@ RUNTIME_CLASSES = [
     # class to make one with.
     "Windows.UI.Xaml.Media.FontFamily",
     "Windows.UI.Xaml.Media.ImageBrush",
+    "Windows.UI.Xaml.Media.ScaleTransform",
     "Windows.UI.Xaml.Media.SolidColorBrush",
 ]
 
@@ -279,8 +291,13 @@ def main() -> None:
          "--output", str(generated / "openxaml_abi_stubs.h")])
 
     layout_src = PHASE3_DIR / "layout" / "src"
+    render_src = PHASE3_DIR / "render" / "src"
+    render_gdi = PHASE3_DIR / "render" / "gdi"
+    render_dcomp = PHASE3_DIR / "render" / "dcomp"
     core_src = PHASE3_DIR / "xamlcore" / "src"
     includes = ["-I" + str(shadow / "winrt"), "-I" + str(layout_src),
+                "-I" + str(render_src), "-I" + str(render_gdi),
+                "-I" + str(render_dcomp),
                 "-I" + str(core_src), "-I" + str(generated)]
     # Static everything. A DLL that pulls in libstdc++-6.dll fails to load
     # under Wine with a bare MOD_NOT_FOUND, which reads as a missing DLL
@@ -288,12 +305,25 @@ def main() -> None:
     common = ["x86_64-w64-mingw32-g++", "-std=c++17", "-O2", "-Wall",
               "-DOPENXAML_STABLE_XBF_SCHEMA",
               "-static", "-static-libgcc", "-static-libstdc++"]
-    libraries = ["-lruntimeobject", "-lole32", "-luuid", "-lgdi32"]
+    libraries = ["-lruntimeobject", "-lole32", "-luuid", "-lgdi32",
+                 "-luser32", "-lmsimg32", "-ldwrite", "-ldcomp",
+                 "-ld3d11", "-ldxgi"]
 
     dll = root / "openxaml.dll"
     run(common + ["-shared", "-o", str(dll), str(core_src / "factory.cpp"),
+                  str(core_src / "core_dispatcher.cpp"),
+                  str(core_src / "island_input_manager.cpp"),
+                  str(core_src / "xaml_focus.cpp"),
+                  str(core_src / "external_surface_binding.cpp"),
+                  str(core_src / "resource_catalog.cpp"),
                   str(core_src / "xbf.cpp"), str(core_src / "xbf_object.cpp")]
         + [str(layout_src / name) for name in LAYOUT_SOURCES]
+        # case_runner owns the shared scene-rasterization adapter and its
+        # case-loading half references the layout markup loader.
+        + [str(layout_src / "markup.cpp")]
+        + [str(render_src / name) for name in RENDER_SOURCES]
+        + [str(render_gdi / name) for name in GDI_RENDER_SOURCES]
+        + [str(render_dcomp / name) for name in DCOMP_RENDER_SOURCES]
         + includes + libraries)
 
     if args.dll_only:
@@ -309,7 +339,113 @@ def main() -> None:
 
     wave34_smoke = root / "wave34_smoke.exe"
     run(common + ["-o", str(wave34_smoke),
-                  str(PHASE3_DIR / "xamlcore" / "client" / "wave34_smoke.cpp")]
+                  str(PHASE3_DIR / "xamlcore" / "client" / "wave34_smoke.cpp"),
+                  # The live-brush check attaches a real render invalidation
+                  # sink to the projected layout element. Keep this focused:
+                  # these are the three translation units that own Element's
+                  # visual-tree/sink and dependency-object implementation.
+                  str(layout_src / "element.cpp"),
+                  str(layout_src / "property.cpp"),
+                  str(layout_src / "events.cpp")]
+        + includes + libraries)
+
+    island_render_smoke = root / "island_render_smoke.exe"
+    run(common + ["-o", str(island_render_smoke),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "island_render_smoke.cpp")]
+        + includes + libraries)
+
+    island_input_smoke = root / "island_input_smoke.exe"
+    run(common + ["-o", str(island_input_smoke),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "island_input_smoke.cpp"),
+                  str(core_src / "island_input_manager.cpp")]
+        + includes + libraries)
+
+    keyboard_input_smoke = root / "keyboard_input_smoke.exe"
+    run(common + ["-o", str(keyboard_input_smoke),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "keyboard_input_smoke.cpp")]
+        + includes + libraries)
+
+    pointer_input_smoke = root / "pointer_input_smoke.exe"
+    run(common + ["-o", str(pointer_input_smoke),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "pointer_input_smoke.cpp")]
+        + includes + libraries)
+
+    tap_input_smoke = root / "tap_input_smoke.exe"
+    run(common + ["-o", str(tap_input_smoke),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "tap_input_smoke.cpp")]
+        + includes + libraries)
+
+    pointer_routing_test = root / "pointer_routing_test.exe"
+    run(common + ["-o", str(pointer_routing_test),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "pointer_routing_test.cpp"),
+                  str(core_src / "island_input_manager.cpp"),
+                  str(core_src / "xaml_focus.cpp")]
+        + [str(layout_src / name) for name in
+           ["property.cpp", "events.cpp", "element.cpp", "canvas.cpp",
+            "binding.cpp", "visual_state.cpp"]]
+        + includes + libraries)
+
+    tap_routing_test = root / "tap_routing_test.exe"
+    run(common + ["-o", str(tap_routing_test),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "tap_routing_test.cpp"),
+                  str(core_src / "island_input_manager.cpp"),
+                  str(core_src / "xaml_focus.cpp")]
+        + [str(layout_src / name) for name in
+           ["property.cpp", "events.cpp", "element.cpp", "canvas.cpp",
+            "binding.cpp", "visual_state.cpp"]]
+        + includes + libraries)
+
+    core_dispatcher_test = root / "core_dispatcher_test.exe"
+    run(common + ["-o", str(core_dispatcher_test),
+                  str(PHASE3_DIR / "xamlcore" / "tests" /
+                      "core_dispatcher_test.cpp"),
+                  str(core_src / "core_dispatcher.cpp")]
+        + includes + libraries)
+
+    resource_catalog_test = root / "resource_catalog_test.exe"
+    run(common + ["-o", str(resource_catalog_test),
+                  str(PHASE3_DIR / "xamlcore" / "tests" /
+                      "resource_catalog_test.cpp"),
+                  str(core_src / "resource_catalog.cpp"),
+                  str(layout_src / "json.cpp")]
+        + includes + libraries)
+
+    mux_bitmap_icon_test = root / "mux_bitmap_icon_source_factory_test.exe"
+    run(common + ["-o", str(mux_bitmap_icon_test),
+                  str(PHASE3_DIR / "xamlcore" / "tests" /
+                      "mux_bitmap_icon_source_factory_test.cpp")]
+        + includes + libraries)
+
+    tab_view_selection_smoke = root / "tab_view_selection_smoke.exe"
+    run(common + ["-o", str(tab_view_selection_smoke),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "tab_view_selection_smoke.cpp")]
+        + includes + libraries)
+
+    external_surface_test = root / "external_surface_binding_test.exe"
+    run(common + ["-o", str(external_surface_test),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "external_surface_binding_test.cpp"),
+                  str(core_src / "external_surface_binding.cpp")]
+        + includes + libraries)
+
+    focus_smoke = root / "focus_smoke.exe"
+    run(common + ["-o", str(focus_smoke),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "focus_smoke.cpp")]
+        + includes + libraries)
+
+    scrollbar_range_smoke = root / "scrollbar_range_smoke.exe"
+    run(common + ["-o", str(scrollbar_range_smoke),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "scrollbar_range_smoke.cpp")]
         + includes + libraries)
 
     environment = os.environ.copy()
@@ -329,6 +465,50 @@ def main() -> None:
     registry_file.write_text(registration(dll), encoding="utf-8")
     run(["wine", "regedit", str(registry_file)], env=environment)
     run(["wine", str(wave34_smoke)], env=environment)
+    input_command = ["wine", str(island_input_smoke)]
+    keyboard_command = ["wine", str(keyboard_input_smoke)]
+    pointer_command = ["wine", str(pointer_input_smoke)]
+    pointer_routing_command = ["wine", str(pointer_routing_test)]
+    tap_command = ["wine", str(tap_input_smoke)]
+    tap_routing_command = ["wine", str(tap_routing_test)]
+    dispatcher_command = ["wine", str(core_dispatcher_test)]
+    resource_catalog_command = ["wine", str(resource_catalog_test)]
+    mux_bitmap_icon_command = ["wine", str(mux_bitmap_icon_test)]
+    tab_view_selection_command = ["wine", str(tab_view_selection_smoke)]
+    external_surface_command = ["wine", str(external_surface_test)]
+    focus_command = ["wine", str(focus_smoke)]
+    scrollbar_range_command = ["wine", str(scrollbar_range_smoke)]
+    island_command = ["wine", str(island_render_smoke)]
+    if not environment.get("DISPLAY"):
+        require_tool("xvfb-run")
+        input_command = ["xvfb-run", "-a"] + input_command
+        keyboard_command = ["xvfb-run", "-a"] + keyboard_command
+        pointer_command = ["xvfb-run", "-a"] + pointer_command
+        pointer_routing_command = ["xvfb-run", "-a"] + pointer_routing_command
+        tap_command = ["xvfb-run", "-a"] + tap_command
+        tap_routing_command = ["xvfb-run", "-a"] + tap_routing_command
+        dispatcher_command = ["xvfb-run", "-a"] + dispatcher_command
+        resource_catalog_command = ["xvfb-run", "-a"] + resource_catalog_command
+        mux_bitmap_icon_command = ["xvfb-run", "-a"] + mux_bitmap_icon_command
+        tab_view_selection_command = ["xvfb-run", "-a"] + tab_view_selection_command
+        focus_command = ["xvfb-run", "-a"] + focus_command
+        island_command = ["xvfb-run", "-a"] + island_command
+    run(input_command, env=environment)
+    run(keyboard_command, env=environment)
+    run(pointer_command, env=environment)
+    run(pointer_routing_command, env=environment)
+    run(tap_command, env=environment)
+    run(tap_routing_command, env=environment)
+    run(dispatcher_command, env=environment)
+    run(resource_catalog_command, env=environment)
+    # This probe asks RoGetActivationFactory for the MUX factory and therefore
+    # must run only after openxaml.dll has been registered in this prefix.
+    run(mux_bitmap_icon_command, env=environment)
+    run(tab_view_selection_command, env=environment)
+    run(external_surface_command, env=environment)
+    run(focus_command, env=environment)
+    run(scrollbar_range_command, env=environment)
+    run(island_command, env=environment)
 
     if args.skip_run:
         print(f"built and registered {dll}")
