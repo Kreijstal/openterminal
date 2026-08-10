@@ -20,10 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out OpenTerminal research
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Check out Microsoft Terminal
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: microsoft/terminal
           ref: ${{ inputs.terminal_ref || 'main' }}
