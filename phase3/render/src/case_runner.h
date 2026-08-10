@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "display_list.h"
+#include "raster_backend.h"
 #include "surface.h"
 
 namespace openxaml {
@@ -45,20 +46,34 @@ struct CaseResult {
     // diffed byte-for-byte against the measurement path's own output.
     std::string tree_json;
     std::vector<std::string> text_failures;
+    // Backend failures are structured and never inferred from absent pixels.
+    // Refusals above describe scene construction; these describe replay.
+    std::vector<RenderIssue> render_issues;
     bool has_surface = false;
 };
 
 // Lays out one case's markup and builds its display list. Does not paint.
 CaseResult LayOutCase(const std::string& case_json);
 
+// Replays the retained scene through the platform-neutral raster boundary.
+// This is shared by offscreen cases and platform presenters so no host can
+// accidentally keep painting the deprecated flat compatibility view.
+Surface RasterizeDisplayList(const DisplayList& list, TextBackend* backend, Color clear,
+                             Color text_ink, std::vector<std::string>& text_failures,
+                             std::vector<RenderIssue>& render_issues);
+
 // Paints a laid-out case. `backend` may be null, in which case the text runs
-// are recorded in the dump's sidecar and no ink is drawn.
-Surface PaintCase(CaseResult& result, TextBackend* backend);
+// are recorded in the dump's sidecar and no ink is drawn. The ordinary
+// round-trip uses its reserved backdrop; the native acceptance harness passes
+// transparent so its BGRA surface has the same initial state as the oracle.
+Surface PaintCase(CaseResult& result, TextBackend* backend,
+                  Color clear = BackdropColor());
 
 // The sidecar a checker reads: the verified geometry, the rectangles that were
 // painted, the text runs, and every named no-draw.
 std::string SidecarJson(const CaseResult& result, const Surface& surface,
-                        const std::string& backend_name);
+                        const std::string& backend_name,
+                        Color clear = BackdropColor());
 
 }  // namespace render
 }  // namespace openxaml

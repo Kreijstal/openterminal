@@ -18,7 +18,9 @@ endif()
 # test path. Only the glyph imagery is the platform's -- see gdi/.
 add_library(openxaml_render STATIC
     src/display_list.cpp
+    src/scene.cpp
     src/surface.cpp
+    src/cpu_raster_backend.cpp
     src/case_runner.cpp
 )
 target_include_directories(openxaml_render PUBLIC src)
@@ -29,6 +31,12 @@ add_executable(render_cases
     ../layout/src/markup.cpp
 )
 target_link_libraries(render_cases PRIVATE openxaml_render)
+
+add_executable(render_oracle_cases
+    src/render_oracle_cases.cpp
+    ../layout/src/markup.cpp
+)
+target_link_libraries(render_oracle_cases PRIVATE openxaml_render)
 
 enable_testing()
 
@@ -42,12 +50,63 @@ add_executable(render_tests
 target_link_libraries(render_tests PRIVATE openxaml_render)
 add_test(NAME render COMMAND render_tests)
 
+add_executable(scene_tests tests/scene_test.cpp)
+target_link_libraries(scene_tests PRIVATE openxaml_render)
+add_test(NAME scene COMMAND scene_tests)
+
+add_executable(cpu_raster_backend_tests tests/cpu_raster_backend_test.cpp)
+target_link_libraries(cpu_raster_backend_tests PRIVATE openxaml_render)
+add_test(NAME cpu_raster_backend COMMAND cpu_raster_backend_tests)
+
+# A runtime text provider may refuse one leaf without erasing independently
+# renderable ancestors or inventing substitute glyphs. This boundary is plain
+# C++ and belongs on the platform-neutral CTest path.
+add_executable(runtime_text_refusal_tests tests/runtime_text_refusal_test.cpp)
+target_link_libraries(runtime_text_refusal_tests PRIVATE openxaml_render)
+add_test(NAME runtime_text_refusal COMMAND runtime_text_refusal_tests)
+
+# DirectComposition is a Windows-only presentation backend. Keep it in a
+# separate target so the deterministic render core and its Linux acceptance
+# path acquire neither Windows headers nor compositor libraries.
+if(WIN32)
+    add_library(openxaml_render_dcomp STATIC
+        dcomp/dcomp_scene_backend.cpp
+    )
+    target_include_directories(openxaml_render_dcomp PUBLIC dcomp)
+    target_link_libraries(openxaml_render_dcomp
+        PUBLIC openxaml_render
+        PRIVATE dcomp d3d11 dxgi ole32
+    )
+
+    add_executable(dcomp_scene_backend_tests
+        dcomp/dcomp_scene_backend_test.cpp
+    )
+    target_link_libraries(dcomp_scene_backend_tests PRIVATE openxaml_render_dcomp)
+    add_test(NAME dcomp_scene_backend COMMAND dcomp_scene_backend_tests)
+endif()
+
 if(MSVC)
     target_compile_options(openxaml_render PRIVATE /W4)
     target_compile_options(render_cases PRIVATE /W4)
+    target_compile_options(render_oracle_cases PRIVATE /W4)
     target_compile_options(render_tests PRIVATE /W4)
+    target_compile_options(scene_tests PRIVATE /W4)
+    target_compile_options(cpu_raster_backend_tests PRIVATE /W4)
+    target_compile_options(runtime_text_refusal_tests PRIVATE /W4)
+    if(TARGET openxaml_render_dcomp)
+        target_compile_options(openxaml_render_dcomp PRIVATE /W4)
+        target_compile_options(dcomp_scene_backend_tests PRIVATE /W4)
+    endif()
 else()
     target_compile_options(openxaml_render PRIVATE -Wall -Wextra)
     target_compile_options(render_cases PRIVATE -Wall -Wextra)
+    target_compile_options(render_oracle_cases PRIVATE -Wall -Wextra)
     target_compile_options(render_tests PRIVATE -Wall -Wextra)
+    target_compile_options(scene_tests PRIVATE -Wall -Wextra)
+    target_compile_options(cpu_raster_backend_tests PRIVATE -Wall -Wextra)
+    target_compile_options(runtime_text_refusal_tests PRIVATE -Wall -Wextra)
+    if(TARGET openxaml_render_dcomp)
+        target_compile_options(openxaml_render_dcomp PRIVATE -Wall -Wextra)
+        target_compile_options(dcomp_scene_backend_tests PRIVATE -Wall -Wextra)
+    endif()
 endif()

@@ -93,6 +93,33 @@ FontMetrics ParseFontMetrics(const std::string& json, const std::string& where) 
     }
     if (metrics.advances.empty()) throw JsonError(where + ": the metrics have no advances");
 
+    if (document.Has("system_fallbacks")) {
+        const JsonValue& fallbacks = document.At("system_fallbacks");
+        if (fallbacks.kind != JsonValue::Kind::Object)
+            throw JsonError(where + ": \"system_fallbacks\" is not an object");
+        for (const auto& entry : fallbacks.object) {
+            if (entry.second.kind != JsonValue::Kind::Object)
+                throw JsonError(where + ": the system fallback for " + entry.first +
+                                " is not an object");
+            const JsonValue& family = entry.second.At("family");
+            if (family.kind != JsonValue::Kind::String || family.string.empty())
+                throw JsonError(where + ": the system fallback for " + entry.first +
+                                " has no family");
+            FallbackGlyphMetrics fallback;
+            fallback.family = family.string;
+            fallback.scale = Number(entry.second, "scale", where);
+            fallback.units_per_em = Number(entry.second, "units_per_em", where);
+            fallback.advance = Number(entry.second, "advance", where);
+            if (fallback.scale <= 0.0 || fallback.units_per_em <= 0.0 ||
+                fallback.advance < 0.0) {
+                throw JsonError(where + ": the system fallback for " + entry.first +
+                                " has invalid metrics");
+            }
+            metrics.system_fallbacks[Codepoint(entry.first, where)] =
+                std::move(fallback);
+        }
+    }
+
     // Two spellings, and which one a file uses says where its numbers came
     // from. A harvest writes "font_kerning", the font's own two tables kept
     // apart; a derived file writes "kerning", the pairs the recordings

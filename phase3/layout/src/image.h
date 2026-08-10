@@ -16,10 +16,9 @@
 // that asked for nothing that is zero, in both passes, which is why an empty
 // Image occupies no space however large the slot around it.
 //
-// Source is deliberately not implemented. Decoding an image to find its
-// natural size is a dependency this layer does not have, and every case in the
-// corpus that reaches an Image has none; markup carrying a Source is rejected
-// by name rather than measured as if it were empty.
+// The ABI retains Source, Stretch and NineGrid below. Decoding remains a
+// renderer capability boundary: a non-null source is carried as a declared
+// fact and becomes a named no-draw, never silently measured as an empty image.
 
 #ifndef OPENXAML_IMAGE_H
 #define OPENXAML_IMAGE_H
@@ -33,11 +32,37 @@
 
 namespace openxaml {
 
+enum class ImageStretch { None, Fill, Uniform, UniformToFill };
+
 class Image : public Element {
 public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.Image"; }
     static const std::vector<std::string>& Owners();
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
+
+    bool has_source() const { return has_source_; }
+    const std::string& source_type() const { return source_type_; }
+    void set_source(bool present, std::string type) {
+        if (has_source_ == present && source_type_ == type) return;
+        has_source_ = present;
+        source_type_ = present ? std::move(type) : std::string{};
+        // Source can change the natural size once decoded.
+        InvalidateRender(true);
+    }
+
+    ImageStretch stretch() const { return stretch_; }
+    void set_stretch(ImageStretch value) {
+        if (stretch_ == value) return;
+        stretch_ = value;
+        InvalidateRender(true);
+    }
+
+    const Thickness& nine_grid() const { return nine_grid_; }
+    void set_nine_grid(Thickness value) {
+        if (nine_grid_ == value) return;
+        nine_grid_ = value;
+        InvalidateRender(false);
+    }
 
 protected:
     // Both passes answer with the size the markup asked for -- see
@@ -45,6 +70,12 @@ protected:
     // takes no part in layout and has no storage to read.
     Size MeasureOverride(Size) override { return specified_size(); }
     Size ArrangeOverride(Size) override { return specified_size(); }
+
+private:
+    bool has_source_ = false;
+    std::string source_type_;
+    ImageStretch stretch_ = ImageStretch::Uniform;
+    Thickness nine_grid_{};
 };
 
 }  // namespace openxaml

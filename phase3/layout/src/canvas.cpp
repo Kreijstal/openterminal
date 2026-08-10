@@ -11,9 +11,13 @@ namespace {
 // constraint whatever its position is, so moving one changes only where it is
 // arranged.
 const DependencyProperty* const kLeft =
-    RegisterAttachedProperty("Canvas", "Left", {0.0, false, false});
+    RegisterAttachedProperty("Canvas", "Left", {0.0, false, false, true});
 const DependencyProperty* const kTop =
-    RegisterAttachedProperty("Canvas", "Top", {0.0, false, false});
+    RegisterAttachedProperty("Canvas", "Top", {0.0, false, false, true});
+// ZIndex changes only sibling composition order. It neither measures nor
+// arranges anything, so the ordinary render-only invalidation path is exact.
+const DependencyProperty* const kZIndex =
+    RegisterAttachedProperty("Canvas", "ZIndex", {0, false, false});
 
 // Canvas has a Background, as every Panel does, and no Padding: there is no
 // content rect for one to deflate.
@@ -23,6 +27,7 @@ const std::vector<std::string> kOwners = {"Canvas", "Panel", "FrameworkElement",
 
 const DependencyProperty& Canvas::LeftProperty() { return *kLeft; }
 const DependencyProperty& Canvas::TopProperty() { return *kTop; }
+const DependencyProperty& Canvas::ZIndexProperty() { return *kZIndex; }
 
 const std::vector<std::string>& Canvas::Owners() { return kOwners; }
 
@@ -30,6 +35,8 @@ double Canvas::GetLeft(const Element& element) { return element.GetDouble(*kLeft
 void Canvas::SetLeft(Element& element, double value) { element.SetValue(*kLeft, value); }
 double Canvas::GetTop(const Element& element) { return element.GetDouble(*kTop); }
 void Canvas::SetTop(Element& element, double value) { element.SetValue(*kTop, value); }
+int Canvas::GetZIndex(const Element& element) { return element.GetInt(*kZIndex); }
+void Canvas::SetZIndex(Element& element, int value) { element.SetValue(*kZIndex, value); }
 
 Size Canvas::MeasureOverride(Size) {
     // The available size is not passed on. A Canvas positions absolutely, so

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Recover what was painted back out of the pixels, and hold it to the layout.
 
-The render pass in phase3/render has no oracle. Rendered-output probes are wave
-6 in phase3/ROADMAP.md and nothing has recorded a pixel of the real runtime, so
-there is no measurement to compare a dump against. What there *is* is a
+This remains the renderer's independent self-consistency gate. The focused
+native oracle is compared separately by check_render_oracle.py; it does not
+replace this check, because reproducing one native image would not prove the
+display list honestly follows layout. What there *is* here is a
 measurement of every rectangle's geometry -- the corpus verifies the arranged
 tree against 1176 of 1177 recorded answers -- and a render pass that claims to
 paint exactly those rectangles and nothing else.
@@ -29,9 +30,9 @@ So this checks the claim rather than the picture, three ways:
      that a later rectangle painted over. A painted shape that was not a clean
      rectangle reassembles as several and fails.
 
-Text is checked differently, and less. What a glyph looks like has no oracle at
-all and is delegated to the platform's own text output with the real font
-selected; what belongs to this project is where the run starts and how wide the
+Text is checked differently, and less in this self-consistency pass. Native
+glyph pixels and DirectWrite runs are checked by check_render_oracle.py; here,
+what belongs to this project is where the run starts and how wide the
 measurement path says it is. So the ink check is containment: every pixel that
 is not what the solid pass would have left must fall inside a text run's box,
 and a non-empty run must have ink in it. Containment on the right edge is the
@@ -444,7 +445,7 @@ def main() -> int:
         if "load_error" in sidecar:
             not_laid_out += 1
             continue
-        if sidecar["refusals"] or sidecar["text_failures"]:
+        if sidecar["refusals"] or sidecar["text_failures"] or sidecar.get("render_issues", []):
             refused += 1
             for refusal in sidecar["refusals"]:
                 refusal_features[refusal["feature"]] = (
@@ -452,6 +453,9 @@ def main() -> int:
                 )
             for failure in sidecar["text_failures"]:
                 refusal_features[failure] = refusal_features.get(failure, 0) + 1
+            for issue in sidecar.get("render_issues", []):
+                feature = f"backend: {issue.get('code', 'unknown')}"
+                refusal_features[feature] = refusal_features.get(feature, 0) + 1
             continue
         dump = args.dumps / f"{case_id}.ppm"
         tree_path = trees / f"{case_id}.json"

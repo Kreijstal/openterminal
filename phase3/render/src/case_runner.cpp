@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include "element.h"
+#include "cpu_raster_backend.h"
 #include "json.h"
 #include "markup.h"
 #include "resources.h"
@@ -23,6 +24,16 @@ std::string Number(double value) {
     if (std::isnan(value)) return "\"NaN\"";
     std::ostringstream out;
     out << std::fixed << std::setprecision(4) << value;
+    return out.str();
+}
+
+std::string TextNumber(double value) {
+    if (std::isinf(value)) return "\"Infinity\"";
+    if (std::isnan(value)) return "\"NaN\"";
+    std::ostringstream out;
+    // The public DirectWrite boundary records six decimal places. Text fields
+    // use the same representation so acceptance is equality, not a tolerance.
+    out << std::fixed << std::setprecision(6) << value;
     return out.str();
 }
 
@@ -82,6 +93,58 @@ std::string ColorJson(Color c) {
     return out;
 }
 
+const char* RenderIssueName(RenderIssueCode code) {
+    switch (code) {
+        case RenderIssueCode::InvalidScene: return "invalid-scene";
+        case RenderIssueCode::UnsupportedTransform: return "unsupported-transform";
+        case RenderIssueCode::UnsupportedClip: return "unsupported-clip";
+        case RenderIssueCode::UnsupportedOpacity: return "unsupported-opacity";
+        case RenderIssueCode::UnsupportedBrushAlpha: return "unsupported-brush-alpha";
+        case RenderIssueCode::UnsupportedImageBrush: return "unsupported-image-brush";
+        case RenderIssueCode::UnsupportedExternalSurface:
+            return "unsupported-external-surface";
+        case RenderIssueCode::MissingTextRasterizer: return "missing-text-rasterizer";
+        case RenderIssueCode::TextRasterizerFailure: return "text-rasterizer-failure";
+    }
+    return "unknown";
+}
+
+class TextBackendAdapter final : public TextRasterizer {
+public:
+    TextBackendAdapter(TextBackend& backend, std::vector<std::string>& failures)
+        : backend_(backend), failures_(failures) {}
+
+    bool DrawText(const TextRasterRequest& request, Surface& surface,
+                  std::string& message) override {
+        TextOp run;
+        run.bounds = request.bounds;
+        run.has_clip = request.has_clip;
+        run.clip = request.clip;
+        run.text = request.text.text;
+        run.font_family = request.text.font_family;
+        run.font_size = request.text.font_size;
+        run.baseline = request.text.baseline;
+        run.advances = request.text.advances;
+        run.wrap = request.text.wrap;
+        run.bold = request.text.bold;
+        run.language = request.text.language;
+
+        const std::size_t failure_count = failures_.size();
+        // A retained LocalText owns its authored Foreground. The legacy probe
+        // marker is already made explicit when Build creates that command for
+        // an undeclared Foreground; it must not replace an authored color here.
+        backend_.DrawRuns(surface, std::vector<TextOp>{std::move(run)},
+                          request.text.color, failures_);
+        if (failures_.size() == failure_count) return true;
+        message = failures_.back();
+        return false;
+    }
+
+private:
+    TextBackend& backend_;
+    std::vector<std::string>& failures_;
+};
+
 }  // namespace
 
 CaseResult LayOutCase(const std::string& case_json) {
@@ -125,25 +188,44 @@ CaseResult LayOutCase(const std::string& case_json) {
     return result;
 }
 
-Surface PaintCase(CaseResult& result, TextBackend* backend) {
-    const PixelRect box = SnapRect(Rect{0.0, 0.0, result.list.surface.width,
-                                        result.list.surface.height});
-    Surface surface(box.right, box.bottom, BackdropColor());
-    for (const RectOp& op : result.list.rects) surface.FillRect(op.bounds, op.color);
-    if (backend && !result.list.texts.empty())
-        backend->DrawRuns(surface, result.list.texts, ProbeInkColor(), result.text_failures);
-    return surface;
+Surface RasterizeDisplayList(const DisplayList& list, TextBackend* backend, Color clear,
+                             Color /*legacy_text_ink*/, std::vector<std::string>& text_failures,
+                             std::vector<RenderIssue>& render_issues) {
+    text_failures.clear();
+    render_issues.clear();
+    if (!list.scene) {
+        const PixelRect box =
+            SnapRect(Rect{0.0, 0.0, list.surface.width, list.surface.height});
+        render_issues.push_back(
+            RenderIssue{RenderIssueCode::InvalidScene, NodeId{}, RenderIssue::kNoCommand,
+                        "the display list has no retained scene"});
+        return Surface(box.right, box.bottom, clear);
+    }
+
+    CpuRasterBackend rasterizer;
+    std::unique_ptr<TextBackendAdapter> text_adapter;
+    if (backend) {
+        text_adapter = std::make_unique<TextBackendAdapter>(*backend, text_failures);
+    }
+    RasterResult rendered = rasterizer.Render(*list.scene, clear, text_adapter.get());
+    render_issues = std::move(rendered.issues);
+    return std::move(rendered.surface);
+}
+
+Surface PaintCase(CaseResult& result, TextBackend* backend, Color clear) {
+    return RasterizeDisplayList(result.list, backend, clear, ProbeInkColor(),
+                                result.text_failures, result.render_issues);
 }
 
 std::string SidecarJson(const CaseResult& result, const Surface& surface,
-                        const std::string& backend_name) {
+                        const std::string& backend_name, Color clear) {
     std::ostringstream out;
     out << "{\n";
     out << " \"schema_version\": 1,\n";
     out << " \"case_id\": \"" << JsonEscape(result.id) << "\",\n";
     out << " \"backend\": \"" << JsonEscape(backend_name) << "\",\n";
     out << " \"surface\": [" << surface.width() << ", " << surface.height() << "],\n";
-    out << " \"backdrop\": " << ColorJson(BackdropColor()) << ",\n";
+    out << " \"backdrop\": " << ColorJson(clear) << ",\n";
     out << " \"probe_ink\": " << ColorJson(ProbeInkColor()) << ",\n";
 
     out << " \"geometry\": [\n";
@@ -155,6 +237,22 @@ std::string SidecarJson(const CaseResult& result, const Surface& surface,
             << Number(node.actual.height) << "], \"abs\": [" << Number(node.abs_x) << ", "
             << Number(node.abs_y) << "], \"layout_storage\": "
             << (node.has_layout_storage ? "true" : "false")
+            << ", \"opacity\": " << Number(node.opacity)
+            << ", \"transform_to_root\": {\"origin\": [" << Number(node.abs_x) << ", "
+            << Number(node.abs_y) << "], \"unit_x\": ["
+            << Number(node.transform_to_root.TransformPoint({1.0, 0.0}).x) << ", "
+            << Number(node.transform_to_root.TransformPoint({1.0, 0.0}).y)
+            << "], \"unit_y\": ["
+            << Number(node.transform_to_root.TransformPoint({0.0, 1.0}).x) << ", "
+            << Number(node.transform_to_root.TransformPoint({0.0, 1.0}).y)
+            << "]}, \"clip\": ";
+        if (node.clip.kind == Clip::Kind::Rect) {
+            out << "{\"type\": \"Windows.UI.Xaml.Media.RectangleGeometry\", \"bounds\": "
+                << RectJson(node.clip.bounds) << "}";
+        } else {
+            out << "null";
+        }
+        out << ", \"z_index\": " << node.z_index
             << ", \"visible\": " << (node.visible ? "true" : "false") << "}"
             << (i + 1 < result.list.geometry.size() ? ",\n" : "\n");
     }
@@ -180,10 +278,14 @@ std::string SidecarJson(const CaseResult& result, const Surface& surface,
             // measured box overlaps. See surface.h.
             << RectJson(op.bounds) << ", \"pixels\": " << PixelRectJson(TouchedRect(op.bounds))
             << ", \"font_family\": \"" << JsonEscape(op.font_family)
-            << "\", \"font_size\": " << Number(op.font_size)
-            << ", \"baseline\": " << Number(op.baseline) << ", \"text\": \""
-            << JsonEscape(op.text) << "\"}"
-            << (i + 1 < result.list.texts.size() ? ",\n" : "\n");
+            << "\", \"font_size\": " << TextNumber(op.font_size)
+            << ", \"baseline\": " << TextNumber(op.baseline) << ", \"text\": \""
+            << JsonEscape(op.text) << "\", \"advances\": [";
+        for (size_t j = 0; j < op.advances.size(); ++j) {
+            if (j) out << ", ";
+            out << TextNumber(op.advances[j]);
+        }
+        out << "]}" << (i + 1 < result.list.texts.size() ? ",\n" : "\n");
     }
     out << " ],\n";
 
@@ -200,6 +302,20 @@ std::string SidecarJson(const CaseResult& result, const Surface& surface,
     for (size_t i = 0; i < result.text_failures.size(); ++i) {
         out << "  \"" << JsonEscape(result.text_failures[i]) << "\""
             << (i + 1 < result.text_failures.size() ? ",\n" : "\n");
+    }
+    out << " ],\n";
+
+    out << " \"render_issues\": [\n";
+    for (size_t i = 0; i < result.render_issues.size(); ++i) {
+        const RenderIssue& issue = result.render_issues[i];
+        out << "  {\"code\": \"" << RenderIssueName(issue.code) << "\", \"node\": "
+            << issue.node.value << ", \"command\": ";
+        if (issue.command_index == RenderIssue::kNoCommand)
+            out << "null";
+        else
+            out << issue.command_index;
+        out << ", \"message\": \"" << JsonEscape(issue.message) << "\"}"
+            << (i + 1 < result.render_issues.size() ? ",\n" : "\n");
     }
     out << " ]\n}\n";
     return out.str();

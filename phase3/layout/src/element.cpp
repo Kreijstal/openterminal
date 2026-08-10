@@ -1,9 +1,17 @@
 #include "element.h"
 
 #include <algorithm>
+#include <atomic>
+#include <stdexcept>
+#include <utility>
 
 namespace openxaml {
 namespace {
+
+std::uint64_t NextRenderNodeId() {
+    static std::atomic<std::uint64_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
 
 // Registration runs before main, at namespace scope, rather than on first use.
 // Markup resolves an attribute name against the registry, and a property that
@@ -35,10 +43,10 @@ const DependencyProperty* const kMargin =
 // once -- and a flag no measurement can check would be decoration.
 const DependencyProperty* const kHorizontalAlignment = RegisterProperty(
     "FrameworkElement", "HorizontalAlignment",
-    {static_cast<int>(HorizontalAlignment::Stretch), false, false});
+    {static_cast<int>(HorizontalAlignment::Stretch), false, false, true});
 const DependencyProperty* const kVerticalAlignment =
     RegisterProperty("FrameworkElement", "VerticalAlignment",
-                     {static_cast<int>(VerticalAlignment::Stretch), false, false});
+                     {static_cast<int>(VerticalAlignment::Stretch), false, false, true});
 
 // Registered as not inheriting, and that half is a guess. WPF's is an
 // inherited property; WinUI documents the effect as reaching the subtree
@@ -120,6 +128,8 @@ struct MinMax {
 
 }  // namespace
 
+Element::Element() : render_node_id_(NextRenderNodeId()) { events_.Bind(this); }
+
 const DependencyProperty& FontSizeProperty() { return *kFontSize; }
 const DependencyProperty& FontFamilyProperty() { return *kFontFamily; }
 const DependencyProperty& ForegroundProperty() { return *kForeground; }
@@ -139,8 +149,107 @@ const DependencyProperty& Element::VisibilityProperty() { return *kVisibility; }
 const DependencyProperty& Element::RenderTransformOriginProperty() { return *kRenderTransformOrigin; }
 const DependencyProperty& PanelBackgroundProperty() { return *kPanelBackground; }
 
+bool Element::CanAttachVisualChild(const Element& child) const {
+    if (&child == this) return false;
+    if (child.visual_parent_ != nullptr && child.visual_parent_ != this) return false;
+    if (child.visual_parent_ != this) {
+        const std::shared_ptr<RenderInvalidationSink> child_sink =
+            child.render_invalidation_sink_.lock();
+        if (child_sink && child_sink->open()) return false;
+    }
+
+    // Attaching an ancestor below its own descendant closes a cycle. Walking
+    // this chain is enough because every accepted node has at most one parent.
+    for (const Element* ancestor = this; ancestor != nullptr;
+         ancestor = ancestor->visual_parent_) {
+        if (ancestor == &child) return false;
+    }
+    return true;
+}
+
+bool Element::AttachVisualChild(Element& child) {
+    if (!CanAttachVisualChild(child)) return false;
+    if (child.visual_parent_ == this) return true;
+
+    child.visual_parent_ = this;
+    child.SetInheritanceParent(this);
+    child.PropagateRenderInvalidationSink(render_invalidation_sink_);
+    return true;
+}
+
+void Element::DetachVisualChild(Element& child) {
+    if (child.visual_parent_ != this) return;
+
+    // Clear the old island before inherited values are re-evaluated. Those
+    // changes call OnPropertyChanged and must not invalidate the old host.
+    child.PropagateRenderInvalidationSink({});
+    child.visual_parent_ = nullptr;
+    child.SetInheritanceParent(nullptr);
+}
+
+void Element::PropagateRenderInvalidationSink(
+    std::weak_ptr<RenderInvalidationSink> sink) {
+    render_invalidation_sink_ = sink;
+    for (Element* child : Children()) {
+        if (child) child->PropagateRenderInvalidationSink(sink);
+    }
+}
+
+bool Element::AttachRenderInvalidationSink(
+    const std::shared_ptr<RenderInvalidationSink>& sink) {
+    if (!sink || !sink->open()) return false;
+    // Only visual roots are host-attachable. Descendants receive the sink by
+    // propagation from their one visual parent; accepting a direct claim here
+    // would let the same visual appear both in that tree and as an island root.
+    if (visual_parent_ != nullptr) return false;
+    const std::shared_ptr<RenderInvalidationSink> current =
+        render_invalidation_sink_.lock();
+    if (current && current != sink && current->open()) return false;
+    PropagateRenderInvalidationSink(sink);
+    return true;
+}
+
+void Element::DetachRenderInvalidationSink(
+    const std::shared_ptr<RenderInvalidationSink>& sink) {
+    const std::shared_ptr<RenderInvalidationSink> current =
+        render_invalidation_sink_.lock();
+    if (current && current != sink) return;
+    PropagateRenderInvalidationSink({});
+}
+
+void Element::InvalidateRender(bool layout) {
+    if (std::shared_ptr<RenderInvalidationSink> sink =
+            render_invalidation_sink_.lock()) {
+        sink->Notify(layout);
+    }
+}
+
+void Element::set_visual_clip(VisualClip value) {
+    if (visual_clip_ == value) return;
+    visual_clip_ = std::move(value);
+    InvalidateRender(false);
+}
+
+void Element::set_visual_transform(VisualTransform value) {
+    if (visual_transform_ == value) return;
+    visual_transform_ = std::move(value);
+    InvalidateRender(false);
+}
+
+void Element::set_render_transform_origin(Point value) {
+    if (render_transform_origin_.x == value.x && render_transform_origin_.y == value.y) return;
+    render_transform_origin_ = value;
+    InvalidateRender(false);
+}
+
+void Element::Adopt(Element& child) {
+    if (!AttachVisualChild(child))
+        throw std::logic_error("an element cannot have two visual parents or form a cycle");
+}
+
 void Element::OnPropertyChanged(const DependencyProperty& property) {
     if (property.affects_measure()) needs_measure_ = true;
+    InvalidateRender(property.affects_measure() || property.affects_arrange());
 }
 
 std::vector<DependencyObject*> Element::InheritanceChildren() const {
@@ -276,6 +385,7 @@ void Element::Arrange(Rect final_rect) {
     layout_slot_ = final_rect;
     if (visibility() == Visibility::Collapsed) {
         render_size_ = Size{};
+        render_origin_ = Point{final_rect.x, final_rect.y};
         return;
     }
 
@@ -329,6 +439,27 @@ void Element::Arrange(Rect final_rect) {
     // Unclipped on purpose: the element does not know the layout system may
     // clip it, and should render as though it got everything it returned.
     render_size_ = ArrangeOverride(arrange_size);
+
+    // The slot is layout information; the visual offset is separate retained
+    // state. Align the returned ink inside the margin-reduced client box, as
+    // FrameworkElement::ArrangeCore does after ArrangeOverride. In particular,
+    // an overflowing Stretch degenerates to Left/Top while explicit Center,
+    // Right and Bottom retain their (possibly negative) offsets.
+    Size client_size{std::max(0.0, final_rect.width - margin_width),
+                     std::max(0.0, final_rect.height - margin_height)};
+    if (rounding) client_size = RoundLayoutSize(client_size, dpi_scale_x, dpi_scale_y);
+
+    double render_x = final_rect.x + element_margin.left +
+                      AlignmentOffset(horizontal_alignment(), client_size.width,
+                                      render_size_.width);
+    double render_y = final_rect.y + element_margin.top +
+                      AlignmentOffset(vertical_alignment(), client_size.height,
+                                      render_size_.height);
+    if (rounding) {
+        render_x = RoundLayoutValue(render_x, dpi_scale_x);
+        render_y = RoundLayoutValue(render_y, dpi_scale_y);
+    }
+    render_origin_ = Point{render_x, render_y};
 
     // ArrangeOverride has already arranged the children, so a child that moved
     // is queued before its parent -- and the queue is raised backwards, which

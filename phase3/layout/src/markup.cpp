@@ -4,9 +4,11 @@
 
 #include <cctype>
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <sstream>
 #include <vector>
@@ -91,6 +93,16 @@ Thickness ParseThickness(const std::string& text, const std::string& where) {
         default:
             throw MarkupError("a Thickness takes 1, 2 or 4 numbers, got \"" + text + "\"");
     }
+}
+
+Point ParsePoint(const std::string& text, const std::string& where) {
+    const std::vector<std::string> parts = Split(text, ',');
+    if (parts.size() != 2)
+        throw MarkupError(where + " takes two numbers, got \"" + text + "\"");
+    const Point point{ParseDouble(parts[0], where), ParseDouble(parts[1], where)};
+    if (!std::isfinite(point.x) || !std::isfinite(point.y))
+        throw MarkupError(where + " must be finite");
+    return point;
 }
 
 GridLength ParseGridLength(const std::string& text, const std::string& where) {
@@ -289,6 +301,26 @@ const std::map<std::string, Orientation> kOrientations = {
     {"Vertical", Orientation::Vertical},
 };
 
+const std::map<std::string, ShapeStretch> kShapeStretches = {
+    {"None", ShapeStretch::None},
+    {"Fill", ShapeStretch::Fill},
+    {"Uniform", ShapeStretch::Uniform},
+    {"UniformToFill", ShapeStretch::UniformToFill},
+};
+
+const std::map<std::string, ShapeLineCap> kShapeLineCaps = {
+    {"Flat", ShapeLineCap::Flat},
+    {"Square", ShapeLineCap::Square},
+    {"Round", ShapeLineCap::Round},
+    {"Triangle", ShapeLineCap::Triangle},
+};
+
+const std::map<std::string, ShapeLineJoin> kShapeLineJoins = {
+    {"Miter", ShapeLineJoin::Miter},
+    {"Bevel", ShapeLineJoin::Bevel},
+    {"Round", ShapeLineJoin::Round},
+};
+
 // XAML also has WrapWholeWords, which differs from Wrap only in whether a word
 // too long for the line may be broken. No case in the corpus uses it, so there
 // is nothing to check an implementation of it against, and a wrong one would
@@ -394,7 +426,10 @@ void ApplyProperty(MarkupNode& node, const DependencyProperty& property,
     if (name == "UseLayoutRounding")
         return assign(node.use_layout_rounding = ParseBool(value, name));
     if (name == "Opacity") return assign(node.opacity = ParseDouble(value, name));
-    if (name == "RenderTransformOrigin") return assign(value);
+    if (name == "RenderTransformOrigin") {
+        node.render_transform_origin = ParsePoint(value, name);
+        return assign(value);
+    }
     if (name == "Control.IsTemplateFocusTarget") return assign(ParseBool(value, name));
     if (name == "Grid.Column") return assign(node.grid_column = ParseInt(value, name));
     if (name == "Grid.Row") return assign(node.grid_row = ParseInt(value, name));
@@ -402,6 +437,7 @@ void ApplyProperty(MarkupNode& node, const DependencyProperty& property,
     if (name == "Grid.RowSpan") return assign(node.grid_row_span = ParseInt(value, name));
     if (name == "Canvas.Left") return assign(node.canvas_left = ParseDouble(value, name));
     if (name == "Canvas.Top") return assign(node.canvas_top = ParseDouble(value, name));
+    if (name == "Canvas.ZIndex") return assign(node.canvas_z_index = ParseInt(value, name));
     if (name == "Visibility") {
         node.visibility = ParseEnum(value, kVisibilities, name);
         return assign(static_cast<int>(node.visibility));
@@ -415,18 +451,51 @@ void ApplyProperty(MarkupNode& node, const DependencyProperty& property,
     // have always seen -- while the colour itself travels on the node for the
     // render pass. A typo still fails here rather than loading silently.
     if (name == "Background") {
-        node.background_brush = BrushValue{true, true, ParseColor(value, name)};
+        node.background_brush = BrushValue::SolidColor(ParseColor(value, name));
         return assign(node.background = "SolidColorBrush");
     }
     if (name == "Fill") {
-        node.fill_brush = BrushValue{true, true, ParseColor(value, name)};
+        node.fill_brush = BrushValue::SolidColor(ParseColor(value, name));
         return assign(std::string("SolidColorBrush"));
     }
-    // No BorderBrush here on purpose. No type registers one, so the three
-    // corpus cases that set it fail at load naming the property -- which is
-    // what the oracle answers for them too. The render pass can paint a border
-    // brush (see phase3/render) and no markup can currently give it one; when
-    // the property is registered, this is where its colour joins the node.
+    if (name == "Stroke") {
+        node.stroke_brush = BrushValue::SolidColor(ParseColor(value, name));
+        return assign(std::string("SolidColorBrush"));
+    }
+    if (name == "StrokeMiterLimit")
+        return assign(node.stroke_miter_limit = ParseDouble(value, name));
+    if (name == "StrokeThickness")
+        return assign(node.stroke_thickness = ParseDouble(value, name));
+    if (name == "StrokeStartLineCap") {
+        node.stroke_start_line_cap = ParseEnum(value, kShapeLineCaps, name);
+        return assign(static_cast<int>(node.stroke_start_line_cap));
+    }
+    if (name == "StrokeEndLineCap") {
+        node.stroke_end_line_cap = ParseEnum(value, kShapeLineCaps, name);
+        return assign(static_cast<int>(node.stroke_end_line_cap));
+    }
+    if (name == "StrokeLineJoin") {
+        node.stroke_line_join = ParseEnum(value, kShapeLineJoins, name);
+        return assign(static_cast<int>(node.stroke_line_join));
+    }
+    if (name == "StrokeDashOffset")
+        return assign(node.stroke_dash_offset = ParseDouble(value, name));
+    if (name == "StrokeDashCap") {
+        node.stroke_dash_cap = ParseEnum(value, kShapeLineCaps, name);
+        return assign(static_cast<int>(node.stroke_dash_cap));
+    }
+    if (name == "StrokeDashArray") {
+        node.has_stroke_dash_array = !value.empty();
+        return assign(value);
+    }
+    if (name == "Stretch") {
+        node.shape_stretch = ParseEnum(value, kShapeStretches, name);
+        return assign(static_cast<int>(node.shape_stretch));
+    }
+    if (name == "BorderBrush") {
+        node.border_brush = BrushValue::SolidColor(ParseColor(value, name));
+        return assign(std::string("SolidColorBrush"));
+    }
     if (name == "RadiusX" || name == "RadiusY") return assign(ParseDouble(value, name));
     if (name == "Orientation") {
         node.orientation = ParseEnum(value, kOrientations, name);
@@ -476,10 +545,10 @@ void ApplyProperty(MarkupNode& node, const DependencyProperty& property,
     if (name == "MaxLength") return assign(ParseInt(value, name));
     if (name == "PlaceholderText" || name == "FontWeight" || name == "Placement")
         return assign(value);
-    // A brush, carried as the text that spells it. Nothing here paints, so the
-    // value is stored and never interpreted -- which is honest about what it
-    // is: enough to show the property system carried it, and not a colour.
-    if (name == "Foreground") return assign(node.foreground = value);
+    if (name == "Foreground") {
+        node.foreground_brush = BrushValue::SolidColor(ParseColor(value, name));
+        return assign(node.foreground = "SolidColorBrush");
+    }
     // The content property, so it can arrive as an attribute or as character
     // data between the tags. Both land in node.text, and BuildElement gives
     // the element whatever is there once the parse is done.
@@ -688,13 +757,18 @@ std::shared_ptr<const Style> ResolveStyleReference(const ResourceScope& scope,
 
 // --- property elements --------------------------------------------------------
 
-// Reads the one brush inside a <Something.Background> and the closing tag, and
-// returns the brush's short type name. The brush itself is discarded: a
-// background has no effect on any number the probe records. What matters is
-// that an unimplemented brush type still fails by name here rather than being
-// dropped.
-std::string ParseBrushPropertyElement(Scanner& scanner, const std::string& property_element) {
-    std::string brush;
+struct ParsedBrush {
+    std::string type;
+    BrushValue value;
+};
+
+// Reads the one brush inside a <Something.Background> and the closing tag.
+// Brush identity is retained even when it paints no pixels: an ImageBrush
+// with no ImageSource is a specified, transparent no-op, while a brush whose
+// runtime type was lost is an unsupported rendering boundary.
+ParsedBrush ParseBrushPropertyElement(Scanner& scanner,
+                                      const std::string& property_element) {
+    ParsedBrush brush;
     Tag tag;
     while (scanner.Next(tag)) {
         if (tag.text_before.find_first_not_of(" \t\r\n") != std::string::npos)
@@ -702,20 +776,47 @@ std::string ParseBrushPropertyElement(Scanner& scanner, const std::string& prope
         if (tag.closing) {
             if (tag.name != property_element)
                 throw MarkupError("</" + tag.name + "> closes <" + property_element + ">");
-            if (brush.empty())
+            if (brush.type.empty())
                 throw MarkupError("<" + property_element + "> is empty");
             return brush;
         }
-        if (!brush.empty())
+        if (!brush.type.empty())
             throw MarkupError("<" + property_element + "> takes a single brush");
         FullBrushTypeName(tag.name);
-        brush = tag.name;
+        brush.type = tag.name;
+        if (tag.name == "SolidColorBrush") {
+            // Windows.UI.Xaml.Media.SolidColorBrush defaults to Transparent.
+            // Its element form is therefore just as concrete as the colour
+            // shorthand used by Background="#...".
+            Color color{};
+            for (const auto& attribute : tag.attributes) {
+                if (attribute.first == "Color") {
+                    color = ParseColor(attribute.second, "SolidColorBrush.Color");
+                } else {
+                    throw MarkupError("the property '" + attribute.first +
+                                      "' on SolidColorBrush is not implemented");
+                }
+            }
+            brush.value = BrushValue::SolidColor(color);
+        } else if (tag.name == "ImageBrush") {
+            std::string source;
+            for (const auto& attribute : tag.attributes) {
+                if (attribute.first == "ImageSource") {
+                    source = attribute.second;
+                } else {
+                    throw MarkupError("the property '" + attribute.first +
+                                      "' on ImageBrush is not implemented");
+                }
+            }
+            const bool has_source = !source.empty();
+            brush.value = BrushValue::Image(has_source, std::move(source));
+        }
         if (!tag.self_closing) {
             // A brush with content -- gradient stops, an image source -- is a
             // brush whose type is understood but whose contents are not.
             Tag close;
-            if (!scanner.Next(close) || !close.closing || close.name != brush)
-                throw MarkupError("a <" + brush + "> with content is not implemented");
+            if (!scanner.Next(close) || !close.closing || close.name != brush.type)
+                throw MarkupError("a <" + brush.type + "> with content is not implemented");
         }
     }
     throw MarkupError("<" + property_element + "> was not closed");
@@ -969,10 +1070,10 @@ bool IsTransformType(const std::string& name) {
 // A transform is applied to the element's visual once layout has already
 // decided the element's size and position, so it reaches neither MeasureOverride
 // nor ArrangeOverride: L7-terminal-65dec6afa8 carries one and records exactly
-// what the same Rectangle without one records. So the transform is read for its
-// type and then dropped -- there is nothing here to store it in, and storing it
-// would suggest something reads it.
-void ReadTransformPropertyElement(Scanner& scanner, const std::string& property) {
+// what the same Rectangle without one records. The parser validates the type;
+// the node retains that a transform was declared so rendering cannot silently
+// paint the untransformed element before transform support exists.
+VisualTransform ReadTransformPropertyElement(Scanner& scanner, const std::string& property) {
     Tag transform;
     if (!scanner.Next(transform) || transform.closing)
         throw MarkupError("<" + property + "> was given no transform");
@@ -980,10 +1081,118 @@ void ReadTransformPropertyElement(Scanner& scanner, const std::string& property)
         throw MarkupError("<" + property + "> takes a transform, not <" + transform.name +
                           ">");
     }
-    if (!transform.self_closing) SkipPropertySubtree(scanner, transform.name);
+    const std::string runtime_type = "Windows.UI.Xaml.Media." + transform.name;
+    bool semantically_empty = transform.self_closing;
+    if (!transform.self_closing) {
+        Tag nested;
+        if (!scanner.Next(nested))
+            throw MarkupError("<" + transform.name + "> was not closed");
+        if (nested.closing && nested.name == transform.name) {
+            semantically_empty = true;
+        } else {
+            // The first nested tag has already been read, so consume the rest
+            // here rather than asking SkipPropertySubtree to start over. The
+            // transform remains retained-but-unsupported; its contents are not
+            // silently reinterpreted as an empty RotateTransform.
+            int depth = 1;
+            const auto account = [&](const Tag& tag) {
+                if (tag.closing)
+                    --depth;
+                else if (!tag.self_closing)
+                    ++depth;
+            };
+            account(nested);
+            while (depth > 0) {
+                Tag more;
+                if (!scanner.Next(more))
+                    throw MarkupError("<" + transform.name + "> was not closed");
+                account(more);
+            }
+        }
+    }
+
+    VisualTransform result = VisualTransform::Unsupported(runtime_type);
+    if (transform.name == "RotateTransform" && semantically_empty) {
+        const auto angle = transform.attributes.find("Angle");
+        if (transform.attributes.empty()) {
+            result = VisualTransform::Rotate(0.0);
+        } else if (transform.attributes.size() == 1 && angle != transform.attributes.end()) {
+            const double degrees = ParseDouble(angle->second, "RotateTransform.Angle");
+            if (!std::isfinite(degrees))
+                throw MarkupError("RotateTransform.Angle must be finite");
+            result = VisualTransform::Rotate(degrees);
+        }
+    }
     Tag close;
     if (!scanner.Next(close) || !close.closing || close.name != property)
         throw MarkupError("<" + property + "> holds one transform");
+    return result;
+}
+
+Rect ParseClipRect(const std::string& text) {
+    const std::vector<std::string> fields = Split(text, ',');
+    if (fields.size() != 4)
+        throw MarkupError("RectangleGeometry.Rect takes four numbers, got \"" + text + "\"");
+    Rect rect{ParseDouble(fields[0], "RectangleGeometry.Rect"),
+              ParseDouble(fields[1], "RectangleGeometry.Rect"),
+              ParseDouble(fields[2], "RectangleGeometry.Rect"),
+              ParseDouble(fields[3], "RectangleGeometry.Rect")};
+    if (!std::isfinite(rect.x) || !std::isfinite(rect.y) ||
+        !std::isfinite(rect.width) || !std::isfinite(rect.height) ||
+        rect.width < 0.0 || rect.height < 0.0) {
+        throw MarkupError("RectangleGeometry.Rect must be finite with non-negative extent");
+    }
+    return rect;
+}
+
+std::string GeometryRuntimeType(const std::string& name) {
+    if (name == "RectangleGeometry" || name == "EllipseGeometry" ||
+        name == "PathGeometry" || name == "GeometryGroup" ||
+        name == "LineGeometry") {
+        return "Windows.UI.Xaml.Media." + name;
+    }
+    throw MarkupError("<Clip> takes a geometry, not <" + name + ">");
+}
+
+VisualClip ReadClipPropertyElement(Scanner& scanner, const std::string& property) {
+    Tag geometry;
+    if (!scanner.Next(geometry) || geometry.closing)
+        throw MarkupError("<" + property + "> was given no geometry");
+    const std::string runtime_type = GeometryRuntimeType(geometry.name);
+
+    VisualClip result;
+    if (geometry.name == "RectangleGeometry") {
+        const auto rect = geometry.attributes.find("Rect");
+        if (rect == geometry.attributes.end())
+            throw MarkupError("<RectangleGeometry> requires Rect");
+        if (geometry.attributes.size() != 1)
+            throw MarkupError("<RectangleGeometry> does not implement the attribute '" +
+                              (geometry.attributes.begin()->first == "Rect"
+                                   ? std::next(geometry.attributes.begin())->first
+                                   : geometry.attributes.begin()->first) +
+                              "'");
+        result = VisualClip::Rectangle(ParseClipRect(rect->second));
+        if (!geometry.self_closing) {
+            Tag close;
+            if (!scanner.Next(close) || !close.closing || close.name != geometry.name ||
+                close.text_before.find_first_not_of(" \t\r\n") != std::string::npos) {
+                throw MarkupError("<RectangleGeometry> holds only its Rect attribute");
+            }
+        }
+    } else {
+        // Preserve the declaration and its runtime type. Its payload is not
+        // interpreted, because the renderer will issue a named refusal before
+        // using any geometry from it.
+        result = VisualClip::Unsupported(runtime_type);
+        if (!geometry.self_closing) SkipPropertySubtree(scanner, geometry.name);
+    }
+
+    Tag close;
+    if (!scanner.Next(close) || !close.closing || close.name != property ||
+        close.text_before.find_first_not_of(" \t\r\n") != std::string::npos) {
+        throw MarkupError("<" + property + "> holds one geometry");
+    }
+    return result;
 }
 
 MarkupDefinition MakeDefinition(const Tag& tag, bool is_column, const ResourceScope& scope) {
@@ -1257,6 +1466,22 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node, ObservableObject* 
     element->set_background_brush(node.background_brush);
     element->set_border_brush(node.border_brush);
     element->set_fill_brush(node.fill_brush);
+    element->set_stroke_brush(node.stroke_brush);
+    element->set_foreground_brush(node.foreground_brush);
+    if (auto* shape = dynamic_cast<Shape*>(element.get())) {
+        shape->set_stroke_miter_limit(node.stroke_miter_limit);
+        shape->set_stroke_thickness(node.stroke_thickness);
+        shape->set_stroke_start_line_cap(node.stroke_start_line_cap);
+        shape->set_stroke_end_line_cap(node.stroke_end_line_cap);
+        shape->set_stroke_line_join(node.stroke_line_join);
+        shape->set_stroke_dash_offset(node.stroke_dash_offset);
+        shape->set_stroke_dash_cap(node.stroke_dash_cap);
+        shape->set_has_stroke_dash_array(node.has_stroke_dash_array);
+        shape->set_shape_stretch(node.shape_stretch);
+    }
+    element->set_visual_transform(node.visual_transform);
+    element->set_render_transform_origin(node.render_transform_origin);
+    element->set_visual_clip(node.visual_clip);
 
     // Only what the markup wrote, which is not the same as every property the
     // element has. An inherited property left alone must stay unset so that it
@@ -1554,7 +1779,13 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
             } else if (member == "RenderTransform") {
                 if (tag.self_closing)
                     throw MarkupError("<" + tag.name + "> was given no value");
-                ReadTransformPropertyElement(scanner, tag.name);
+                open.back().visual_transform =
+                    ReadTransformPropertyElement(scanner, tag.name);
+                continue;
+            } else if (member == "Clip") {
+                if (tag.self_closing)
+                    throw MarkupError("<" + tag.name + "> was given no value");
+                open.back().visual_clip = ReadClipPropertyElement(scanner, tag.name);
                 continue;
             } else if (member == "Template") {
                 section = Section::Template;
@@ -1573,15 +1804,10 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
                                       FullTypeName(open.back().type) + "'");
                 }
                 if (tag.self_closing) throw MarkupError("<" + tag.name + "> is empty");
-                const std::string brush = ParseBrushPropertyElement(scanner, tag.name);
-                open.back().background = brush;
-                // Declared, and colourless: the property-element form carries
-                // the colour on the brush's own Color attribute, which that
-                // parser drops along with everything else inside the brush.
-                // The render pass turns this into a named no-draw rather than
-                // painting a colour nothing supplied.
-                open.back().background_brush = BrushValue{true, false, Color{}};
-                open.back().properties.push_back(MarkupProperty{found, brush});
+                ParsedBrush brush = ParseBrushPropertyElement(scanner, tag.name);
+                open.back().background = brush.type;
+                open.back().background_brush = std::move(brush.value);
+                open.back().properties.push_back(MarkupProperty{found, brush.type});
                 continue;
             } else {
                 // A scalar property, set as an element so that a resource

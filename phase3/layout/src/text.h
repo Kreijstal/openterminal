@@ -8,6 +8,8 @@
 #define OPENXAML_TEXT_H
 
 #include <map>
+#include <memory>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -25,6 +27,18 @@ namespace openxaml {
 enum class FontProvenance {
     Harvested,  // read out of the font file by harvest_font_metrics.py
     Derived,    // solved out of the recorded measurements by derive_font_metrics.py
+    RuntimeDirectWrite,  // resolved from the installed Windows font collection
+};
+
+// Metrics for a glyph selected by the platform's system-font fallback rather
+// than by a family explicitly named in XAML. The Windows oracle harvests the
+// selected face and scale through DirectWrite; layout never guesses from the
+// requested family or substitutes a font installed on the current host.
+struct FallbackGlyphMetrics {
+    std::string family;
+    double scale = 1.0;
+    double units_per_em = 0.0;
+    double advance = 0.0;
 };
 
 // What phase3/scripts/harvest_font_metrics.py extracts from a font file, in
@@ -37,6 +51,10 @@ struct FontMetrics {
     double descender = 0.0;
     double line_gap = 0.0;
     std::map<char32_t, double> advances;
+    // Codepoint -> the DirectWrite system-fallback face selected for it.
+    // Optional because most fonts and codepoints never leave the named family
+    // list, and old oracle artifacts predate this harvest.
+    std::map<char32_t, FallbackGlyphMetrics> system_fallbacks;
     // What a pair of adjacent glyphs adds to the first one's advance, keyed by
     // the pair. Absent means zero: a font with no kerning at all and a pair the
     // font does not kern are the same thing to a measurement.
@@ -58,6 +76,44 @@ struct FontMetrics {
         return found == kerning.end() ? 0.0 : found->second;
     }
 };
+
+// Optional platform text boundary. The layout core never constructs one and
+// native/oracle executables therefore remain pinned to harvested FontLibrary
+// data. The Windows.UI.Xaml DLL installs a DirectWrite implementation at its
+// activation boundary.
+struct RuntimeTextRequest {
+    std::string family;
+    std::string text;
+    double font_size = 0.0;
+    double width = 0.0;
+    bool wrap = false;
+    bool bold = false;
+    // Explicit and deterministic. Callers that project FrameworkElement.Language
+    // can replace this; the provider never consults the machine's user locale.
+    std::string language = "en-US";
+};
+
+struct RuntimeTextResult {
+    Size size;
+    double baseline = 0.0;
+    std::vector<double> advances;
+    std::string resolved_family;
+};
+
+class RuntimeTextProvider {
+public:
+    virtual ~RuntimeTextProvider() = default;
+    virtual bool ResolveFontMetrics(const std::string& family,
+                                    FontMetrics& metrics,
+                                    std::string& resolved_family,
+                                    std::string& diagnostic) = 0;
+    virtual bool Layout(const RuntimeTextRequest& request,
+                        RuntimeTextResult& result,
+                        std::string& diagnostic) = 0;
+};
+
+void SetRuntimeTextProvider(std::shared_ptr<RuntimeTextProvider> provider);
+std::shared_ptr<RuntimeTextProvider> GetRuntimeTextProvider();
 
 // Font family name -> metrics. A family with no entry is an error rather than
 // a substitution: measuring against whatever font happened to be installed
@@ -87,6 +143,8 @@ public:
 
 private:
     std::map<std::string, FontMetrics> fonts_;
+    mutable std::mutex runtime_fonts_mutex_;
+    mutable std::map<std::string, FontMetrics> runtime_fonts_;
 };
 
 // The corpus exercises NoWrap and Wrap. WrapWholeWords exists in XAML and is
@@ -124,6 +182,7 @@ public:
     // declared on the elements that have one, and what reaches the shaper is
     // the decision they made about it. See icon.cpp.
     void set_simulates_bold(bool value) { simulates_bold_ = value; }
+    bool simulates_bold() const { return simulates_bold_; }
 
     // Whether the text arrived through the Text property rather than as inline
     // content. The two are not the same measurement -- see rule 7 in text.cpp,
@@ -144,6 +203,12 @@ public:
     // caller must report rather than paper over.
     std::vector<double> ShapedAdvances() const;
 
+    // A platform runtime provider can honestly refuse a requested system font
+    // (for example when Wine has no Segoe MDL2 Assets). Such a refusal is
+    // contained at this leaf so unrelated ancestors still lay out, and is
+    // retained here for the display-list boundary to emit as a named no-draw.
+    const std::string& runtime_text_refusal() const { return runtime_text_refusal_; }
+
 protected:
     Size MeasureOverride(Size available) override;
     Size ArrangeOverride(Size final_size) override;
@@ -154,6 +219,7 @@ private:
 
     bool simulates_bold_ = false;
     bool text_from_property_ = false;
+    mutable std::string runtime_text_refusal_;
 };
 
 // Thrown when a family is not in the library, or the text uses a codepoint the

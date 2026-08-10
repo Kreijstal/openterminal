@@ -258,6 +258,15 @@ add_executable(dependency_property_tests
 target_link_libraries(dependency_property_tests PRIVATE openxaml_layout)
 add_test(NAME dependency_property COMMAND dependency_property_tests)
 
+# The visual tree is also an ownership graph. These checks prove that a
+# removed/replaced node cannot retain its old island invalidation sink, that
+# reparenting is explicit, and that cycles are refused before traversal.
+add_executable(visual_ownership_tests
+    tests/visual_ownership_test.cpp
+)
+target_link_libraries(visual_ownership_tests PRIVATE openxaml_layout)
+add_test(NAME visual_ownership COMMAND visual_ownership_tests)
+
 if(MSVC)
     target_compile_options(openxaml_layout PRIVATE /W4)
     target_compile_options(measure_cases PRIVATE /W4)
@@ -281,6 +290,7 @@ if(MSVC)
     target_compile_options(xbf_equivalence PRIVATE /W4)
     target_compile_options(xbf_dump PRIVATE /W4)
     target_compile_options(dependency_property_tests PRIVATE /W4)
+    target_compile_options(visual_ownership_tests PRIVATE /W4)
 else()
     target_compile_options(openxaml_layout PRIVATE -Wall -Wextra)
     target_compile_options(measure_cases PRIVATE -Wall -Wextra)
@@ -304,4 +314,5 @@ else()
     target_compile_options(xbf_equivalence PRIVATE -Wall -Wextra)
     target_compile_options(xbf_dump PRIVATE -Wall -Wextra)
     target_compile_options(dependency_property_tests PRIVATE -Wall -Wextra)
+    target_compile_options(visual_ownership_tests PRIVATE -Wall -Wextra)
 endif()

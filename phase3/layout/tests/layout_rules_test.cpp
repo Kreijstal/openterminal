@@ -165,6 +165,68 @@ void PaddingInsetsTheAlignedContent() {
     CHECK(content->render_size().height == 20.0);
 }
 
+void FrameworkElementRetainsItsAlignedRenderOrigin() {
+    Border border;
+    border.set_width(40.0);
+    border.set_height(20.0);
+    border.set_margin({7.0, 5.0, 13.0, 15.0});
+    border.Measure({100.0, 80.0});
+
+    border.set_horizontal_alignment(HorizontalAlignment::Left);
+    border.set_vertical_alignment(VerticalAlignment::Top);
+    border.Arrange({10.0, 20.0, 100.0, 80.0});
+    CHECK(border.layout_slot().x == 10.0);
+    CHECK(border.layout_slot().y == 20.0);
+    CHECK(border.render_origin().x == 17.0);
+    CHECK(border.render_origin().y == 25.0);
+
+    border.set_horizontal_alignment(HorizontalAlignment::Center);
+    border.set_vertical_alignment(VerticalAlignment::Center);
+    border.Arrange({10.0, 20.0, 100.0, 80.0});
+    CHECK(border.render_origin().x == 37.0);
+    CHECK(border.render_origin().y == 45.0);
+
+    border.set_horizontal_alignment(HorizontalAlignment::Right);
+    border.set_vertical_alignment(VerticalAlignment::Bottom);
+    border.Arrange({10.0, 20.0, 100.0, 80.0});
+    CHECK(border.render_origin().x == 57.0);
+    CHECK(border.render_origin().y == 65.0);
+    CHECK(border.render_bounds().x == 57.0);
+    CHECK(border.render_bounds().y == 65.0);
+    CHECK(border.render_bounds().width == 40.0);
+    CHECK(border.render_bounds().height == 20.0);
+}
+
+void OverflowingStretchDegeneratesToLeftTop() {
+    Border border;
+    border.set_width(120.0);
+    border.set_height(70.0);
+    border.set_margin({5.0, 3.0, 5.0, 7.0});
+    border.Measure({100.0, 60.0});
+    border.Arrange({10.0, 20.0, 100.0, 60.0});
+
+    CHECK(border.render_size().width == 120.0);
+    CHECK(border.render_size().height == 70.0);
+    CHECK(border.render_origin().x == 15.0);
+    CHECK(border.render_origin().y == 23.0);
+}
+
+void RenderOriginUsesTheLayoutRoundingGrid() {
+    Border border;
+    border.set_width(40.0);
+    border.set_height(20.0);
+    border.set_margin({0.25, 0.25, 0.25, 0.25});
+    border.set_horizontal_alignment(HorizontalAlignment::Center);
+    border.set_vertical_alignment(VerticalAlignment::Center);
+    border.Measure({100.5, 80.5});
+    border.Arrange({0.25, 0.25, 100.5, 80.5});
+
+    // Margin totals and the client size are snapped first; the final absolute
+    // visual offset is then snapped once, just like ArrangeCore.
+    CHECK(border.render_origin().x == 31.0);
+    CHECK(border.render_origin().y == 31.0);
+}
+
 }  // namespace
 
 int main() {
@@ -173,6 +235,9 @@ int main() {
     UnsizedContentStaysAtNothing();
     ContentAlignmentPlacesTheContent();
     PaddingInsetsTheAlignedContent();
+    FrameworkElementRetainsItsAlignedRenderOrigin();
+    OverflowingStretchDegeneratesToLeftTop();
+    RenderOriginUsesTheLayoutRoundingGrid();
 
     if (failures) std::cerr << failures << " check(s) failed\n";
     return failures ? 1 : 0;

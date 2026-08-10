@@ -21,6 +21,14 @@ void Check(bool condition, const char* what, int line) {
 
 #define CHECK(condition) Check(static_cast<bool>(condition), #condition, __LINE__)
 
+class FixedDesiredElement final : public Border {
+public:
+    std::string TypeName() const override { return "Test.FixedDesiredElement"; }
+
+protected:
+    Size MeasureOverride(Size) override { return {16.0, 16.0}; }
+};
+
 void VirtualizationAndSelection() {
     ListView list;
     list.set_item_extent(32.0);
@@ -67,6 +75,44 @@ void NavigationJournal() {
     CHECK(frame.CanGoForward());
     CHECK(frame.GoForward());
     CHECK(frame.CurrentEntry()->page_type == "Second");
+}
+
+void PageContentAlwaysUsesThePageBounds() {
+    Page page;
+    auto content = std::make_unique<Border>();
+    Border* const content_pointer = content.get();
+    page.SetContent(std::move(content));
+
+    page.Measure({320.0, 200.0});
+    CHECK(content_pointer->desired_size().width == 0.0);
+    CHECK(content_pointer->desired_size().height == 0.0);
+
+    page.Arrange({0.0, 0.0, 320.0, 200.0});
+    CHECK(content_pointer->layout_slot().x == 0.0);
+    CHECK(content_pointer->layout_slot().y == 0.0);
+    CHECK(content_pointer->layout_slot().width == 320.0);
+    CHECK(content_pointer->layout_slot().height == 200.0);
+    CHECK(content_pointer->render_size().width == 320.0);
+    CHECK(content_pointer->render_size().height == 200.0);
+}
+
+void UserControlContentAlwaysUsesTheControlBounds() {
+    UserControl control;
+    auto content = std::make_unique<FixedDesiredElement>();
+    FixedDesiredElement* const content_pointer = content.get();
+    control.SetContent(std::move(content));
+
+    control.Measure({320.0, 200.0});
+    CHECK(content_pointer->desired_size().width == 16.0);
+    CHECK(content_pointer->desired_size().height == 16.0);
+
+    control.Arrange({0.0, 0.0, 320.0, 200.0});
+    CHECK(content_pointer->layout_slot().x == 0.0);
+    CHECK(content_pointer->layout_slot().y == 0.0);
+    CHECK(content_pointer->layout_slot().width == 320.0);
+    CHECK(content_pointer->layout_slot().height == 200.0);
+    CHECK(content_pointer->render_size().width == 320.0);
+    CHECK(content_pointer->render_size().height == 200.0);
 }
 
 void PopupFlyoutAndMuxc() {
@@ -116,6 +162,8 @@ void ControlMarkup() {
 int main() {
     VirtualizationAndSelection();
     NavigationJournal();
+    PageContentAlwaysUsesThePageBounds();
+    UserControlContentAlwaysUsesTheControlBounds();
     PopupFlyoutAndMuxc();
     ControlMarkup();
 }

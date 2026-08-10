@@ -9,16 +9,15 @@
 //     and a Linux dump are byte-identical rather than merely similar. GDI's
 //     FillRect would be a second rasteriser with its own rounding, and then a
 //     disagreement between the two backends would be unattributable.
-//   * text, with ExtTextOutW and the real font selected. Glyph imagery has no
-//     oracle -- no recording of the runtime says what a glyph looks like -- so
-//     it is delegated, deliberately and in full, to the platform. What is ours
-//     is the origin each run is drawn at and the box the measurement path says
-//     it fits in; the checker holds the ink to those and to nothing else.
+//   * text, through DirectWrite text layouts and glyph-run analyses. Shaping,
+//     metrics, and ClearType channel coverage therefore come from one documented
+//     Windows text stack rather than from independent GDI measurement and paint
+//     paths. ClearType is accepted only over opaque pixels; a transparent target
+//     is reported by name rather than silently switched to guessed grayscale.
 //
-// A font the system has not got is not substituted. GDI would happily pick
-// something else and the ink would land in positions this project has no
-// measurement for, so the family is looked up first and a run in a family that
-// is absent is reported as a failure by name.
+// A font the system has not got is not substituted. The requested family list
+// is resolved explicitly against DirectWrite's system collection, and ambiguous
+// system fallback is reported rather than guessed.
 
 #ifndef OPENXAML_RENDER_GDI_TARGET_H
 #define OPENXAML_RENDER_GDI_TARGET_H
@@ -90,7 +89,7 @@ public:
     explicit GdiTextBackend(DibTarget& target) : target_(target) {}
     void DrawRuns(Surface& surface, const std::vector<TextOp>& runs, Color ink,
                   std::vector<std::string>& failures) override;
-    std::string name() const override { return "gdi"; }
+    std::string name() const override { return "directwrite"; }
 
 private:
     DibTarget& target_;

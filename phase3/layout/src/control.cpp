@@ -19,10 +19,10 @@ const DependencyProperty* const kControlPadding =
 // content asks for the same size wherever it is then placed.
 const DependencyProperty* const kHorizontalContentAlignment =
     RegisterProperty("Control", "HorizontalContentAlignment",
-                     {static_cast<int>(HorizontalAlignment::Left), false, false});
+                     {static_cast<int>(HorizontalAlignment::Left), false, false, true});
 const DependencyProperty* const kVerticalContentAlignment =
     RegisterProperty("Control", "VerticalContentAlignment",
-                     {static_cast<int>(VerticalAlignment::Top), false, false});
+                     {static_cast<int>(VerticalAlignment::Top), false, false, true});
 
 // The half of Content that is not an element. It affects no measurement --
 // which is the recorded fact, not a simplification -- so it does not affect

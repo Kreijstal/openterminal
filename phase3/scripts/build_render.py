@@ -44,7 +44,13 @@ LAYOUT_SOURCES = ["property.cpp", "element.cpp", "events.cpp", "border.cpp", "co
                   "binding.cpp", "visual_state.cpp", "default_styles.cpp",
                   "advanced_controls.cpp"]
 
-RENDER_SOURCES = ["display_list.cpp", "surface.cpp", "case_runner.cpp"]
+RENDER_SOURCES = [
+    "display_list.cpp",
+    "scene.cpp",
+    "surface.cpp",
+    "cpu_raster_backend.cpp",
+    "case_runner.cpp",
+]
 
 DEFAULT_ROOT = Path("/tmp/openterminal-render")
 
@@ -89,18 +95,22 @@ def main() -> int:
     layout_src = PHASE3_DIR / "layout" / "src"
     render_src = PHASE3_DIR / "render" / "src"
     gdi_src = PHASE3_DIR / "render" / "gdi"
-    includes = ["-I" + str(layout_src), "-I" + str(render_src), "-I" + str(gdi_src)]
+    dcomp_src = PHASE3_DIR / "render" / "dcomp"
+    includes = ["-I" + str(layout_src), "-I" + str(render_src), "-I" + str(gdi_src),
+                "-I" + str(dcomp_src)]
 
     # Static everything, for the reason build_xamlcore.py gives: a binary that
     # pulls in libstdc++-6.dll fails under Wine with a bare MOD_NOT_FOUND.
     common = ["x86_64-w64-mingw32-g++", "-std=c++17", "-O2", "-Wall", "-Wextra",
               "-static", "-static-libgcc", "-static-libstdc++"]
-    libraries = ["-lgdi32", "-luser32"]
+    libraries = ["-lgdi32", "-luser32", "-lmsimg32", "-ldwrite", "-luuid"]
 
     sources = ([str(layout_src / name) for name in LAYOUT_SOURCES]
                + [str(layout_src / "markup.cpp")]
                + [str(render_src / name) for name in RENDER_SOURCES]
-               + [str(gdi_src / "gdi_target.cpp")])
+               + [str(gdi_src / "gdi_target.cpp"),
+                  str(gdi_src / "dwrite_text_provider.cpp"),
+                  str(gdi_src / "island_frame_cache.cpp")])
 
     harness = root / "render_cases_gdi.exe"
     run(common + ["-o", str(harness), str(gdi_src / "render_cases_gdi.cpp")]
@@ -114,8 +124,32 @@ def main() -> int:
     run(common + ["-o", str(ink), str(gdi_src / "ink_check.cpp")]
         + sources + includes + libraries)
 
+    frame_cache_test = root / "island_frame_cache_test.exe"
+    run(common + ["-o", str(frame_cache_test),
+                  str(gdi_src / "island_frame_cache_test.cpp")]
+        + sources + includes + libraries)
+
+    dwrite_test = root / "dwrite_text_provider_test.exe"
+    run(common + ["-o", str(dwrite_test),
+                  str(gdi_src / "dwrite_text_provider_test.cpp")]
+        + sources + includes + libraries)
+
+    # This test uses a deterministic fake compositor, but compiles and links
+    # the production IDCompositionDesktopDevice/D3D11 adapter in the same
+    # executable. It therefore catches Windows ABI drift without requiring a
+    # working compositor from the Wine runner.
+    dcomp_test = root / "dcomp_scene_backend_test.exe"
+    dcomp_sources = [str(dcomp_src / "dcomp_scene_backend_test.cpp"),
+                     str(dcomp_src / "dcomp_scene_backend.cpp"),
+                     str(render_src / "cpu_raster_backend.cpp"),
+                     str(render_src / "scene.cpp"),
+                     str(render_src / "surface.cpp")]
+    run(common + ["-o", str(dcomp_test)] + dcomp_sources + includes
+        + ["-ldcomp", "-ld3d11", "-ldxgi", "-lole32"])
+
     if args.skip_run:
-        print(f"built {harness}, {host} and {ink}")
+        print(f"built {harness}, {host}, {ink}, {frame_cache_test}, {dwrite_test} "
+              f"and {dcomp_test}")
         return 0
 
     environment = os.environ.copy()
@@ -123,6 +157,12 @@ def main() -> int:
     environment["WINEDEBUG"] = environment.get("WINEDEBUG", "-all")
     if not (prefix / "system.reg").is_file():
         run(["wineboot", "-u"], env=environment)
+
+    # Memory DCs and DIB sections require no display server, so this retained
+    # presentation test runs on every Wine path, including headless CI.
+    run(["wine", str(frame_cache_test)], env=environment)
+    run(["wine", str(dwrite_test)], env=environment)
+    run(["wine", str(dcomp_test)], env=environment)
 
     results = root / "gdi-dumps"
     if results.exists():

@@ -9,6 +9,9 @@
 namespace openxaml {
 namespace {
 
+const std::vector<std::string> kUserControlOwners = {
+    "UserControl", "ContentControl", "Control", kTextPropertyOwner,
+    "FrameworkElement", "UIElement"};
 const std::vector<std::string> kPageOwners = {
     "Page", "UserControl", "ContentControl", "Control", kTextPropertyOwner,
     "FrameworkElement", "UIElement"};
@@ -24,11 +27,44 @@ const std::vector<std::string> kPopupOwners = {
 
 }  // namespace
 
+const std::vector<std::string>& UserControl::Owners() { return kUserControlOwners; }
 const std::vector<std::string>& Page::Owners() { return kPageOwners; }
 const std::vector<std::string>& Frame::Owners() { return kFrameOwners; }
 const std::vector<std::string>& ItemsControl::Owners() { return kItemsOwners; }
 const std::vector<std::string>& ListView::Owners() { return kListOwners; }
 const std::vector<std::string>& Popup::Owners() { return kPopupOwners; }
+
+Size UserControl::MeasureOverride(Size available) {
+    const std::vector<Element*> children = Children();
+    if (children.empty()) return {};
+    Element* const content = children.front();
+    content->Measure(available);
+    return content->desired_size();
+}
+
+Size UserControl::ArrangeOverride(Size final_size) {
+    const std::vector<Element*> children = Children();
+    if (!children.empty()) {
+        children.front()->Arrange({0.0, 0.0, final_size.width, final_size.height});
+    }
+    return final_size;
+}
+
+Size Page::MeasureOverride(Size available) {
+    const std::vector<Element*> children = Children();
+    if (children.empty()) return {};
+    Element* const content = children.front();
+    content->Measure(available);
+    return content->desired_size();
+}
+
+Size Page::ArrangeOverride(Size final_size) {
+    const std::vector<Element*> children = Children();
+    if (!children.empty()) {
+        children.front()->Arrange({0.0, 0.0, final_size.width, final_size.height});
+    }
+    return final_size;
+}
 
 void Frame::RegisterPage(std::string type, PageFactory factory) {
     if (type.empty() || !factory) throw MarkupError("a Frame page registration needs a type and factory");

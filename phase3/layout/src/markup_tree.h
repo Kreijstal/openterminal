@@ -23,6 +23,7 @@
 #include "style.h"
 #include "text.h"
 #include "scroll_viewer.h"
+#include "shape.h"
 
 namespace openxaml {
 
@@ -110,6 +111,7 @@ struct MarkupNode {
     int grid_row_span = 1;
     double canvas_left = 0.0;
     double canvas_top = 0.0;
+    int canvas_z_index = 0;
     bool use_layout_rounding = true;
 
     // UIElement. Opacity and Visibility. Opacity changes no size at all; it is
@@ -118,6 +120,12 @@ struct MarkupNode {
     // that was written.
     double opacity = 1.0;
     Visibility visibility = Visibility::Visible;
+    // A transform property element was present. Layout deliberately ignores
+    // its payload, but the renderer must retain the declaration so it can
+    // refuse unsupported transform semantics instead of painting untransformed.
+    VisualTransform visual_transform;
+    Point render_transform_origin;
+    VisualClip visual_clip;
 
     // Border, and the WinUI 2 panels that grew the same properties.
     Thickness border_thickness;
@@ -133,6 +141,20 @@ struct MarkupNode {
     BrushValue background_brush;
     BrushValue border_brush;
     BrushValue fill_brush;
+    BrushValue stroke_brush;
+    BrushValue foreground_brush;
+
+    // Shape paint state. Geometry rendering is a backend boundary, but these
+    // values remain observable through IShape and must survive parsing.
+    double stroke_miter_limit = 10.0;
+    double stroke_thickness = 0.0;
+    ShapeLineCap stroke_start_line_cap = ShapeLineCap::Flat;
+    ShapeLineCap stroke_end_line_cap = ShapeLineCap::Flat;
+    ShapeLineJoin stroke_line_join = ShapeLineJoin::Miter;
+    double stroke_dash_offset = 0.0;
+    ShapeLineCap stroke_dash_cap = ShapeLineCap::Flat;
+    bool has_stroke_dash_array = false;
+    ShapeStretch shape_stretch = ShapeStretch::None;
 
     // StackPanel.
     Orientation orientation = Orientation::Vertical;

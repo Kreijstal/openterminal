@@ -1,7 +1,7 @@
 # First pixels
 
-The layout core matches the recorded runtime to the half-pixel across all 1177
-measurements, and until now nothing drew any of it. This does — the minimum
+The layout core matches the recorded runtime to the half-pixel across 1176 of
+1177 measurements, and until now nothing drew any of it. This does — the minimum
 that can be drawn honestly, and no more.
 
     cmake -S phase3/render -B build && cmake --build build
@@ -19,14 +19,16 @@ derivable when the markup, or the WinUI 2.8.4 theme dictionary a
 `{ThemeResource}` resolves through, spelled one.
 
 Everything else is a **named no-draw**: an entry saying which element and which
-feature, never an approximation. Wave 6 in [the roadmap](../ROADMAP.md) is where
-rendered-output probes get recorded; until they exist there is no measurement
-that could catch a plausible-looking gradient, so a plausible-looking gradient is
-exactly the wrong number the project's standing rules forbid.
+feature, never an approximation. The Wave 6 rendered-output harvester now lives
+in `harness/xaml_render_probe.cpp`; until its Windows artifact is ingested by a
+feature-specific comparison there is still no expectation that could catch a
+plausible-looking gradient, so a plausible-looking gradient remains exactly the
+wrong number the project's standing rules forbid.
 
-The named no-draws are not a to-do list for this directory. They are the work
-list for the next oracle cycle — each one names a capability a pixel probe would
-have to record before anything here could paint it.
+The named no-draws are the renderer work list. In the focused corpus each one
+is now an explicit acceptance failure against native pixels and visual state;
+the broader layout corpus keeps the name so an unprobed variation is never
+mistaken for a pass.
 
 ## What paints
 
@@ -52,7 +54,7 @@ have to record before anything here could paint it.
 | an element with no layout storage — a `Shape`, an `Image`, anything under a `Canvas` | it takes no part in layout, so no recorded measurement gives it a rect at all. `Fill` is refused for this reason and no other |
 | a case painting the reserved probe-ink colour | ink and background could not be told apart in the round trip |
 | a text run in a font the system has not got | substituting another face would put ink where nothing measured it |
-| `CornerRadius`, gradients, `ImageBrush`, shadows, `RenderTransform`, theme animation | the layout core does not carry them, and there is no pixel oracle to check them against if it did |
+| `CornerRadius`, gradients, `ImageBrush`, shadows, `RenderTransform`, theme animation | the layout core does not carry them, and the new pixel harvest has not yet been connected to implementations of these features |
 | `BorderBrush` from markup | no type registers the property, so the three corpus cases that set one fail at load — which is what the oracle answers for them too. The paint path takes a border brush; no markup can currently give it one |
 
 ## The gate
@@ -81,10 +83,10 @@ Over the corpus, natively:
 
 | outcome | cases |
 |---|---:|
-| painted, round trip exact | 1148 |
+| painted, round trip exact | 1147 |
 | refused by name | 19 |
 | failed | 0 |
-| not laid out (the measurement path does not load them either) | 10 |
+| not laid out (the measurement path does not load them either) | 11 |
 
 Under Wine the GDI backend applies the same geometry gate. On a host without
 Segoe UI, the additional 112 cases that carry text refuse by name instead of
@@ -121,9 +123,10 @@ sharing no code with any of the above, recovers:
 
 ## Glyphs are the platform's; positions are ours
 
-There is no oracle for what a glyph looks like, so none is invented. The Wine
-backend selects the real font and calls `ExtTextOutW`, unclipped — a clip to the
-run's own box would erase the evidence whenever the box was wrong.
+The broad Wine round-trip does not consume the focused native glyph oracle, so
+it still invents nothing: the backend selects the real font and calls
+`ExtTextOutW`, unclipped. The separate strict acceptance test compares the
+focused text programs against native glyph pixels and DirectWrite runs.
 
 What that leaves checkable is containment: the box the harvested advances derive
 has to contain the ink the platform draws. `gdi/ink_check.cpp` puts that question
@@ -150,8 +153,10 @@ rounds to whole pixels where the runtime does not:
     stays under a pixel across the whole run instead of accumulating.
 
 So the delegation is narrower than it was, and honest: the imagery is GDI's, and
-every position is ours. What remains un-pinned is what a glyph looks like, which
-still wants a rendered-output probe and is still the next cycle's work.
+every position is ours. What remains un-pinned in this backend is what a glyph
+looks like. The native render harvest now records that output together with the
+exact Segoe UI file identity; consuming those captures in the comparison gate is
+the next step.
 
 One subtlety in the checking. A run's box becomes pixels twice, by two different
 rules, and they are not interchangeable: a *fill* snaps each edge to the nearest
@@ -165,7 +170,10 @@ edge; ink a full pixel beyond still fails, which is the part that carries weight
 ## Layers
 
     src/          plain C++17, no Windows, no GDI, built and gated on Linux
-      display_list.{h,cpp}  what paints and what refuses -- the only opinionated file
+      scene.{h,cpp}         retained visual nodes and immutable local display lists
+      raster_backend.h      the scene-to-pixels contract and structured failures
+      cpu_raster_backend.*  deterministic traversal, clipping and rectangle rasterization
+      display_list.{h,cpp}  builds the scene; keeps the temporary flat oracle view
       surface.{h,cpp}       a 32-bit surface and one primitive: an opaque, snapped rect
       case_runner.{h,cpp}   one corpus case, laid out and painted
       render_cases.cpp      the corpus harness
@@ -175,26 +183,36 @@ edge; ink a full pixel beyond still fails, which is the part that carries weight
       xaml_window.cpp       one case in a real window, read back off the window
       ink_check.cpp         does the derived box contain the drawn ink
 
-Rectangles are rasterised by `src/surface.cpp` on both sides — even under Wine,
-where the fills go into the DIB's own memory rather than through `FillRect`.
-That is deliberate: GDI's fill would be a second rasteriser with its own
-rounding, and then a disagreement between the two backends would be
-unattributable. As it stands the rectangle pixels of a Wine dump and a Linux dump
-are byte-identical, so a diff between them is exactly the ink.
+Rectangles are replayed from the retained scene by `CpuRasterBackend` and
+rasterised by `src/surface.cpp` on both sides — even under Wine, where the
+result is copied into the DIB rather than redrawn through GDI `FillRect`. That
+is deliberate: GDI's fill would be a second rasteriser with its own rounding,
+and then a disagreement between the two backends would be unattributable. As it
+stands the rectangle pixels of a Wine dump and a Linux dump are byte-identical,
+so a diff between them is exactly the ink.
 
 ## The paint entry a host calls
 
     // phase3/render/src/display_list.h
     DisplayList Build(const Element& arranged_root, Size surface);
 
-    // phase3/render/gdi/gdi_target.h
-    void Paint(HDC destination, int x, int y, const DisplayList&, Color ink,
-               std::vector<std::string>& failures);
+    // phase3/render/src/case_runner.h
+    Surface RasterizeDisplayList(const DisplayList&, TextBackend*, Color clear,
+                                 Color text_ink,
+                                 std::vector<std::string>& text_failures,
+                                 std::vector<RenderIssue>& render_issues);
 
-Build once, paint as often as the host repaints. `xaml_window.cpp` is that host
-in its smallest form — `WM_PAINT` calls `Paint` with the window's DC — and it is
-the shape `DesktopWindowXamlSource` island hosting needs: a display list is a
-value, and the DC it lands on is the caller's business.
+Build once, replay the retained scene as often as the host repaints.
+`xaml_window.cpp` is that host in its smallest form: its GDI presenter copies
+the CPU backend's surface into the window DC and delegates only text imagery to
+GDI. `DesktopWindowXamlSource` should call the same scene boundary rather than
+letting projected XAML elements draw into an HDC.
+
+The flat `rects` and `texts` arrays still travel beside the scene only because
+the existing acceptance sidecars consume them. Focused tests render the scene
+and the flat compatibility view independently and require identical BGRA bytes
+for the supported slice. New hosts must consume `SceneSnapshot`, not those
+arrays.
 
 ## Running the Wine half
 
@@ -206,27 +224,87 @@ Needs `x86_64-w64-mingw32-g++` and `wine`; the window step also needs a display.
 Everything lands under `/tmp/openterminal-render` and nothing is committed —
 dumps least of all, at a quarter of a gigabyte for one corpus pass.
 
-## What the next oracle cycle would have to record
+## Native XAML render-boundary harvest
 
-Each named no-draw above is a probe capability that does not exist yet. In the
-order that would unblock the most:
+The Windows measurement workflow now generates eight small paint programs and
+runs `xaml_render_probe` twice against the real in-OS `Windows.UI.Xaml`. The
+`xaml-render-boundaries-<os-build>` artifact contains, for every program:
 
-1. **A rendered-output probe at all** — the arranged tree painted by the real
-   runtime into a readable surface, per case. Everything else here is downstream
-   of that one capability.
-2. **The render offset inside a layout slot.** The corpus records the slot and
-   the render size and never the offset between them, which is why a centred or
-   right-aligned element that does not fill its slot is refused. One recorded
-   offset per alignment would settle it, and it needs no pixels — a
-   `TransformToVisual` reading would do.
-3. **Alpha composition.** What the runtime puts in a pixel where a partly
-   transparent brush meets what is under it: premultiplied or not, and rounded
-   which way. Fifteen corpus cases are blocked on this one number.
-4. **Glyph metrics as the runtime lays them out**, against the same font this
-   backend hands to GDI. The ink check above measures a two-pixel disagreement
-   and cannot say which side is right.
-5. **What colour a `TextBlock` with no `Foreground` paints in.** The default
-   comes from a control style this core does not apply, so the dumps use a
-   reserved probe ink and claim nothing about colour.
-6. **Corner radii, gradients, shadows and opacity layers**, in that order of how
-   often Terminal's own markup asks for them.
+- the exact premultiplied BGRA8 bytes returned by `RenderTargetBitmap`;
+- arranged and desired sizes plus each layout slot;
+- effective element-to-root transforms (three transformed basis points);
+- XAML clip bounds, opacity, sibling order and `Canvas.ZIndex`;
+- public composition-visual offset, size, anchor, center, scale, rotation,
+  opacity, visibility and clip type;
+- rasterization scale, OS build and hashes of the relevant system fonts;
+- DirectWrite glyph indices, advances, offsets, baselines, measuring mode,
+  pixel snapping and system rendering parameters for every explicit text run.
+
+The raw `.bgra` files are generated binary artifacts and are never committed.
+`finalize_render_observations.py` validates their dimensions and emits a
+deterministic textual manifest with SHA-256 and alpha/color statistics. The
+workflow diffs the complete raw and textual output of two independent runs.
+
+These are the appropriate renderer contracts. A D2D/DWrite/D3D/DXGI call log is
+not one: it would couple the implementation to a private choice the real XAML
+runtime can change while producing identical output. Such traces may later be
+used to diagnose a pixel mismatch, but they are explicitly marked absent from
+the oracle metadata. `RenderTargetBitmap` is also pre-DWM XAML content, not a
+screenshot of the composed desktop.
+
+To generate just the authored input corpus on any platform:
+
+    python3 phase3/scripts/generate_render_cases.py --out /tmp/render-cases
+
+On Windows, after building the probe as the workflow does:
+
+    xaml_render_probe.exe /tmp/render-cases /tmp/render-observations
+    python3 phase3/scripts/finalize_render_observations.py /tmp/render-observations
+
+## Strict renderer acceptance
+
+The harvest is an oracle only because `phase4/scripts/check_render_oracle.py`
+uses it to accept or reject our renderer. The workflow downloads the exact
+native artifact, renders the `cases/` directory carried inside it, and compares:
+
+- every BGRA channel of every pixel, with no tolerance;
+- case and node completeness, desired/actual sizes and layout slots;
+- effective element-to-root transforms, clips, opacity, visibility and z-order;
+- DirectWrite text content, family, size, baseline, advances, glyph indices and
+  offsets;
+- named refusals and text failures, both of which are acceptance failures even
+  if the accidentally blank pixels match.
+
+The report gives the first differing pixel, mismatch bounds, per-channel maximum
+delta, both SHA-256 values and boundary-specific structural errors. Missing
+output cannot pass vacuously, and malformed oracle data exits as an
+infrastructure error rather than as a renderer mismatch.
+
+The comparator is strict today and exits 1 while Wave 6 is incomplete. CI marks
+that one step `continue-on-error` so the far-future gate does not block current
+layout work; the red step and `native-render-acceptance-<os-build>` report remain
+visible. Removing that single workflow line enables enforcement without
+changing the test or its expectations.
+
+Equivalent local invocation, given a downloaded native artifact:
+
+    build/render_oracle_cases native-render-oracle/cases /tmp/actual fonts theme-resources
+    python3 phase4/scripts/check_render_oracle.py \
+        --oracle native-render-oracle --actual /tmp/actual --output acceptance.json
+
+## What the oracle cycle records and what remains
+
+1. **Recorded now: rendered output** — the arranged tree painted by the real
+   runtime into a readable BGRA8 surface, per focused case.
+2. **Recorded now: the render offset inside a layout slot.** The live-tree probe
+   records `TransformToVisual` basis points as well as the layout slot, including
+   centred, right-aligned and transformed elements.
+3. **Recorded now for the focused overlap case: alpha composition.** Expanding
+   this across the fifteen blocked layout cases follows review of the first
+   artifact.
+4. **Recorded now at the public DirectWrite boundary: glyph runs.** The text
+   layout callback records indices, advances, offsets and raster settings. It
+   complements the authoritative XAML pixels and makes a mismatch attributable
+   without intercepting private calls made inside XAML.
+5. **Still needed: the default `TextBlock` foreground**, then corner radii,
+   gradients, shadows and opacity layers in Terminal-frequency order.

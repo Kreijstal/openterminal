@@ -5,9 +5,9 @@
 namespace openxaml {
 namespace {
 
-// Registered so the markup can name it; its value never reaches the store --
-// see shape.h. Stroke, Fill and Stretch are deliberately absent, so markup
-// setting one is refused by name rather than measured as Stretch="None".
+// Registered so markup, styles and animations resolve the real Shape owner
+// chain. Rendering retains the values separately from the dependency store;
+// unsupported geometry/stroke work is named by the display-list compiler.
 const DependencyProperty* const kData =
     RegisterProperty("Path", "Data", {std::string(), false, true});
 
@@ -16,6 +16,31 @@ const std::vector<std::string> kRectangleOwners = {
     "Rectangle", "Shape", "FrameworkElement", "UIElement"};
 const DependencyProperty* const kFill =
     RegisterProperty("Shape", "Fill", {std::string(), false, false});
+const DependencyProperty* const kStroke =
+    RegisterProperty("Shape", "Stroke", {std::string(), false, false});
+const DependencyProperty* const kStrokeMiterLimit =
+    RegisterProperty("Shape", "StrokeMiterLimit", {10.0, false, false});
+const DependencyProperty* const kStrokeThickness =
+    RegisterProperty("Shape", "StrokeThickness", {0.0, false, true});
+const DependencyProperty* const kStrokeStartLineCap =
+    RegisterProperty("Shape", "StrokeStartLineCap",
+                     {static_cast<int>(ShapeLineCap::Flat), false, false});
+const DependencyProperty* const kStrokeEndLineCap =
+    RegisterProperty("Shape", "StrokeEndLineCap",
+                     {static_cast<int>(ShapeLineCap::Flat), false, false});
+const DependencyProperty* const kStrokeLineJoin =
+    RegisterProperty("Shape", "StrokeLineJoin",
+                     {static_cast<int>(ShapeLineJoin::Miter), false, false});
+const DependencyProperty* const kStrokeDashOffset =
+    RegisterProperty("Shape", "StrokeDashOffset", {0.0, false, false});
+const DependencyProperty* const kStrokeDashCap =
+    RegisterProperty("Shape", "StrokeDashCap",
+                     {static_cast<int>(ShapeLineCap::Flat), false, false});
+const DependencyProperty* const kStrokeDashArray =
+    RegisterProperty("Shape", "StrokeDashArray", {std::string(), false, false});
+const DependencyProperty* const kStretch =
+    RegisterProperty("Shape", "Stretch",
+                     {static_cast<int>(ShapeStretch::None), false, true});
 const DependencyProperty* const kRadiusX =
     RegisterProperty("Rectangle", "RadiusX", {0.0, false, false});
 const DependencyProperty* const kRadiusY =

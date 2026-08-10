@@ -14,10 +14,86 @@
 #define OPENXAML_GEOMETRY_H
 
 #include <string>
+#include <utility>
 
 #include "layout.h"
 
 namespace openxaml {
+
+enum class VisualClipKind { None, Rectangle, Unsupported };
+
+enum class VisualTransformKind { None, Rotate, Scale, Unsupported };
+
+struct VisualTransform {
+    VisualTransformKind kind = VisualTransformKind::None;
+    double angle_degrees = 0.0;
+    double scale_x = 1.0;
+    double scale_y = 1.0;
+    double center_x = 0.0;
+    double center_y = 0.0;
+    std::string type;
+
+    static VisualTransform Rotate(double angle) {
+        VisualTransform result;
+        result.kind = VisualTransformKind::Rotate;
+        result.angle_degrees = angle;
+        result.type = "Windows.UI.Xaml.Media.RotateTransform";
+        return result;
+    }
+    static VisualTransform Scale(double x, double y, double center_x = 0.0,
+                                 double center_y = 0.0) {
+        VisualTransform result;
+        result.kind = VisualTransformKind::Scale;
+        result.scale_x = x;
+        result.scale_y = y;
+        result.center_x = center_x;
+        result.center_y = center_y;
+        result.type = "Windows.UI.Xaml.Media.ScaleTransform";
+        return result;
+    }
+    static VisualTransform Unsupported(std::string runtime_type) {
+        VisualTransform result;
+        result.kind = VisualTransformKind::Unsupported;
+        result.type = std::move(runtime_type);
+        return result;
+    }
+};
+
+inline bool operator==(const VisualTransform& left, const VisualTransform& right) {
+    return left.kind == right.kind && left.angle_degrees == right.angle_degrees &&
+           left.scale_x == right.scale_x && left.scale_y == right.scale_y &&
+           left.center_x == right.center_x && left.center_y == right.center_y &&
+           left.type == right.type;
+}
+inline bool operator!=(const VisualTransform& left, const VisualTransform& right) {
+    return !(left == right);
+}
+
+// UIElement.Clip is retained visual state, independent of layout geometry.
+// Rectangle is the exact supported subset. Unsupported preserves the declared
+// runtime type so rendering can refuse it by name instead of dropping it.
+struct VisualClip {
+    VisualClipKind kind = VisualClipKind::None;
+    Rect bounds;
+    std::string type;
+
+    static VisualClip Rectangle(Rect rect) {
+        return {VisualClipKind::Rectangle, rect,
+                "Windows.UI.Xaml.Media.RectangleGeometry"};
+    }
+    static VisualClip Unsupported(std::string runtime_type) {
+        return {VisualClipKind::Unsupported, {}, std::move(runtime_type)};
+    }
+};
+
+inline bool operator==(const VisualClip& left, const VisualClip& right) {
+    return left.kind == right.kind && left.bounds.x == right.bounds.x &&
+           left.bounds.y == right.bounds.y && left.bounds.width == right.bounds.width &&
+           left.bounds.height == right.bounds.height && left.type == right.type;
+}
+inline bool operator!=(const VisualClip& left, const VisualClip& right) {
+    return !(left == right);
+}
 
 struct GeometryBounds {
     // An empty geometry has no edges at all, which is not the same as one

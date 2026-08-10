@@ -29,6 +29,14 @@ struct Size {
     double height = 0.0;
 };
 
+// A position in the coordinate space of an element's visual parent. Layout
+// slots and rendered origins deliberately use the same coordinate space, but
+// are not the same point once FrameworkElement alignment or margins apply.
+struct Point {
+    double x = 0.0;
+    double y = 0.0;
+};
+
 struct Rect {
     double x = 0.0;
     double y = 0.0;
@@ -66,10 +74,9 @@ enum class Orientation { Horizontal, Vertical };
 // one).
 enum class Visibility { Visible, Collapsed };
 
-// Where an element is positioned inside a slot larger than the size it
-// arranged at. The layout slot is what the probe records, so this only becomes
-// observable through a parent that passes an aligned rect down -- a
-// ContentPresenter, for instance -- rather than through the element itself.
+// Where an element is positioned inside the margin-reduced part of a slot.
+// Element::Arrange stores this as a parent-local render origin without moving
+// the layout slot, matching FrameworkElement's visual-offset contract.
 inline double AlignmentOffset(HorizontalAlignment alignment, double client, double ink) {
     // Stretch degenerates to Left when the content is about to be clipped;
     // centring something that does not fit would hide both of its edges

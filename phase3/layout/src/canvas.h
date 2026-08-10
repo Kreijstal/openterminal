@@ -40,9 +40,12 @@ public:
     static void SetLeft(Element& element, double value);
     static double GetTop(const Element& element);
     static void SetTop(Element& element, double value);
+    static int GetZIndex(const Element& element);
+    static void SetZIndex(Element& element, int value);
 
     static const DependencyProperty& LeftProperty();
     static const DependencyProperty& TopProperty();
+    static const DependencyProperty& ZIndexProperty();
 
 protected:
     Size MeasureOverride(Size available) override;

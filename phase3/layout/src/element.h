@@ -16,6 +16,8 @@
 
 #include <memory>
 #include <functional>
+#include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -24,6 +26,8 @@
 #include "property.h"
 #include "binding.h"
 #include "events.h"
+#include "external_surface.h"
+#include "geometry.h"
 #include "visual_state.h"
 
 namespace openxaml {
@@ -56,9 +60,54 @@ const DependencyProperty& PanelBackgroundProperty();
 // The owner shared by Control and TextBlock. Not a runtime type -- see above.
 inline constexpr const char* kTextPropertyOwner = "TextProperties";
 
+// The host owns this object and elements keep only weak references to it. A
+// closed host can therefore make every callback inert in one operation even
+// if a detached element was accidentally retained by a caller. Explicit tree
+// detachment is still required; this is the lifetime backstop, not a substitute
+// for correct ownership.
+class RenderInvalidationSink final {
+public:
+    using Callback = std::function<void(bool layout)>;
+
+    explicit RenderInvalidationSink(Callback callback)
+        : callback_(std::move(callback)) {}
+
+    void Notify(bool layout) {
+        // A callback may close the sink. Invoke a copy so clearing callback_
+        // during the call cannot invalidate the callable on the stack.
+        Callback callback;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            callback = callback_;
+        }
+        if (callback) callback(layout);
+    }
+    void Close() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        callback_ = {};
+    }
+    bool open() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return static_cast<bool>(callback_);
+    }
+
+private:
+    mutable std::mutex mutex_;
+    Callback callback_;
+};
+
 class Element : public DependencyObject {
 public:
-    Element() { events_.Bind(this); }
+    Element();
+    Element(const Element&) = delete;
+    Element& operator=(const Element&) = delete;
+    Element(Element&&) = delete;
+    Element& operator=(Element&&) = delete;
+
+    // Stable for this element's lifetime and never derived from its address.
+    // Retained snapshots can therefore reuse a node identity without pointer
+    // reuse making a new element look like an old one.
+    std::uint64_t render_node_id() const { return render_node_id_; }
 
     // The name the oracle reports, so that results compare directly against
     // measurements from the real runtime.
@@ -109,24 +158,25 @@ public:
     // the slot but never moves the slot.
     Rect layout_slot() const { return layout_slot_; }
 
+    // The retained visual origin in the parent's coordinate space. Arrange
+    // computes it after ArrangeOverride has returned the ink size: margins
+    // inset the client box and alignment positions that ink inside it. Keeping
+    // this separately is what lets LayoutInformation continue reporting the
+    // unchanged slot while rendering uses the real FrameworkElement offset.
+    Point render_origin() const { return render_origin_; }
+
     // Whether the element was given layout storage, which is the difference
     // between "arranged at zero" and "never arranged". The render pass needs
     // it: an element with no storage has no rect the corpus has verified, so
     // it is a named no-draw rather than a rect at the origin.
     bool has_layout_storage() const { return has_layout_storage_; }
 
-    // Where this element paints, in its parent's coordinates: the slot origin
-    // and the render size.
-    //
-    // Not the slot's size. An element aligned other than Stretch arranges at
-    // what it asked for and the slot stays as wide as the parent gave it, so
-    // the two differ -- and where they differ the runtime also moves the
-    // element inside the slot, which nothing recorded pins. The render pass
-    // detects exactly that case and refuses it by name rather than painting at
-    // an origin no measurement supports; see phase3/render.
+    // Where this element paints, in its parent's coordinates. This is the
+    // retained render origin paired with the element's unclipped render size,
+    // not the layout slot's origin or size.
     Rect render_bounds() const {
         const Size size = render_size();
-        return Rect{layout_slot_.x, layout_slot_.y, size.width, size.height};
+        return Rect{render_origin_.x, render_origin_.y, size.width, size.height};
     }
 
     // The brushes the markup set, carried for the render pass. Layout reads
@@ -137,8 +187,44 @@ public:
     void set_border_brush(BrushValue value) { border_brush_ = value; }
     const BrushValue& fill_brush() const { return fill_brush_; }
     void set_fill_brush(BrushValue value) { fill_brush_ = value; }
+    const BrushValue& stroke_brush() const { return stroke_brush_; }
+    void set_stroke_brush(BrushValue value) { stroke_brush_ = value; }
+    const BrushValue& foreground_brush() const { return foreground_brush_; }
+    void set_foreground_brush(BrushValue value) { foreground_brush_ = value; }
+
+    void SetExternalSurfaceProvider(
+        std::shared_ptr<const ExternalSurfaceProvider> provider) {
+        external_surface_provider_ = std::move(provider);
+    }
+    ExternalSurfaceReference CaptureExternalSurface() const noexcept {
+        return external_surface_provider_
+            ? external_surface_provider_->CaptureExternalSurface()
+            : ExternalSurfaceReference{};
+    }
+    void NotifyExternalSurfaceChanged() { InvalidateRender(false); }
 
     virtual std::vector<Element*> Children() const { return {}; }
+
+    // Visual ownership is independent from C++ allocation ownership. The
+    // layout-only implementation usually owns children with unique_ptr, while
+    // the WinRT projection owns them with COM references. Both must form one
+    // acyclic, single-parent visual tree.
+    Element* visual_parent() const { return visual_parent_; }
+    bool CanAttachVisualChild(const Element& child) const;
+    bool AttachVisualChild(Element& child);
+    void DetachVisualChild(Element& child);
+
+    // Claims a root for one host-owned invalidation sink. Attaching a different
+    // live sink is refused: visual_parent cannot detect a root installed in two
+    // islands. A weak reference avoids the host -> content -> callback -> host
+    // cycle. Detach is identity-checked so a stale host cannot disconnect a
+    // root that has since moved elsewhere.
+    bool AttachRenderInvalidationSink(
+        const std::shared_ptr<RenderInvalidationSink>& sink);
+    void DetachRenderInvalidationSink(
+        const std::shared_ptr<RenderInvalidationSink>& sink);
+    void InvalidateRender(bool layout);
+    void NotifyVisualStructureChanged() { InvalidateRender(true); }
 
     // The WinRT bridge installs this callback on each projected element. An
     // island layout pass walks the layout tree and invokes it after arrange,
@@ -187,6 +273,9 @@ public:
         visual_states_ = std::move(manager);
     }
     VisualStateManager* visual_state_manager() const { return visual_states_.get(); }
+    bool GoToState(const std::string& state_name, bool use_transitions = true) {
+        return visual_states_ && visual_states_->GoToState(state_name, use_transitions);
+    }
 
     // FrameworkElement properties. Width and Height are NaN when unset, which
     // is what Auto means: no explicit size, take what the content needs.
@@ -245,6 +334,17 @@ public:
     double opacity() const { return GetDouble(OpacityProperty()); }
     void set_opacity(double value) { SetValue(OpacityProperty(), value); }
 
+    bool has_render_transform() const {
+        return visual_transform_.kind != VisualTransformKind::None;
+    }
+    const VisualTransform& visual_transform() const { return visual_transform_; }
+    void set_visual_transform(VisualTransform value);
+    Point render_transform_origin() const { return render_transform_origin_; }
+    void set_render_transform_origin(Point value);
+
+    const VisualClip& visual_clip() const { return visual_clip_; }
+    void set_visual_clip(VisualClip value);
+
     static const DependencyProperty& WidthProperty();
     static const DependencyProperty& HeightProperty();
     static const DependencyProperty& MinWidthProperty();
@@ -266,11 +366,19 @@ protected:
     void OnPropertyChanged(const DependencyProperty& property) override;
     std::vector<DependencyObject*> InheritanceChildren() const override;
 
-    // Called by whatever takes ownership of a child, so that the child reads
-    // inherited values through its new parent from that point on.
-    void Adopt(Element& child) { child.SetInheritanceParent(this); }
+    // Called by layout classes that own a child directly. A second parent or a
+    // cycle is an implementation error rather than a tree to traverse until it
+    // overflows.
+    void Adopt(Element& child);
+    void Orphan(Element& child) { DetachVisualChild(child); }
 
 private:
+    void PropagateRenderInvalidationSink(
+        std::weak_ptr<RenderInvalidationSink> sink);
+
+    const std::uint64_t render_node_id_;
+    Element* visual_parent_ = nullptr;
+    std::weak_ptr<RenderInvalidationSink> render_invalidation_sink_;
     std::function<void()> layout_pass_callback_;
     // True once the element has been given layout storage, which happens on
     // the first Measure that it takes part in. Both recorded sizes read it.
@@ -279,6 +387,10 @@ private:
     bool has_layout_storage_ = false;
     Size desired_size_;
     Size render_size_;
+    Point render_origin_;
+    VisualTransform visual_transform_;
+    Point render_transform_origin_;
+    VisualClip visual_clip_;
     // Desired size before max-clamping and before the parent's available size
     // capped it. Arrange needs it: the layout protocol says a child is never
     // arranged smaller than what it asked for, even when the parent had less
@@ -289,6 +401,9 @@ private:
     BrushValue background_brush_;
     BrushValue border_brush_;
     BrushValue fill_brush_;
+    BrushValue stroke_brush_;
+    BrushValue foreground_brush_;
+    std::shared_ptr<const ExternalSurfaceProvider> external_surface_provider_;
     EventRegistrations events_;
     std::vector<std::unique_ptr<BindingExpression>> bindings_;
     std::shared_ptr<NameScope> namescope_;

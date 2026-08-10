@@ -15,10 +15,10 @@ namespace {
 // its own fills it.
 const DependencyProperty* const kHorizontalContentAlignment =
     RegisterProperty("ContentPresenter", "HorizontalContentAlignment",
-                     {static_cast<int>(HorizontalAlignment::Stretch), false, false});
+                     {static_cast<int>(HorizontalAlignment::Stretch), false, false, true});
 const DependencyProperty* const kVerticalContentAlignment =
     RegisterProperty("ContentPresenter", "VerticalContentAlignment",
-                     {static_cast<int>(VerticalAlignment::Stretch), false, false});
+                     {static_cast<int>(VerticalAlignment::Stretch), false, false, true});
 
 // Its own rather than Panel's: a ContentPresenter derives straight from
 // FrameworkElement. Nothing reads it -- see brush.h -- but the registry has to

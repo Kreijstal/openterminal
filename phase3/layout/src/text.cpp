@@ -3,10 +3,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <mutex>
 #include <vector>
 
 namespace openxaml {
 namespace {
+
+std::mutex g_runtime_text_mutex;
+std::shared_ptr<RuntimeTextProvider> g_runtime_text_provider;
 
 // --- what the runtime was observed to do --------------------------------------
 //
@@ -198,6 +202,7 @@ std::vector<Glyph> Shape(const std::string& text, const std::string& family,
     for (size_t index = 0; index < codes.size(); ++index) {
         const char32_t code = codes[index];
         const auto found = font.advances.find(code);
+        double advance = 0.0;
         if (found == font.advances.end()) {
             // Which metrics are loaded decides what the reader has to do about
             // it: harvest a font that covers the character, or -- for the
@@ -209,27 +214,30 @@ std::vector<Glyph> Shape(const std::string& text, const std::string& family,
                     Describe(code) + "; only characters the corpus measures alone are "
                     "solvable, so this case needs the harvested metrics");
             }
-            // No family in the list has the character, and the runtime does not
-            // stop there: L4-icon-rule-mdl2-latin-14 asks Segoe MDL2 Assets for
-            // 'M' and the oracle answers 10 wide, which is neither the icon
-            // font's em (14) nor Segoe UI's M at that size (12.57). So it fell
-            // back past every family the markup names, to a font chosen by
-            // rules this corpus records nothing about. Refusing is the only
-            // honest answer until a case measures which font that is.
-            throw TextError("no family in \"" + family + "\" has an advance for " +
-                            Describe(code) + "; the runtime falls back past the families "
-                            "a FontFamily names and this corpus harvests only those");
+            const auto fallback = font.system_fallbacks.find(code);
+            if (fallback == font.system_fallbacks.end()) {
+                throw TextError("no family in \"" + family + "\" has an advance for " +
+                                Describe(code) + "; DirectWrite system fallback was not "
+                                "harvested for that codepoint");
+            }
+            const double embolden = simulates_bold
+                                        ? kBoldSimulationEm * fallback->second.units_per_em
+                                        : 0.0;
+            advance = (fallback->second.advance + embolden) * fallback->second.scale *
+                      font_size / fallback->second.units_per_em;
+        } else {
+            const double pair = index + 1 < codes.size()
+                                    ? font.PairAdjustment(code, codes[index + 1], index == 0)
+                                    : 0.0;
+            // The emboldening is a pen width, so it is a fraction of the em rather
+            // than of the glyph. Every recorded case is one em wide, which is where
+            // the two readings coincide -- see rule 6.
+            const double embolden =
+                simulates_bold ? kBoldSimulationEm * font.units_per_em : 0.0;
+            advance = (found->second + pair + embolden) * font_size / font.units_per_em;
         }
-        const double pair = index + 1 < codes.size()
-                                ? font.PairAdjustment(code, codes[index + 1], index == 0)
-                                : 0.0;
-        // The emboldening is a pen width, so it is a fraction of the em rather
-        // than of the glyph. Every recorded case is one em wide, which is where
-        // the two readings coincide -- see rule 6.
-        const double embolden = simulates_bold ? kBoldSimulationEm * font.units_per_em : 0.0;
         Glyph glyph;
         glyph.code = code;
-        const double advance = (found->second + pair + embolden) * font_size / font.units_per_em;
         glyph.advance = snaps ? SnapText(advance) : advance;
         glyph.space = IsBreakSpace(code);
         glyphs.push_back(glyph);
@@ -307,6 +315,16 @@ std::vector<double> BreakLines(const std::vector<Glyph>& glyphs, double limit) {
 
 }  // namespace
 
+void SetRuntimeTextProvider(std::shared_ptr<RuntimeTextProvider> provider) {
+    std::lock_guard<std::mutex> lock(g_runtime_text_mutex);
+    g_runtime_text_provider = std::move(provider);
+}
+
+std::shared_ptr<RuntimeTextProvider> GetRuntimeTextProvider() {
+    std::lock_guard<std::mutex> lock(g_runtime_text_mutex);
+    return g_runtime_text_provider;
+}
+
 // --- FontLibrary --------------------------------------------------------------
 
 void FontLibrary::Add(std::string family, FontMetrics metrics) {
@@ -322,6 +340,18 @@ bool FontLibrary::SetKerning(const std::string& family,
 }
 
 const FontMetrics* FontLibrary::Find(const std::string& family) const {
+    if (std::shared_ptr<RuntimeTextProvider> provider = GetRuntimeTextProvider()) {
+        std::lock_guard<std::mutex> lock(runtime_fonts_mutex_);
+        const auto cached = runtime_fonts_.find(family);
+        if (cached != runtime_fonts_.end()) return &cached->second;
+        FontMetrics metrics;
+        std::string resolved;
+        std::string diagnostic;
+        if (provider->ResolveFontMetrics(family, metrics, resolved, diagnostic)) {
+            return &runtime_fonts_.emplace(family, std::move(metrics)).first->second;
+        }
+        return nullptr;
+    }
     const auto found = fonts_.find(family);
     if (found != fonts_.end()) return &found->second;
     // XAML accepts a comma-separated fallback list. Use the first harvested
@@ -405,6 +435,21 @@ const std::vector<std::string>& TextBlock::Owners() { return kOwners; }
 std::vector<double> TextBlock::ShapedAdvances() const {
     const std::string& family = font_family();
     const std::string& content = text();
+    if (std::shared_ptr<RuntimeTextProvider> provider = GetRuntimeTextProvider()) {
+        if (content.empty()) return {};
+        RuntimeTextResult result;
+        std::string diagnostic;
+        const RuntimeTextRequest request{family, content, font_size(), kInfinity,
+                                         false, simulates_bold_};
+        if (!provider->Layout(request, result, diagnostic)) {
+            runtime_text_refusal_ = diagnostic.empty()
+                ? "the runtime text provider refused the requested run"
+                : diagnostic;
+            return {};
+        }
+        runtime_text_refusal_.clear();
+        return result.advances;
+    }
     const FontMetrics* font = FontLibrary::Default().FindForText(family, content);
     if (!font || font->units_per_em <= 0.0 || content.empty()) return {};
     const std::vector<Glyph> glyphs =
@@ -419,6 +464,25 @@ Size TextBlock::LayoutText(double limit) const {
     const std::string& family = font_family();
     const double size = font_size();
     const std::string& content = text();
+
+    if (std::shared_ptr<RuntimeTextProvider> provider = GetRuntimeTextProvider()) {
+        RuntimeTextResult result;
+        std::string diagnostic;
+        const RuntimeTextRequest request{
+            family, content, size, limit,
+            text_wrapping() == TextWrapping::Wrap, simulates_bold_};
+        if (!provider->Layout(request, result, diagnostic)) {
+            runtime_text_refusal_ = diagnostic.empty()
+                ? "the runtime text provider refused the requested run"
+                : diagnostic;
+            // No font metrics means no verified desired ink extent. Zero is
+            // the explicit no-layout contribution paired with the retained
+            // refusal, not a substitute font or an estimated line box.
+            return {};
+        }
+        runtime_text_refusal_.clear();
+        return result.size;
+    }
 
     // Two families, because a fallback list splits the answer. The line box
     // belongs to the family that was named first -- a FontIcon in Terminal's

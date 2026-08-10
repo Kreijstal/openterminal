@@ -9,11 +9,14 @@ const DependencyProperty* const kBorderThickness =
     RegisterProperty(kChromePropertyOwner, "BorderThickness", {Thickness{}, false, true});
 const DependencyProperty* const kPadding =
     RegisterProperty(kChromePropertyOwner, "Padding", {Thickness{}, false, true});
+const DependencyProperty* const kBorderBrush =
+    RegisterProperty(kChromePropertyOwner, "BorderBrush", {std::string(), false, false});
 
 }  // namespace
 
 const DependencyProperty& ChromeBorderThicknessProperty() { return *kBorderThickness; }
 const DependencyProperty& ChromePaddingProperty() { return *kPadding; }
+const DependencyProperty& ChromeBorderBrushProperty() { return *kBorderBrush; }
 
 Thickness RoundBorderThickness(const Element& element, const Thickness& thickness) {
     if (!element.use_layout_rounding()) return thickness;

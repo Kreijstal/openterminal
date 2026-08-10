@@ -1,6 +1,8 @@
 #include "display_list.h"
 
 #include <cmath>
+#include <memory>
+#include <stdexcept>
 
 #include "border.h"
 #include "canvas.h"
@@ -8,6 +10,7 @@
 #include "content_presenter.h"
 #include "control.h"
 #include "image.h"
+#include "icon.h"
 #include "shape.h"
 #include "text.h"
 
@@ -19,12 +22,11 @@ namespace {
 // the line box -- the first installed entry of a fallback list, which is the
 // same one TextBlock::LayoutText measures the height from.
 //
-// The line box is ascent + descent + gap. Where the gap goes has no oracle:
-// nothing in the corpus records a baseline, only line heights, so this puts the
-// whole gap above the ascent (DirectWrite's default) and every font the ink
-// gate exercises has a zero gap, which makes the choice unobservable there. A
-// font with a real gap would be the case that decides it, and there isn't one
-// recorded yet.
+// The line box is ascent + descent + gap. The original layout corpus records
+// only line heights, so this puts the whole gap above the ascent (DirectWrite's
+// default). The focused render oracle now records baselines and the strict
+// acceptance test checks this decision for its explicit text programs; a font
+// with a nonzero gap is still needed to distinguish every possible placement.
 double BaselineOf(const std::string& family, double size) {
     const FontMetrics* line_font = FontLibrary::Default().Find(family);
     if (!line_font || line_font->units_per_em <= 0.0) return 0.0;
@@ -33,6 +35,7 @@ double BaselineOf(const std::string& family, double size) {
 
 struct Walker {
     DisplayList out;
+    std::vector<VisualNode> nodes;
 
     void Refuse(const std::string& path, const std::string& feature, const std::string& reason) {
         out.refusals.push_back(Refusal{path, feature, reason});
@@ -58,22 +61,65 @@ struct Walker {
         return false;
     }
 
+    struct RenderGeometry {
+        openxaml::Point origin;
+        Size size;
+        bool derived_from_explicit_canvas_state = false;
+    };
+
+    static bool HasExplicitExtent(const Element& element) {
+        return !IsAuto(element.width()) && !IsAuto(element.height());
+    }
+
+    // Canvas and its Shape children are the measured exception: a root Canvas
+    // can have no layout storage, and therefore never measures its children,
+    // while explicit Width/Height and Canvas.Left/Top still define their
+    // visuals. Keep those render facts separate from public DesiredSize and
+    // ActualSize, which must continue to report the harvested zeros.
+    static RenderGeometry GeometryOf(const Element& element) {
+        if (element.has_layout_storage())
+            return {element.render_origin(), element.render_size(), false};
+
+        const bool is_canvas = dynamic_cast<const Canvas*>(&element) != nullptr;
+        const bool is_canvas_rectangle =
+            dynamic_cast<const Rectangle*>(&element) != nullptr &&
+            dynamic_cast<const Canvas*>(element.visual_parent()) != nullptr;
+        if ((is_canvas || is_canvas_rectangle) && HasExplicitExtent(element)) {
+            openxaml::Point origin = element.render_origin();
+            if (element.visual_parent())
+                origin = {Canvas::GetLeft(element), Canvas::GetTop(element)};
+            return {origin, element.specified_size(), true};
+        }
+        return {element.render_origin(), element.render_size(), false};
+    }
+
     void PaintFill(const std::string& path, const std::string& what, const Rect& bounds,
-                   const BrushValue& brush) {
+                   const Rect& local_bounds, const BrushValue& brush,
+                   LocalDisplayList& content) {
         if (!brush.declared) return;
+        if (brush.kind == BrushKind::Image) {
+            // A default ImageBrush has a null ImageSource and is exactly a
+            // transparent no-op. Keep a supplied source in the scene so that
+            // the selected backend, rather than the compiler, owns the
+            // decode/sampling capability boundary.
+            if (!brush.has_image_source) return;
+            if (brush.image_source.empty()) {
+                Refuse(path, what,
+                       "ImageBrush has a runtime ImageSource, but its source resource "
+                       "identity is not retained by the platform-neutral scene");
+                return;
+            }
+            if (bounds.width <= 0.0 || bounds.height <= 0.0) return;
+            content.commands.push_back(
+                LocalImageBrushFill{local_bounds, brush.image_source});
+            return;
+        }
         if (!brush.has_color) {
             Refuse(path, what,
-                   "a brush with no colour of its own -- a property-element brush or one a "
-                   "Style supplied; nothing here knows what colour it is");
+                   "the declared brush did not retain a supported concrete brush type");
             return;
         }
         if (brush.color.a == 0) return;  // Transparent paints nothing, which is correct.
-        if (brush.color.a != 0xff) {
-            Refuse(path, what,
-                   "a partly transparent brush needs alpha composition over what is under "
-                   "it, and no recorded measurement says what the runtime composes");
-            return;
-        }
         if (brush.color == ProbeInkColor()) {
             Refuse(path, what,
                    "the case paints the colour the dumps reserve for text ink, so ink and "
@@ -82,42 +128,105 @@ struct Walker {
         }
         if (bounds.width <= 0.0 || bounds.height <= 0.0) return;
         out.rects.push_back(RectOp{bounds, brush.color, path, what});
+        content.commands.push_back(LocalFillRect{local_bounds, brush.color});
     }
 
-    void Walk(const Element& element, const std::string& path, double parent_x, double parent_y) {
+    NodeId Walk(const Element& element, const std::string& path, NodeId parent,
+                std::uint64_t order, const Matrix3x2& parent_to_root) {
         const Rect slot = element.layout_slot();
         const Size actual = element.render_size();
-        const double x = parent_x + slot.x;
-        const double y = parent_y + slot.y;
+        const RenderGeometry geometry = GeometryOf(element);
+        const openxaml::Point origin = geometry.origin;
+        const Size visual_size = geometry.size;
+        Matrix3x2 content_transform = Matrix3x2::Identity();
+        if (element.visual_transform().kind == VisualTransformKind::Rotate) {
+            const openxaml::Point pivot{
+                visual_size.width * element.render_transform_origin().x,
+                visual_size.height * element.render_transform_origin().y};
+            content_transform = Matrix3x2::RotationAround(
+                element.visual_transform().angle_degrees, pivot);
+        } else if (element.visual_transform().kind == VisualTransformKind::Scale) {
+            const openxaml::Point pivot{
+                visual_size.width * element.render_transform_origin().x +
+                    element.visual_transform().center_x,
+                visual_size.height * element.render_transform_origin().y +
+                    element.visual_transform().center_y};
+            content_transform = Matrix3x2::ScaleAround(
+                element.visual_transform().scale_x,
+                element.visual_transform().scale_y, pivot);
+        }
+        const Matrix3x2 local_transform =
+            content_transform.Then(Matrix3x2::Translation(origin.x, origin.y));
+        const Matrix3x2 transform_to_root = local_transform.Then(parent_to_root);
+        const openxaml::Point absolute_origin =
+            transform_to_root.TransformPoint(openxaml::Point{});
+
+        VisualNode visual;
+        visual.id = NodeId{element.render_node_id()};
+        visual.parent = parent;
+        visual.local_bounds = Rect{0.0, 0.0, visual_size.width, visual_size.height};
+        visual.local_transform = local_transform;
+        if (element.visual_transform().kind == VisualTransformKind::Unsupported)
+            visual.unsupported_transform = element.visual_transform().type;
+        if (element.visual_clip().kind == VisualClipKind::Rectangle)
+            visual.clip = Clip::FromRect(element.visual_clip().bounds);
+        visual.opacity = element.opacity();
+        visual.visible = element.visibility() == Visibility::Visible;
+        visual.z_index = Canvas::GetZIndex(element);
+        visual.order = order;
+        const NodeId visual_id = visual.id;
+        const std::size_t visual_index = nodes.size();
+        nodes.push_back(std::move(visual));
+        auto content = std::make_shared<LocalDisplayList>();
 
         NodeGeometry node;
         node.path = path;
         node.type = element.TypeName();
         node.slot = slot;
         node.actual = actual;
-        node.abs_x = x;
-        node.abs_y = y;
+        node.abs_x = absolute_origin.x;
+        node.abs_y = absolute_origin.y;
+        node.transform_to_root = transform_to_root;
+        node.opacity = element.opacity();
+        node.clip = nodes[visual_index].clip;
+        node.z_index = Canvas::GetZIndex(element);
         node.has_layout_storage = element.has_layout_storage();
         node.visible = element.visibility() == Visibility::Visible;
         out.geometry.push_back(node);
 
-        const bool paints_something = element.background_brush().declared ||
-                                      element.fill_brush().declared ||
-                                      element.border_brush().declared ||
-                                      dynamic_cast<const TextBlock*>(&element) != nullptr;
+        ExternalSurfaceReference external_surface =
+            element.CaptureExternalSurface();
+
+        const auto potentially_paints = [](const BrushValue& brush) {
+            if (!brush.declared) return false;
+            if (brush.kind == BrushKind::Image) return brush.has_image_source;
+            if (brush.has_color) return brush.color.a != 0;
+            return true;  // Unknown declared brush must remain a refusal.
+        };
+        const bool paints_something = potentially_paints(element.background_brush()) ||
+                                      potentially_paints(element.fill_brush()) ||
+                                      (dynamic_cast<const Shape*>(&element) &&
+                                       static_cast<const Shape&>(element).stroke_thickness() > 0.0 &&
+                                       potentially_paints(element.stroke_brush())) ||
+                                      potentially_paints(element.border_brush()) ||
+                                      (dynamic_cast<const Image*>(&element) &&
+                                       static_cast<const Image&>(element).has_source()) ||
+                                      dynamic_cast<const TextBlock*>(&element) != nullptr ||
+                                      static_cast<bool>(external_surface);
 
         if (element.visibility() == Visibility::Collapsed) {
             // Collapsed is not "invisible": it is out of layout entirely, and
             // painting nothing is the whole of the correct behaviour. No
             // refusal -- there is nothing here that was not drawn.
-            return;
+            nodes[visual_index].content = std::move(content);
+            return visual_id;
         }
 
-        if (!element.has_layout_storage()) {
+        if (!element.has_layout_storage() && !geometry.derived_from_explicit_canvas_state) {
             // No layout storage means the runtime never gave this element a
             // measured or arranged rect, and the corpus records both as zero.
-            // A Rectangle under a Canvas really does render at its specified
-            // size somewhere; where, and at what size, is not in any recording.
+            // Explicit Canvas/Rectangle visual state was handled separately;
+            // anything left here has no complete render extent to compile.
             if (paints_something) {
                 Refuse(path, "unarranged element",
                        "the element takes no part in layout, so no recorded measurement gives "
@@ -125,53 +234,68 @@ struct Walker {
             }
             int unarranged_index = 0;
             for (const Element* child : element.RecordedChildren()) {
-                Walk(*child,
-                     path + "/" + child->TypeName() + "[" +
-                         std::to_string(unarranged_index++) + "]",
-                     x, y);
+                const std::uint64_t child_order = static_cast<std::uint64_t>(unarranged_index);
+                const NodeId child_id = Walk(
+                    *child,
+                    path + "/" + child->TypeName() + "[" +
+                        std::to_string(unarranged_index++) + "]",
+                    visual_id, child_order, transform_to_root);
+                nodes[visual_index].children.push_back(child_id);
             }
-            return;
+            nodes[visual_index].content = std::move(content);
+            return visual_id;
         }
 
-        if (!AreClose(element.opacity(), 1.0)) {
-            Refuse(path, "Opacity",
-                   "an opacity other than 1 makes the subtree a composed layer, and no "
-                   "recorded measurement says what it composes with");
+        if (element.visual_transform().kind == VisualTransformKind::Unsupported) {
+            Refuse(path, "RenderTransform",
+                   "the declared " + element.visual_transform().type +
+                       " is retained but only RotateTransform is implemented");
+        }
+        if (element.visual_clip().kind == VisualClipKind::Unsupported) {
+            Refuse(path, "Clip",
+                   "the declared " + element.visual_clip().type +
+                       " is retained but only RectangleGeometry clipping is implemented");
         }
 
-        // Where the element sits inside a slot bigger than it is.
-        //
-        // The layout core arranges an element at its slot's origin; only a
-        // ContentPresenter and a Control pass an already-aligned rect down. So
-        // for a Grid or StackPanel child that is not Stretch and did not fill
-        // its slot, the runtime moves it and nothing recorded says by how much
-        // -- the corpus records the slot and the size, never the offset between
-        // them. Painting at the slot origin would be a guess.
-        if (element.horizontal_alignment() != HorizontalAlignment::Stretch &&
-            element.horizontal_alignment() != HorizontalAlignment::Left &&
-            GreaterThan(slot.width, actual.width) && paints_something) {
-            Refuse(path, "HorizontalAlignment inside a wider slot",
-                   "the runtime moves the element within its slot and the corpus records only "
-                   "the slot; the render origin is not derivable");
-        }
-        if (element.vertical_alignment() != VerticalAlignment::Stretch &&
-            element.vertical_alignment() != VerticalAlignment::Top &&
-            GreaterThan(slot.height, actual.height) && paints_something) {
-            Refuse(path, "VerticalAlignment inside a taller slot",
-                   "the runtime moves the element within its slot and the corpus records only "
-                   "the slot; the render origin is not derivable");
+        const Rect local_bounds{0.0, 0.0, visual_size.width, visual_size.height};
+        const Rect bounds = transform_to_root.TransformRect(local_bounds);
+
+        PaintFill(path, "background", bounds, local_bounds, element.background_brush(),
+                  *content);
+
+        if (external_surface) {
+            content->commands.push_back(
+                LocalExternalSurface{local_bounds, std::move(external_surface)});
         }
 
-        const Rect bounds{x, y, actual.width, actual.height};
+        if (const auto* image = dynamic_cast<const Image*>(&element);
+            image && image->has_source() &&
+            local_bounds.width > 0.0 && local_bounds.height > 0.0) {
+            Refuse(path, "Source",
+                   "the live ImageSource type '" + image->source_type() +
+                       "' is retained, but immutable resource decoding and sampling "
+                       "are not implemented");
+        }
 
-        PaintFill(path, "background", bounds, element.background_brush());
-
-        // Shape.Fill. A Shape is never a layout element, so this is only ever
-        // reached through the branch above; it is here so the refusal names
-        // Fill rather than being silently folded into "unarranged".
         if (element.fill_brush().declared) {
-            Refuse(path, "Fill",
-                   "a Shape takes no part in layout, so the corpus records no rect to fill");
+            if (dynamic_cast<const Rectangle*>(&element)) {
+                PaintFill(path, "fill", bounds, local_bounds, element.fill_brush(), *content);
+            } else {
+                Refuse(path, "Fill",
+                       "this Shape's geometry is not a rectangular local fill");
+            }
+        }
+
+        if (const auto* shape = dynamic_cast<const Shape*>(&element)) {
+            if (shape->shape_stretch() != ShapeStretch::None) {
+                Refuse(path, "Stretch",
+                       "Shape geometry stretching is retained but not implemented");
+            }
+            if (shape->stroke_thickness() > 0.0 &&
+                element.stroke_brush().declared) {
+                Refuse(path, "Stroke",
+                       "Shape outline rasterization is retained but not implemented");
+            }
         }
 
         Thickness border{};
@@ -181,20 +305,22 @@ struct Walker {
             if (has_border && element.border_brush().declared) {
                 // Four rectangles, mitred the way a border is: the top and
                 // bottom run the full width, the sides fill what is left.
-                const double inner_top = y + border.top;
-                const double inner_bottom = y + actual.height - border.bottom;
-                PaintFill(path, "border-top", Rect{x, y, actual.width, border.top},
-                          element.border_brush());
-                PaintFill(path, "border-bottom",
-                          Rect{x, inner_bottom, actual.width, border.bottom},
-                          element.border_brush());
-                PaintFill(path, "border-left",
-                          Rect{x, inner_top, border.left, inner_bottom - inner_top},
-                          element.border_brush());
-                PaintFill(path, "border-right",
-                          Rect{x + actual.width - border.right, inner_top, border.right,
-                               inner_bottom - inner_top},
-                          element.border_brush());
+                const Rect top{0.0, 0.0, actual.width, border.top};
+                const Rect bottom{0.0, actual.height - border.bottom, actual.width,
+                                  border.bottom};
+                const Rect left{0.0, border.top, border.left,
+                                actual.height - border.top - border.bottom};
+                const Rect right{actual.width - border.right, border.top, border.right,
+                                 actual.height - border.top - border.bottom};
+                PaintFill(path, "border-top", transform_to_root.TransformRect(top), top,
+                          element.border_brush(), *content);
+                PaintFill(path, "border-bottom", transform_to_root.TransformRect(bottom),
+                          bottom,
+                          element.border_brush(), *content);
+                PaintFill(path, "border-left", transform_to_root.TransformRect(left), left,
+                          element.border_brush(), *content);
+                PaintFill(path, "border-right", transform_to_root.TransformRect(right), right,
+                          element.border_brush(), *content);
             }
             // A BorderThickness with no BorderBrush draws nothing in the
             // runtime either, so that is not a refusal -- it is the answer.
@@ -202,22 +328,62 @@ struct Walker {
 
         if (const auto* text = dynamic_cast<const TextBlock*>(&element)) {
             if (!text->text().empty()) {
-                TextOp op;
-                op.bounds = bounds;
-                op.text = text->text();
-                op.font_family = text->font_family();
-                op.font_size = text->font_size();
-                op.baseline = BaselineOf(op.font_family, op.font_size);
-                op.advances = text->ShapedAdvances();
-                op.path = path;
-                out.texts.push_back(op);
+                if (!text->runtime_text_refusal().empty()) {
+                    Refuse(path, "Text", text->runtime_text_refusal());
+                } else {
+                    Color text_color = ProbeInkColor();
+                    if (element.foreground_brush().declared) {
+                        if (!element.foreground_brush().has_color) {
+                            Refuse(path, "Foreground",
+                                   "the declared text brush has no retained solid colour");
+                        } else {
+                            text_color = element.foreground_brush().color;
+                        }
+                    }
+                    TextOp op;
+                    op.bounds = bounds;
+                    op.text = text->text();
+                    op.font_family = text->font_family();
+                    op.font_size = text->font_size();
+                    op.baseline = BaselineOf(op.font_family, op.font_size);
+                    op.advances = text->ShapedAdvances();
+                    op.wrap = text->text_wrapping() == TextWrapping::Wrap;
+                    op.bold = text->simulates_bold();
+                    op.path = path;
+                    out.texts.push_back(op);
+
+                    LocalText local;
+                    local.bounds = local_bounds;
+                    local.text = op.text;
+                    local.font_family = op.font_family;
+                    local.font_size = op.font_size;
+                    local.baseline = op.baseline;
+                    local.advances = op.advances;
+                    local.color = text_color;
+                    local.wrap = op.wrap;
+                    local.bold = op.bold;
+                    local.language = op.language;
+                    content->commands.push_back(std::move(local));
+                }
             }
+        }
+        if (const auto* icon = dynamic_cast<const FontIcon*>(&element)) {
+            if (!icon->runtime_text_refusal().empty())
+                Refuse(path, "Text", icon->runtime_text_refusal());
         }
 
         int index = 0;
-        for (const Element* child : element.RecordedChildren())
-            Walk(*child, path + "/" + child->TypeName() + "[" + std::to_string(index++) + "]", x,
-                 y);
+        for (const Element* child : element.RecordedChildren()) {
+            const std::uint64_t child_order = static_cast<std::uint64_t>(index);
+            const NodeId child_id =
+                Walk(*child,
+                     path + "/" + child->TypeName() + "[" + std::to_string(index++) + "]",
+                     visual_id, child_order, transform_to_root);
+            nodes[visual_index].children.push_back(child_id);
+        }
+
+        nodes[visual_index].content = std::move(content);
+        return visual_id;
     }
 
 };
@@ -227,7 +393,14 @@ struct Walker {
 DisplayList Build(const Element& root, Size surface) {
     Walker walker;
     walker.out.surface = surface;
-    walker.Walk(root, "/" + root.TypeName(), 0.0, 0.0);
+    const NodeId root_id =
+        walker.Walk(root, "/" + root.TypeName(), NodeId{}, 0, Matrix3x2::Identity());
+    auto scene = std::make_shared<SceneSnapshot>(surface, root_id, std::move(walker.nodes));
+    std::string validation_error;
+    if (!scene->Validate(&validation_error)) {
+        throw std::logic_error("render scene is invalid: " + validation_error);
+    }
+    walker.out.scene = std::move(scene);
     return std::move(walker.out);
 }
 

@@ -14,11 +14,33 @@
 
 namespace openxaml {
 
+class UserControl : public ContentControl {
+public:
+    std::string TypeName() const override { return "Windows.UI.Xaml.Controls.UserControl"; }
+    static const std::vector<std::string>& Owners();
+    const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
+
+protected:
+    // UserControl is a Control with one direct content child. Unlike a generic
+    // ContentControl, that child is measured with the complete available size
+    // and arranged to the complete final bounds; content alignment and padding
+    // belong to templated ContentControl presentation and do not constrain it.
+    Size MeasureOverride(Size available) override;
+    Size ArrangeOverride(Size final_size) override;
+};
+
 class Page : public ContentControl {
 public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.Page"; }
     static const std::vector<std::string>& Owners();
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
+
+protected:
+    // Page is a content host, but unlike a generic ContentControl its native
+    // layout contract always gives Content the complete page bounds. This is
+    // independent of Control.Horizontal/VerticalContentAlignment.
+    Size MeasureOverride(Size available) override;
+    Size ArrangeOverride(Size final_size) override;
 };
 
 struct NavigationEntry {

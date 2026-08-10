@@ -32,6 +32,7 @@ inline constexpr const char* kChromePropertyOwner = "ChromeProperties";
 
 const DependencyProperty& ChromeBorderThicknessProperty();
 const DependencyProperty& ChromePaddingProperty();
+const DependencyProperty& ChromeBorderBrushProperty();
 
 // Rounded the way the runtime rounds it: the border is drawn, so its edges
 // land on device pixels.

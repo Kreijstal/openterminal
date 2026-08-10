@@ -18,6 +18,7 @@
 #define OPENXAML_BRUSH_H
 
 #include <string>
+#include <utility>
 
 namespace openxaml {
 
@@ -34,15 +35,50 @@ inline bool operator==(const Color& x, const Color& y) {
 }
 inline bool operator!=(const Color& x, const Color& y) { return !(x == y); }
 
-// What a brush-typed attribute was set to, as far as anything downstream can
-// use it. `declared` says the markup set the property at all, which is not the
-// same as knowing the colour: a brush written as a property element, or one
-// built by a Style, is declared and has no colour here. The render pass turns
-// that difference into a named no-draw rather than a guess.
+enum class BrushKind {
+    // A declared brush whose concrete runtime type was not retained. This is
+    // a named rendering boundary, never an implicit transparent brush.
+    Unknown,
+    SolidColor,
+    Image,
+};
+
+// What a brush-typed property was set to, as far as anything downstream can
+// use it. `declared` says the property was set at all. The trailing kind and
+// image source keep old aggregate construction source-compatible while
+// distinguishing an empty ImageBrush (a real transparent no-op) from an
+// unknown brush whose paint must be refused.
 struct BrushValue {
     bool declared = false;
     bool has_color = false;
     Color color;
+    BrushKind kind = BrushKind::Unknown;
+    bool has_image_source = false;
+    std::string image_source;
+
+    BrushValue() = default;
+    BrushValue(bool is_declared, bool retains_color, Color retained_color)
+        : declared(is_declared),
+          has_color(retains_color),
+          color(retained_color),
+          kind(retains_color ? BrushKind::SolidColor : BrushKind::Unknown) {}
+    BrushValue(bool is_declared, bool retains_color, Color retained_color,
+               BrushKind retained_kind, bool retains_image_source,
+               std::string retained_image_source)
+        : declared(is_declared),
+          has_color(retains_color),
+          color(retained_color),
+          kind(retained_kind),
+          has_image_source(retains_image_source),
+          image_source(std::move(retained_image_source)) {}
+
+    static BrushValue SolidColor(Color value) {
+        return BrushValue{true, true, value, BrushKind::SolidColor, false, {}};
+    }
+    static BrushValue Image(bool has_source = false, std::string source = {}) {
+        return BrushValue{true, false, {}, BrushKind::Image, has_source,
+                          std::move(source)};
+    }
 };
 
 // The full runtime name of a brush type, as the oracle spells it. Throws

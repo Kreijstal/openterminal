@@ -193,6 +193,62 @@ void VisualStateMarkup() {
     CHECK(part->opacity() == 0.25);
 }
 
+void ElementStateEntryAppliesPropertiesAndInvalidatesByMetadata() {
+    const std::string markup =
+        "<Grid xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">"
+        "<VisualStateManager.VisualStateGroups>"
+        "<VisualStateGroup x:Name=\"CommonStates\">"
+        "<VisualState x:Name=\"Emphasized\">"
+        "<VisualState.Setters><Setter Target=\"Part.Width\" Value=\"80\"/>"
+        "</VisualState.Setters>"
+        "<Storyboard><DoubleAnimation Storyboard.TargetName=\"Part\" "
+        "Storyboard.TargetProperty=\"Opacity\" To=\"0.5\"/>"
+        "</Storyboard></VisualState>"
+        "<VisualState x:Name=\"Resting\"/>"
+        "</VisualStateGroup></VisualStateManager.VisualStateGroups>"
+        "<Border x:Name=\"Part\" Width=\"10\" Opacity=\"0.25\"/>"
+        "</Grid>";
+    std::unique_ptr<Element> root = LoadMarkup(markup);
+    auto* part = dynamic_cast<Border*>(root->Children().front());
+    CHECK(part != nullptr);
+    root->Measure({100.0, 100.0});
+    root->Arrange({0.0, 0.0, 100.0, 100.0});
+    CHECK(!part->needs_measure());
+
+    std::vector<bool> invalidations;
+    auto sink = std::make_shared<RenderInvalidationSink>(
+        [&](bool layout) { invalidations.push_back(layout); });
+    CHECK(root->AttachRenderInvalidationSink(sink));
+
+    CHECK(root->GoToState("Emphasized", false));
+    CHECK(part->width() == 80.0);
+    CHECK(part->opacity() == 0.5);
+    CHECK(part->needs_measure());
+    CHECK(invalidations.size() == 2);
+    CHECK(invalidations[0]);
+    CHECK(!invalidations[1]);
+
+    invalidations.clear();
+    CHECK(root->GoToState("Emphasized", true));
+    CHECK(invalidations.empty());
+    CHECK(!root->GoToState("Missing", false));
+    CHECK(invalidations.empty());
+
+    root->Measure({100.0, 100.0});
+    root->Arrange({0.0, 0.0, 100.0, 100.0});
+    CHECK(!part->needs_measure());
+    CHECK(root->GoToState("Resting", false));
+    CHECK(part->width() == 10.0);
+    CHECK(part->opacity() == 0.25);
+    CHECK(part->needs_measure());
+    CHECK(invalidations.size() == 2);
+    CHECK(invalidations[0]);
+    CHECK(!invalidations[1]);
+
+    Border no_states;
+    CHECK(!no_states.GoToState("Emphasized", false));
+}
+
 }  // namespace
 
 int main() {
@@ -201,4 +257,5 @@ int main() {
     TemplatesAndDefaultStyles();
     MarkupBindings();
     VisualStateMarkup();
+    ElementStateEntryAppliesPropertiesAndInvalidatesByMetadata();
 }

@@ -1,43 +1,43 @@
 // What an arranged tree paints -- and, just as importantly, what it refuses to.
 //
 // This is the whole of the render pass that has an opinion. It walks a tree the
-// layout core has already measured and arranged, and turns it into a flat list
-// of axis-aligned solid rectangles and positioned text runs. It draws nothing
-// itself: a backend (software here, GDI under Wine) consumes the list.
+// layout core has already measured and arranged, and turns it into retained
+// local display lists plus affine visual nodes. It draws nothing itself: a
+// backend consumes the immutable scene. The flat rectangles and text below
+// are acceptance sidecars only; transformed bounds there are root-space AABBs.
 //
 // The rule the whole file is built around: **paint only values derived from
 // recorded truth.**
 //
-// The corpus records, per element, a desired size, a render size and a layout
-// slot -- and nothing else. So a rectangle's geometry is derivable (slot origin
-// plus render size, accumulated down the tree) and a rectangle's colour is
-// derivable when the markup or the theme dictionary spelled one. Everything
-// else is a *named no-draw*: an entry in `refusals` saying which element and
-// which feature, never an approximation. There is no recorded pixel truth yet
-// -- rendered-output probes are wave 6 in phase3/ROADMAP.md -- so a plausible
-// gradient or a plausible rounded corner would be exactly the "wrong number"
-// the project's standing rules forbid, with no measurement able to catch it.
+// Layout retains, per element, a desired size, render size, layout slot and the
+// FrameworkElement render origin computed by Arrange. Scene compilation adds
+// declared visual transforms around their retained origin without feeding any
+// of that state back into layout. Colours likewise come only from markup or a
+// theme dictionary. Everything else is a *named no-draw*: an entry in
+// `refusals` saying which element and which feature, never an approximation.
 //
-// The named no-draws are not a to-do list for this file. They are the work list
-// for the next oracle cycle: each one names a capability a rendered-output probe
-// would have to record before anything here could honestly paint it.
+// The named no-draws are the work list the native acceptance report exposes;
+// they are never counted as passes merely because the surface stayed blank.
 
 #ifndef OPENXAML_RENDER_DISPLAY_LIST_H
 #define OPENXAML_RENDER_DISPLAY_LIST_H
 
+#include <cstdint>
 #include <string>
+#include <memory>
 #include <vector>
 
 #include "brush.h"
 #include "element.h"
 #include "layout.h"
+#include "scene.h"
 
 namespace openxaml {
 namespace render {
 
-// A solid, axis-aligned rectangle in root coordinates. `what` says which part
-// of the element it is ("background", "border-left", ...), so a dump can be
-// read without re-deriving it.
+// A solid rectangle's root-space axis-aligned bounding box. The authoritative
+// geometry remains the LocalFillRect plus its VisualNode transform. `what`
+// says which part of the element it is ("background", "border-left", ...).
 struct RectOp {
     Rect bounds;
     Color color;
@@ -49,11 +49,16 @@ struct RectOp {
 //
 // The origin and the box are ours: they come out of the same arrange the corpus
 // verifies, and the advances the measurement path sums are the same advances a
-// backend must lay the glyphs on. What a glyph *looks like* has no oracle at
-// all, so the backend hands the string to the platform's own text output with
-// the real font selected and the imagery is the platform's. See the README.
+// backend must lay the glyphs on. This display list does not invent glyph
+// imagery: the backend hands the string to platform text output, while the
+// focused native acceptance test independently checks pixels and glyph runs.
 struct TextOp {
     Rect bounds;  // the arranged TextBlock, which is the run's box
+    // The CPU scene traversal resolves an axis-aligned retained clip before it
+    // delegates glyph imagery. Platform text backends must constrain every
+    // touched glyph pixel to this rectangle as well as to `bounds`.
+    bool has_clip = false;
+    Rect clip;
     std::string text;
     std::string font_family;
     double font_size = 0.0;
@@ -68,6 +73,9 @@ struct TextOp {
     // backend can lay the glyphs on the widths the corpus verified instead of
     // on whatever its rasteriser rounds them to.
     std::vector<double> advances;
+    bool wrap = false;
+    bool bold = false;
+    std::string language = "en-US";
     std::string path;
 };
 
@@ -81,10 +89,9 @@ struct Refusal {
 // One node's verified geometry, carried out of the pass so that a checker can
 // compare painted pixels against it without re-running layout.
 //
-// The columns are exactly the ones the measurement path reports -- `slot` is
-// what the recorded `offset` column holds and `actual` is the recorded `actual`
-// column -- plus the absolute origin this pass accumulated from them. A checker
-// re-adds the chain itself and refuses to take the absolute on trust.
+// `slot` and `actual` are the layout measurements. `abs` is the accumulated
+// retained render origin and is checked against the native transform-to-root
+// basis points rather than inferred from the slot.
 struct NodeGeometry {
     std::string path;
     std::string type;
@@ -92,6 +99,10 @@ struct NodeGeometry {
     Size actual;      // the render size
     double abs_x = 0.0;
     double abs_y = 0.0;
+    Matrix3x2 transform_to_root = Matrix3x2::Identity();
+    double opacity = 1.0;
+    Clip clip = Clip::None();
+    std::int32_t z_index = 0;
     bool has_layout_storage = false;
     bool visible = true;
 };
@@ -102,6 +113,12 @@ struct DisplayList {
     std::vector<TextOp> texts;
     std::vector<Refusal> refusals;
     std::vector<NodeGeometry> geometry;
+
+    // The retained, local-coordinate scene is the authoritative paint input.
+    // The flat vectors above remain temporarily as an acceptance-sidecar view:
+    // they let the existing oracle prove that migrating to retained nodes did
+    // not change the already-supported pixels or public geometry.
+    std::shared_ptr<const SceneSnapshot> scene;
 
     bool painted() const { return refusals.empty(); }
 };

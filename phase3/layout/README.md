@@ -50,25 +50,21 @@ Against build `10.0.26100.33158`:
 | L1 | elements: explicit size, margin, shapes | 132 | **132** |
 | L2 | one parent, one child: alignment × margin × sizing, content | 264 | **264** |
 | L3 | panels: `StackPanel`, `Grid`, `Canvas`, `ScrollViewer` | 361 | **361** |
-| L4 | text and icons: `TextBlock`, `FontIcon` | 147 | **145** — two named refusals, see below |
-| L5 | resources, styles and the `x:` directives | 126 | **124** — the brace-escape pair, see the kerning omission |
-| L7 | Terminal's own pages | 90 | **84** — two refusal triples, see below |
+| L4 | text and icons: `TextBlock`, `FontIcon` | 186 | **185** — one missing system-font fallback mapping |
+| L5 | resources, styles and the `x:` directives | 126 | **126** |
+| L7 | Terminal's own pages | 90 | **90** |
 
-The two L4 refusals and the two L7 refusal triples are named, not
-approximate: `mdl2-latin-14` (which family the runtime fell back to is
-unrecorded), `mdl2-weight-14` and `88c43239e4-s*` (what `FontWeight`
-adds is unpinned by two observations — cases are authored to ask), and
-`4edb490008-s*` (waiting for the Cascadia Mono harvest to reach an
-oracle run). The counts above are against the fonts of the recorded
-run plus the committed derived kerning.
+The one L4 mismatch, `mdl2-latin-14`, reaches DirectWrite system fallback after
+Segoe MDL2 Assets lacks Latin `M`. The oracle records `10x14`, but not the
+selected fallback face, its scale or its unrounded advance. The core refuses
+that case instead of embedding a tuple-specific answer or guessing a font. The
+Windows workflow now discovers missing FontIcon glyphs from the generated
+corpus, asks DirectWrite for its mapping, and harvests the selected face's sfnt
+metrics. A new oracle artifact will exercise the generic fallback path.
 
-Every level is now fully measured: run 31019336758 re-baselined the oracle
-from 541 measurements to 1138, and the counts above are against that
-recording. The thirty-nine cases authored since — `L4-kern` asking which
-kerning pairs the runtime applies, and the weight probes beside it — are
-pending, not passing, until the next run records them; the section
-below on the [next re-baseline](#what-is-still-open) says what their
-arrival costs.
+The current pinned snapshot contains 1,177 measurements. The native layout core
+matches 1,176: 1,166 matching trees and ten matching recorded load failures,
+with the system-font fallback case above remaining explicit.
 
 ### Why L7 went from 36 to 33
 
@@ -878,21 +874,12 @@ does not do, so that a passing run is not read as more than it is:
 
 ## What is still open
 
-Run 31019336758 recorded every case this table used to list, and the wave-3
-tracks implemented the answers; the groups that once waited here are in the
-level table at the top, passing. What remains open is smaller and sharper:
+The groups that once waited here are in the level table at the top, passing.
+One related question remains open, but it no longer causes a mismatch:
 
 | open | cases | what settles it |
 |---|---:|---|
-| which kern pairs the runtime applies | 34 authored (`L4-kern`) | the next oracle run: one candidate pair per case splits the source-table, magnitude and glyph-class hypotheses |
-| what `FontWeight` adds to a glyph | 5 authored + `mdl2-weight-14`, `88c43239e4-s*` refusing | the next run: two observations fit three rules, the probes were written to disagree |
-| which family `mdl2-latin-14` fell back to | 1 refusing | a new kind of recording — the size is not explained by any harvested family |
-| Cascadia Mono | `4edb490008-s*` refusing | the harvest now reads it from the pinned Terminal checkout; the next run carries it |
-| the `brace-escape` pair | 2 failing on a number | the recorded runs imply a 153-design-unit adjustment somewhere in `{StaticResource NotAKey}`, and advances alone cannot say which pair holds it — `L4-kern` asks |
-
-The 39 authored cases are pending, not passing, and their arrival is priced:
-the digest gate stops the next measured run at `L4: 147 cases -> 186 cases`
-until the re-baseline is read and accepted deliberately.
+| which family `mdl2-latin-14` fell back to | 1 refusing in the current artifact | rerun the Windows workflow, which now records the selected face, scale and glyph metrics |
 
 The six `L5-styles` cases that carry `oracle_decides` are the ones neither
 reference settles for a `XamlReader.Load` with no `Application`:

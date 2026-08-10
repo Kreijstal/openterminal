@@ -122,6 +122,30 @@ void AFallbackListSplitsTheLineBoxFromTheGlyph() {
     CHECK(Near(plain.desired_size().width, 12) && Near(plain.desired_size().height, 12));
 }
 
+// System fallback is data, not a special case in FontIcon. DirectWrite's
+// mapped face contributes its own advance/upem and scale while the family XAML
+// named first continues to own the line box. Two sizes make a tuple-specific
+// desired-size override impossible to hide in this test.
+void HarvestedSystemFallbackScalesFromItsMappedFace() {
+    FontMetrics icons = SquareIcons(0xE76C);
+    icons.system_fallbacks[U'M'] = {"Mapped Sans", 1.0, 1000.0, 700.0};
+    FontLibrary::Default().Add("Fallback Source", icons);
+
+    for (const auto& [size, width] :
+         {std::pair<double, double>{14.0, 10.0}, {28.0, 20.0}}) {
+        FontIcon icon;
+        icon.set_font_family("Fallback Source");
+        icon.set_font_size(size);
+        icon.set_glyph("M");
+        icon.Measure({400, 300});
+        CHECK(Near(icon.desired_size().width, width));
+        CHECK(Near(icon.desired_size().height, size));
+        icon.Arrange({0, 0, 400, 300});
+        CHECK(Near(icon.render_size().width, 400));
+        CHECK(Near(icon.render_size().height, 300));
+    }
+}
+
 // A weight an icon family does not ship is simulated, and the simulation adds
 // the same fraction of the em whichever heavy weight was asked for. Bold and
 // Black both measure 103 at size 100 where the plain glyph measures 100, which
@@ -302,6 +326,19 @@ void AHarvestReadsTheFontsTablesWithGposWinning() {
             "hhea": {"ascender": 2724, "descender": 0, "line_gap": 0},
             "advances": {"77": 1839}, "kerning": {"84,101": -200}})";
     CHECK(ParseFontMetrics(derived, "derived.json").PairAdjustment(U'T', U'e', true) == -200);
+
+    const std::string fallback_json =
+        R"({"family": "Fallback Evidence", "provenance": "harvested",
+            "units_per_em": 2048,
+            "hhea": {"ascender": 2048, "descender": 0, "line_gap": 0},
+            "advances": {"57344": 2048}, "font_kerning": {},
+            "system_fallbacks": {"77": {"family": "Mapped Sans", "scale": 0.75,
+                "units_per_em": 2000, "advance": 1400}}})";
+    const FontMetrics fallback = ParseFontMetrics(fallback_json, "fallback.json");
+    CHECK(fallback.system_fallbacks.at(U'M').family == "Mapped Sans");
+    CHECK(Near(fallback.system_fallbacks.at(U'M').scale, 0.75));
+    CHECK(Near(fallback.system_fallbacks.at(U'M').units_per_em, 2000));
+    CHECK(Near(fallback.system_fallbacks.at(U'M').advance, 1400));
 }
 
 // The two spellings of a TextBlock's text are not the same measurement. Inline
@@ -346,6 +383,7 @@ void TheTextPropertyIsNotSnapped() {
 int main() {
     AnIconFillsTheSlotItIsGiven();
     AFallbackListSplitsTheLineBoxFromTheGlyph();
+    HarvestedSystemFallbackScalesFromItsMappedFace();
     ASimulatedWeightWidensByAFixedFraction();
     AnUnmeasuredWeightIsRefused();
     KerningJoinsTheAdvanceBeforeItSnaps();

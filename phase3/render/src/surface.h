@@ -1,16 +1,13 @@
-// A 32-bit surface and the only drawing primitive this pass claims: a solid,
-// axis-aligned, fully opaque rectangle.
+// A deterministic premultiplied BGRA8 surface. Opaque fills retain their exact
+// overwrite path; fractional solid colours use integer source-over, and an
+// intermediate surface can be composited once for subtree opacity.
 //
-// Deliberately not a rasteriser. There is no anti-aliasing, no blending and no
-// sub-pixel coverage, because there is nothing to be faithful *to*: no recorded
-// measurement says what the runtime puts in a partly covered pixel. What the
-// corpus does pin is where an edge lands, and an edge lands on a whole device
-// pixel -- that is what UseLayoutRounding is for, and phase3/layout/src/chrome
-// says in as many words that a border thickness is rounded *because it is
-// drawn*. So the only honest rasteriser is one that fills whole pixels, and one
-// that fills whole pixels is exactly invertible: a checker can recover the
-// rectangle it was given, to the pixel, which is the gate this track is built
-// on.
+// Axis-aligned rectangles retain their exact whole-pixel fast path. Affine
+// geometry may instead supply deterministic area coverage per pixel; this is
+// geometric antialiasing only, with no device-specific sampling or subpixel
+// colour. Alpha blending is premultiplied source-over, and subtree opacity is
+// applied to a completed intermediate layer rather than independently to its
+// drawing commands.
 //
 // Plain C++17 -- no Windows, no GDI. The GDI backend under Wine draws the same
 // display list with the same snapping so the two dumps can be compared.
@@ -62,7 +59,7 @@ public:
     int width() const { return width_; }
     int height() const { return height_; }
 
-    // 0xAARRGGBB per pixel, row-major, top row first. The same order a
+    // Premultiplied 0xAARRGGBB per pixel, row-major, top row first. The same order a
     // bottom-up Windows DIB holds after its rows are flipped, which is what the
     // GDI backend hands back.
     const std::vector<std::uint32_t>& pixels() const { return pixels_; }
@@ -71,9 +68,21 @@ public:
     std::uint32_t At(int x, int y) const { return pixels_[static_cast<size_t>(y) * width_ + x]; }
 
     // Opaque fill, clipped to the surface. An alpha other than 255 is a
-    // programming error here: the display list refuses those upstream, by name,
-    // rather than letting a blend rule nothing measured leak in.
+    // programming error here, preserving the existing exact overwrite path.
     void FillRect(const Rect& rect, Color color);
+
+    // Premultiplies the straight XAML colour and composites it source-over.
+    // Transparent is a no-op and opaque dispatches to FillRect.
+    void BlendRect(const Rect& rect, Color color);
+
+    // Blends one source pixel with geometric area coverage in [0, 1]. The
+    // straight XAML colour is premultiplied once, then every premultiplied
+    // channel is scaled by coverage before source-over.
+    void BlendPixel(int x, int y, Color color, double coverage);
+
+    // Applies opacity once to a complete premultiplied layer, then composites
+    // it source-over this surface. Dimensions must match.
+    void CompositeLayer(const Surface& layer, double opacity);
 
 private:
     int width_;
@@ -81,9 +90,19 @@ private:
     std::vector<std::uint32_t> pixels_;
 };
 
+inline unsigned char MultiplyByte(unsigned char value, unsigned char scale) {
+    return static_cast<unsigned char>((static_cast<unsigned int>(value) * scale + 127u) / 255u);
+}
+
+inline std::uint32_t PackPremultiplied(unsigned char a, unsigned char r, unsigned char g,
+                                      unsigned char b) {
+    return (static_cast<std::uint32_t>(a) << 24) | (static_cast<std::uint32_t>(r) << 16) |
+           (static_cast<std::uint32_t>(g) << 8) | static_cast<std::uint32_t>(b);
+}
+
 inline std::uint32_t Pack(Color c) {
-    return (static_cast<std::uint32_t>(c.a) << 24) | (static_cast<std::uint32_t>(c.r) << 16) |
-           (static_cast<std::uint32_t>(c.g) << 8) | static_cast<std::uint32_t>(c.b);
+    return PackPremultiplied(c.a, MultiplyByte(c.r, c.a), MultiplyByte(c.g, c.a),
+                             MultiplyByte(c.b, c.a));
 }
 
 // The colour every dump starts from. Not white: white is a colour a case could
@@ -92,12 +111,15 @@ inline std::uint32_t Pack(Color c) {
 // reserved the same way the probe ink is.
 inline Color BackdropColor() { return Color{0xff, 0x00, 0x80, 0x80}; }
 
-// A binary PPM (P6). Chosen over PNG on purpose: it needs no compressor, so
-// two runs of the same input are byte-identical without depending on a zlib
-// version, and a checker can read it in twenty lines of Python with no
-// third-party module. Alpha is not written -- every pixel in a dump is opaque
-// by construction, since the only fills that reach a surface are opaque.
+// A binary PPM (P6). Chosen over PNG for the opaque rectangle-recovery path:
+// it needs no compressor and two runs are byte-identical. PPM cannot preserve
+// alpha; premultiplied acceptance output always uses ToBgra below.
 std::string ToPpm(const Surface& surface);
+
+// The acceptance-oracle format: B, G, R, A bytes, top row first. Unlike PPM
+// this preserves alpha and can therefore be compared byte-for-byte with
+// Windows.UI.Xaml.Media.Imaging.RenderTargetBitmap.
+std::string ToBgra(const Surface& surface);
 
 }  // namespace render
 }  // namespace openxaml

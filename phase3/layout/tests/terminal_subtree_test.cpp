@@ -93,6 +93,19 @@ void ARenderTransformDoesNotReachLayout() {
     CHECK(shape->render_size().width == 12.0);
     CHECK(shape->render_size().height == 12.0);
 
+    // XML's expanded empty-element spelling is the same transform, not a
+    // renderer feature boundary. Whitespace between the tags is ignored by
+    // the scanner just as it is for the self-closing spelling.
+    std::unique_ptr<Element> expanded = LoadMarkup(
+        std::string("<Rectangle") + kXamlNamespaces + " Width=\"12\" Height=\"12\" "
+        "RenderTransformOrigin=\"0.5,0.5\">"
+        "<Rectangle.RenderTransform><RotateTransform Angle=\"17\">"
+        "</RotateTransform></Rectangle.RenderTransform></Rectangle>");
+    CHECK(expanded->visual_transform().kind == VisualTransformKind::Rotate);
+    CHECK(expanded->visual_transform().angle_degrees == 17.0);
+    CHECK(expanded->render_transform_origin().x == 0.5);
+    CHECK(expanded->render_transform_origin().y == 0.5);
+
     // Layout-inert is not the same as unread. An element that is no transform
     // at all is still refused by name, rather than being waved through as one
     // more thing that cannot move a number.

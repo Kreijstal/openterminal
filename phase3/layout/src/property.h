@@ -114,6 +114,14 @@ struct PropertyMetadata {
           inherits(inherits_value),
           affects_measure(affects_measure_value),
           changed(std::move(changed_callback)) {}
+    PropertyMetadata(PropertyValue value, bool inherits_value,
+                     bool affects_measure_value, bool affects_arrange_value,
+                     PropertyChangedCallback changed_callback = {})
+        : default_value(std::move(value)),
+          inherits(inherits_value),
+          affects_measure(affects_measure_value),
+          affects_arrange(affects_arrange_value),
+          changed(std::move(changed_callback)) {}
 
     PropertyValue default_value;
 
@@ -127,6 +135,11 @@ struct PropertyMetadata {
     // FrameworkPropertyMetadataOptions.AffectsMeasure, and it is the only
     // thing the store has to tell layout.
     bool affects_measure = false;
+
+    // Changing it leaves the desired size valid but makes placement stale.
+    // This is distinct from render-only properties such as Background and
+    // Opacity; all three previously shared affects_measure=false.
+    bool affects_arrange = false;
 
     // PropertyMetadata's PropertyChangedCallback. Empty for every property
     // registered by this repository's own types -- they override
@@ -147,6 +160,7 @@ public:
     const PropertyValue& default_value() const { return metadata_.default_value; }
     bool inherits() const { return metadata_.inherits; }
     bool affects_measure() const { return metadata_.affects_measure; }
+    bool affects_arrange() const { return metadata_.affects_arrange; }
     const PropertyMetadata& metadata() const { return metadata_; }
 
     // Whether it was registered with RegisterAttached rather than Register.
