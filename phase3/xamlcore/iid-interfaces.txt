@@ -117,6 +117,7 @@ Windows.UI.Xaml.IApplication2
 Windows.UI.Xaml.IApplication3
 Windows.UI.Xaml.IApplicationFactory
 Windows.UI.Xaml.IApplicationStatics
+Windows.UI.Xaml.IResourceDictionaryFactory
 Windows.UI.Xaml.Markup.IXamlMetadataProvider
 Windows.System.IDispatcherQueueStatics
 Windows.System.IDispatcherQueue

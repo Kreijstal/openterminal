@@ -1,5 +1,6 @@
 #include "island_frame_cache.h"
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <limits>
@@ -141,6 +142,58 @@ void AppendBoundedQuoted(std::string& output, const std::string& value,
 
 }  // namespace
 
+namespace {
+
+// Copies the scene a frame was rasterized from into plain values.
+//
+// Index order is the display list's own walk order, which is paint order, so a
+// checker can resolve which fill covers a point by taking the last one that
+// does. Nothing here retains a scene node, an Element or a brush.
+IslandFrameCache::SceneRecords RecordSceneOf(const DisplayList& list) {
+    IslandFrameCache::SceneRecords records;
+    records.node_total = list.geometry.size();
+    records.fill_total = list.rects.size();
+    const auto* nodes = list.scene ? &list.scene->nodes() : nullptr;
+    const std::size_t node_count =
+        std::min(list.geometry.size(), IslandFrameCache::kMaxSceneRecords);
+    records.nodes.reserve(node_count);
+    for (std::size_t index = 0; index < node_count; ++index) {
+        const NodeGeometry& geometry = list.geometry[index];
+        FrameNodeRecord record;
+        record.path = geometry.path;
+        record.type = geometry.type;
+        record.slot = geometry.slot;
+        record.actual = geometry.actual;
+        record.origin_x = geometry.abs_x;
+        record.origin_y = geometry.abs_y;
+        record.opacity = geometry.opacity;
+        record.visible = geometry.visible;
+        record.has_layout_storage = geometry.has_layout_storage;
+        if (nodes && index < nodes->size() && (*nodes)[index].content)
+            record.commands = (*nodes)[index].content->commands.size();
+        records.nodes.push_back(std::move(record));
+    }
+
+    const std::size_t fill_count =
+        std::min(list.rects.size(), IslandFrameCache::kMaxSceneRecords);
+    records.fills.reserve(fill_count);
+    for (std::size_t index = 0; index < fill_count; ++index) {
+        const RectOp& rect = list.rects[index];
+        records.fills.push_back(
+            FrameFillRecord{rect.path, rect.what, rect.bounds, rect.color});
+    }
+
+    const std::size_t text_count =
+        std::min(list.texts.size(), IslandFrameCache::kMaxSceneRecords);
+    records.texts.reserve(text_count);
+    for (std::size_t index = 0; index < text_count; ++index)
+        records.texts.push_back(
+            FrameTextRecord{list.texts[index].path, list.texts[index].bounds});
+    return records;
+}
+
+}  // namespace
+
 bool IslandFrameCache::Rebuild(const Element& arranged_root, Size surface,
                                Color clear) noexcept {
     last_build_error_.clear();
@@ -188,7 +241,8 @@ bool IslandFrameCache::Rebuild(const Element& arranged_root, Size surface,
         return CommitFrame(std::move(pixels), std::move(next_dib),
                            std::move(display_list.refusals),
                            std::move(next_text_failures),
-                           std::move(next_render_issues));
+                           std::move(next_render_issues),
+                           RecordSceneOf(display_list));
     } catch (const std::exception& error) {
         last_build_error_ = error.what();
     } catch (...) {
@@ -214,7 +268,10 @@ bool IslandFrameCache::RebuildClear(Size surface, Color clear) noexcept {
         }
 
         Surface pixels(extent.right, extent.bottom, clear);
-        return CommitFrame(std::move(pixels), std::move(next_dib), {}, {}, {});
+        // A cleared frame has no scene. Saying so is the point: a checker must
+        // not read the previous frame's record as a description of this one.
+        return CommitFrame(std::move(pixels), std::move(next_dib), {}, {}, {},
+                           SceneRecords{});
     } catch (const std::exception& error) {
         last_build_error_ = error.what();
     } catch (...) {
@@ -226,7 +283,8 @@ bool IslandFrameCache::RebuildClear(Size surface, Color clear) noexcept {
 bool IslandFrameCache::CommitFrame(Surface&& pixels, std::unique_ptr<DibTarget>&& dib,
                                    std::vector<Refusal>&& refusals,
                                    std::vector<std::string>&& text_failures,
-                                   std::vector<RenderIssue>&& render_issues) {
+                                   std::vector<RenderIssue>&& render_issues,
+                                   SceneRecords&& scene) {
     bool next_has_transparency = false;
     for (std::uint32_t pixel : pixels.pixels()) {
         if ((pixel >> 24) != 0xff) {
@@ -256,6 +314,11 @@ bool IslandFrameCache::CommitFrame(Surface&& pixels, std::unique_ptr<DibTarget>&
     refusals_ = std::move(refusals);
     text_failures_ = std::move(text_failures);
     render_issues_ = std::move(render_issues);
+    scene_nodes_ = std::move(scene.nodes);
+    scene_fills_ = std::move(scene.fills);
+    scene_texts_ = std::move(scene.texts);
+    scene_node_total_ = scene.node_total;
+    scene_fill_total_ = scene.fill_total;
     ready_ = true;
     ++generation_;
     return true;
@@ -280,6 +343,11 @@ bool IslandFrameCache::PublishFrom(IslandFrameCache&& candidate,
     refusals_ = std::move(candidate.refusals_);
     text_failures_ = std::move(candidate.text_failures_);
     render_issues_ = std::move(candidate.render_issues_);
+    scene_nodes_ = std::move(candidate.scene_nodes_);
+    scene_fills_ = std::move(candidate.scene_fills_);
+    scene_texts_ = std::move(candidate.scene_texts_);
+    scene_node_total_ = candidate.scene_node_total_;
+    scene_fill_total_ = candidate.scene_fill_total_;
     ready_ = true;
     ++generation_;
 
@@ -287,6 +355,8 @@ bool IslandFrameCache::PublishFrom(IslandFrameCache&& candidate,
     candidate.width_ = 0;
     candidate.height_ = 0;
     candidate.has_transparency_ = false;
+    candidate.scene_node_total_ = 0;
+    candidate.scene_fill_total_ = 0;
     return true;
 }
 

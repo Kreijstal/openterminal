@@ -2817,6 +2817,54 @@ private:
     LONGLONG next_token_ = 0;
 };
 
+// What a compiled page turned into, said in the loader's own words.
+//
+// The gate that asks whether Terminal's own UI is what gets rendered needs two
+// records that cannot be derived from each other: what the XBF declares, and
+// what the renderer committed. This is the first of them, and it is written
+// where the object graph is produced -- before anything is activated -- so it
+// describes the file rather than the runtime's opinion of it.
+bool XbfTraceEnabled() noexcept {
+    return GetEnvironmentVariableW(L"OPENXAML_TRACE_XBF", nullptr, 0) != 0;
+}
+
+void CollectXbfTypes(const std::shared_ptr<xbf::Object>& object,
+                     std::map<std::string, std::size_t>& counts,
+                     std::vector<const xbf::Object*>& seen) {
+    if (!object) return;
+    for (const xbf::Object* visited : seen)
+        if (visited == object.get()) return;
+    seen.push_back(object.get());
+    if (!object->type.empty()) ++counts[object->type];
+    for (const auto& property : object->properties)
+        CollectXbfTypes(property.second.object, counts, seen);
+    for (const auto& item : object->items)
+        CollectXbfTypes(item.object, counts, seen);
+    for (const auto& entry : object->dictionary)
+        CollectXbfTypes(entry.second.object, counts, seen);
+    CollectXbfTypes(object->deferred_content, counts, seen);
+}
+
+void TraceXbfGraph(const std::string& page,
+                   const std::shared_ptr<xbf::Object>& graph) {
+    if (!XbfTraceEnabled() || !graph) return;
+    std::map<std::string, std::size_t> counts;
+    std::vector<const xbf::Object*> seen;
+    CollectXbfTypes(graph, counts, seen);
+    std::string line = "OpenXaml xbf event=loaded page=\"" + page +
+        "\" root=" + (graph->type.empty() ? std::string("(none)") : graph->type) +
+        " objects=" + std::to_string(seen.size()) + "\n";
+    OutputDebugStringA(line.c_str());
+    for (const auto& entry : counts) {
+        // One bounded line per distinct type: Wine truncates a single
+        // OutputDebugString, and a truncated table would silently lose types.
+        std::string type = "OpenXaml xbf event=type page=\"" + page +
+            "\" name=" + entry.first + " count=" +
+            std::to_string(entry.second) + "\n";
+        OutputDebugStringA(type.c_str());
+    }
+}
+
 class ApplicationFactory final : public Factory<ApplicationObject>,
                                  public abi::NotImpl_IApplicationFactory,
                                  public abi::NotImpl_IApplicationStatics {
@@ -2923,6 +2971,7 @@ public:
                 if (!std::filesystem::is_regular_file(candidate)) continue;
                 auto graph = xbf::WriteObjectGraph(xbf::ReadFile(candidate));
                 if (!graph) return HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
+                TraceXbfGraph(relative.generic_string(), graph);
                 hr = MaterializeXbf(graph, component);
                 if (FAILED(hr)) return hr;
                 loaded_components_[component] = std::move(graph);
@@ -4821,6 +4870,117 @@ private:
         return GetEnvironmentVariableW(L"OPENXAML_TRACE_FRAMES", nullptr, 0) != 0;
     }
 
+    // The committed frame's scene, dumped as values.
+    //
+    // A frame trace says a frame was committed and how big it was. That is not
+    // enough to answer whether the application's own markup is what is on
+    // screen: an empty tree commits a clean frame of exactly the same size.
+    // This writes what the frame was actually compiled from -- the nodes with
+    // their types and arranged geometry, the solid fills with their surface
+    // rectangles and colours, and the text boxes -- so a checker outside the
+    // process can compare the runtime's own record against both the markup it
+    // came from and the pixels it produced.
+    static bool SceneTraceEnabled() noexcept {
+        return GetEnvironmentVariableW(L"OPENXAML_TRACE_SCENE", nullptr, 0) != 0;
+    }
+
+    // Where the last presented frame put its top-left pixel on the desktop.
+    // Without this a reader has no way to map a surface rectangle onto a
+    // screen coordinate, and a pixel comparison would have to assume the
+    // island sits at the host's client origin.
+    void TracePresentOrigin(POINT screen_origin) const {
+        if (!FrameTraceEnabled()) return;
+        char line[192]{};
+        std::snprintf(line, sizeof(line),
+                      "OpenXaml frame event=present-origin generation=%llu "
+                      "screen=%ld,%ld extent=%dx%d\n",
+                      static_cast<unsigned long long>(frame_cache_.generation()),
+                      screen_origin.x, screen_origin.y, frame_cache_.width(),
+                      frame_cache_.height());
+        OutputDebugStringA(line);
+    }
+
+    void TraceCommittedScene(const char* reason) const {
+        if (!SceneTraceEnabled()) return;
+        const unsigned long long generation =
+            static_cast<unsigned long long>(frame_cache_.generation());
+        char summary[256]{};
+        std::snprintf(summary, sizeof(summary),
+                      "OpenXaml frame event=scene-summary reason=%s "
+                      "generation=%llu nodes=%zu node_total=%zu fills=%zu "
+                      "fill_total=%zu texts=%zu\n",
+                      reason, generation, frame_cache_.scene_nodes().size(),
+                      frame_cache_.scene_node_total(),
+                      frame_cache_.scene_fills().size(),
+                      frame_cache_.scene_fill_total(),
+                      frame_cache_.scene_texts().size());
+        OutputDebugStringA(summary);
+
+        constexpr std::size_t kMaximumLine = 460;
+        const auto& nodes = frame_cache_.scene_nodes();
+        for (std::size_t index = 0; index < nodes.size(); ++index) {
+            const auto& node = nodes[index];
+            char values[352]{};
+            std::snprintf(values, sizeof(values),
+                          "OpenXaml frame event=scene-node reason=%s "
+                          "generation=%llu index=%zu type=%s layout=%s "
+                          "visible=%s slot=%.3f,%.3f,%.3f,%.3f actual=%.3f,%.3f "
+                          "origin=%.3f,%.3f opacity=%.6f commands=%zu path=",
+                          reason, generation, index, node.type.c_str(),
+                          node.has_layout_storage ? "true" : "false",
+                          node.visible ? "true" : "false", node.slot.x,
+                          node.slot.y, node.slot.width, node.slot.height,
+                          node.actual.width, node.actual.height, node.origin_x,
+                          node.origin_y, node.opacity, node.commands);
+            AppendBoundedPath(values, node.path, kMaximumLine);
+        }
+        const auto& fills = frame_cache_.scene_fills();
+        for (std::size_t index = 0; index < fills.size(); ++index) {
+            const auto& fill = fills[index];
+            char values[288]{};
+            std::snprintf(values, sizeof(values),
+                          "OpenXaml frame event=scene-fill reason=%s "
+                          "generation=%llu index=%zu what=%s "
+                          "rect=%.3f,%.3f,%.3f,%.3f color=%02x%02x%02x%02x path=",
+                          reason, generation, index,
+                          fill.what.empty() ? "-" : fill.what.c_str(),
+                          fill.bounds.x, fill.bounds.y, fill.bounds.width,
+                          fill.bounds.height, fill.color.a, fill.color.r,
+                          fill.color.g, fill.color.b);
+            AppendBoundedPath(values, fill.path, kMaximumLine);
+        }
+        const auto& texts = frame_cache_.scene_texts();
+        for (std::size_t index = 0; index < texts.size(); ++index) {
+            const auto& text = texts[index];
+            char values[224]{};
+            std::snprintf(values, sizeof(values),
+                          "OpenXaml frame event=scene-text reason=%s "
+                          "generation=%llu index=%zu "
+                          "rect=%.3f,%.3f,%.3f,%.3f path=",
+                          reason, generation, index, text.bounds.x,
+                          text.bounds.y, text.bounds.width, text.bounds.height);
+            AppendBoundedPath(values, text.path, kMaximumLine);
+        }
+    }
+
+    // Wine bounds what one OutputDebugString call renders. A path is the only
+    // unbounded field in these records, so it is the only one abbreviated --
+    // from the front, because the leaf of a path is what identifies the node.
+    static void AppendBoundedPath(const char* prefix, const std::string& path,
+                                  std::size_t maximum) {
+        std::string line(prefix);
+        const std::size_t remaining =
+            line.size() < maximum ? maximum - line.size() : 0;
+        if (path.size() <= remaining) {
+            line += path;
+        } else if (remaining > 3) {
+            line += "...";
+            line.append(path, path.size() - (remaining - 3), remaining - 3);
+        }
+        line.push_back('\n');
+        OutputDebugStringA(line.c_str());
+    }
+
     static void TraceFrameDetails(
         const char* kind, const std::vector<std::string>& diagnostics) {
         for (std::size_t index = 1; index < diagnostics.size(); ++index) {
@@ -4860,6 +5020,7 @@ private:
         if (result.presented) {
             if (traced_present_generation_ != frame_cache_.generation()) {
                 TraceFrameState("present");
+                TracePresentOrigin(screen_origin);
                 if (FrameTraceEnabled()) {
                     traced_present_generation_ = frame_cache_.generation();
                 }
@@ -5392,7 +5553,9 @@ private:
                     frame_cache_.PublishFrom(std::move(clear_candidate),
                                              expected_generation)) {
                     TraceFrameState("commit-fallback", reason);
+                    TraceCommittedScene(reason);
                     InvalidateRect(window, nullptr, FALSE);
+                    PresentFrame(window);
                 }
             }
             if (native) native->Release();
@@ -5414,7 +5577,14 @@ private:
         if (identity) identity->Release();
         if (still_current) {
             TraceFrameState("commit", reason);
+            TraceCommittedScene(reason);
+            // A layered child's pixels are published by UpdateLayeredWindow,
+            // not by BeginPaint: the window manager sends no WM_PAINT for the
+            // layered surface, so invalidating and waiting leaves a committed
+            // frame that is never shown. Present the frame the commit just
+            // published, and keep the invalidation for hosts that do paint.
             InvalidateRect(window, nullptr, FALSE);
+            PresentFrame(window);
         }
     }
 
@@ -5980,8 +6150,20 @@ Factory<ContentControlObject>& ContentControlFactory() {
     static Factory<ContentControlObject> factory(L"Windows.UI.Xaml.Controls.ContentControl");
     return factory;
 }
-Factory<ResourceDictionaryObject>& ResourceDictionaryFactory() {
-    static Factory<ResourceDictionaryObject> factory(L"Windows.UI.Xaml.ResourceDictionary");
+// ResourceDictionary is composable, and Terminal reaches that: Tab builds a
+// light, a dark and a high-contrast dictionary per tab, and cppwinrt's
+// constructor for a composable type goes through IResourceDictionaryFactory
+// rather than IActivationFactory. Answering E_NOINTERFACE there produced an
+// originate-error the caller could not transform, which on a loader without
+// combase.RoTransformError aborts the process before the window is shown.
+ComposableFactory<ResourceDictionaryObject, wux::IResourceDictionaryFactory,
+                  wux::IResourceDictionary>&
+ResourceDictionaryFactory() {
+    static ComposableFactory<ResourceDictionaryObject,
+                             wux::IResourceDictionaryFactory,
+                             wux::IResourceDictionary>
+        factory(L"Windows.UI.Xaml.ResourceDictionary",
+                ::openxaml::iid::Windows_UI_Xaml_IResourceDictionaryFactory);
     return factory;
 }
 Factory<XamlControlsResourcesObject>& XamlControlsResourcesFactory() {
