@@ -2178,6 +2178,41 @@ target_link_libraries(openterminal_winconpty_smoke PRIVATE
 target_link_options(openterminal_winconpty_smoke PRIVATE
     -static -static-libgcc -static-libstdc++)
 
+# The one PE that links both halves of a live session: the pseudoconsole from
+# src/winconpty and the terminal from src/cascadia/TerminalCore. It spawns a
+# shell through the former and answers whether the shell's output reached the
+# latter's text buffer. phase4/scripts/conpty_live.py drives it under Wine;
+# it is not in the ctest list because it needs a Wine prefix with a working
+# console host, which is a phase-4 integration concern, not a smoke test.
+add_executable(openterminal_conpty_terminal_core_gate tests/conpty_terminal_core_gate.cpp)
+configure_terminal_target(openterminal_conpty_terminal_core_gate)
+target_compile_definitions(openterminal_conpty_terminal_core_gate PRIVATE
+    CONPTY_IMPEXP=
+    WINRT_LEAN_AND_MEAN
+)
+target_include_directories(openterminal_conpty_terminal_core_gate PRIVATE
+    "${CPPWINRT_TERMINALCORE_INCLUDE_DIR}"
+    "${CPPWINRT_SDK_INCLUDE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/compat/cascadia/TerminalCore"
+    "${TERMINAL_SOURCE_DIR}/src"
+    "${terminal_core_dir}"
+    "${buffer_dir}"
+    "${types_dir}"
+    "${renderer_include_dir}"
+    "${adapter_dir}"
+    "${parser_dir}"
+    "${server_dir}"
+    "${winconpty_dir}"
+)
+target_link_libraries(openterminal_conpty_terminal_core_gate PRIVATE
+    "$<LINK_GROUP:RESCAN,openterminal_terminal_core,openterminal_terminal_adapter,openterminal_terminal_parser,openterminal_terminal_input,openterminal_renderer_base,openterminal_buffer_out,openterminal_types,openterminal_winconpty,ICU::i18n,ICU::uc,ICU::data>"
+    ntdll
+    bcrypt
+    mincore
+)
+target_link_options(openterminal_conpty_terminal_core_gate PRIVATE
+    -municode -static -static-libgcc -static-libstdc++)
+
 add_executable(openterminal_winui_projection_smoke tests/winui_projection_smoke.cpp)
 target_compile_features(openterminal_winui_projection_smoke PRIVATE cxx_std_20)
 target_compile_definitions(openterminal_winui_projection_smoke PRIVATE
