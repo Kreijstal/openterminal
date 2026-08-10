@@ -56,6 +56,51 @@ graphs now materialize, but full control rendering, swap-chain presentation,
 input, accessibility, live resource behavior and ConPTY-backed tabs remain the
 Phase 4 integration surface.
 
+## Is Terminal's own UI what gets rendered?
+
+"The process lives and commits a clean frame" is not the same question as "the
+application's own markup is on screen": a frame committed from an empty tree,
+or committed and never presented, satisfies the boot gate and shows nothing.
+`scripts/check_xbf_ui_render.py` answers the second question, and it does it
+without an oracle — every expectation is derived, in the same run, from either
+Terminal's own compiled markup or the runtime's own record of what it
+committed. One launch produces three records that cannot be derived from each
+other:
+
+* the XBF loader's, per page: the root type and the element types the object
+  graph declares (`OpenXaml xbf event=loaded|type`, under `OPENXAML_TRACE_XBF`);
+* the retained renderer's, for the committed frame: every scene node with its
+  type, path and arranged geometry, every solid fill with its surface rectangle
+  and colour, and every text box (`OpenXaml frame event=scene-node|scene-fill|
+  scene-text|scene-summary`, under `OPENXAML_TRACE_SCENE`);
+* a separate Win32 process's, of the desktop pixels inside the live hosting
+  window, on a grid fixed before anything was observed
+  (`phase3/xamlcore/client/terminal_pixel_probe.cpp`).
+
+The checks tie those together: the page roots and types the XBF declares must
+appear in the scene the renderer committed, the scene must actually paint an
+opaque region, the committed generation must be the presented one, and the
+pixel a sample landed on must be the colour the renderer's own fill record says
+covers that point. Neither side can confirm itself.
+
+```bash
+python3 -B phase4/scripts/check_xbf_ui_render.py \
+  --xaml-dll /tmp/openterminal-xamlcore/openxaml.dll \
+  --executable /tmp/openterminal-mingw/native-build/WindowsTerminal.exe \
+  --probe /tmp/openterminal-xamlcore/terminal_pixel_probe.exe \
+  --prefix /tmp/openterminal-xbf-ui --timeout 30
+```
+
+The pixel checks, and only those, are conditional on the loader. The probe
+measures the layered-child displacement with plain GDI before it reads
+anything, and a loader carrying the defect recorded in
+`research/wine/af5241854c513c2e68938425cc6cd3cac40b943a/layered-child-update.md`
+gets a named skip. A loader that aborts the process at an unimplemented
+function before the window is shown is likewise named — stock Wine 11.13 does
+that at `dcomp.dll.DCompositionCreateSurfaceHandle`, which Terminal's
+AtlasEngine calls to make its swap chain. Everything structural is enforced on
+every loader.
+
 ### Where the frontier has stood
 
 | frontier | what the binary was doing |

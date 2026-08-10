@@ -355,6 +355,15 @@ def main() -> None:
                       "island_render_smoke.cpp")]
         + includes + libraries)
 
+    # The pixel half of the phase-4 visible-UI gate. It links nothing of this
+    # runtime on purpose: it reads desktop pixels out of whatever window is on
+    # screen, so its readings are independent of the process being observed.
+    terminal_pixel_probe = root / "terminal_pixel_probe.exe"
+    run(common + ["-municode", "-o", str(terminal_pixel_probe),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "terminal_pixel_probe.cpp")]
+        + ["-lgdi32", "-luser32"])
+
     island_input_smoke = root / "island_input_smoke.exe"
     run(common + ["-o", str(island_input_smoke),
                   str(PHASE3_DIR / "xamlcore" / "client" /

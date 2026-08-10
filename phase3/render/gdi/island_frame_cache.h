@@ -29,6 +29,43 @@ struct FramePresentResult {
     DWORD error = ERROR_SUCCESS;
 };
 
+// A value-only record of the scene a committed frame was rasterized from.
+//
+// The cache deliberately retains no scene, Element or brush after Rebuild.
+// These are the same kind of state as the refusals beside them -- copied
+// strings and numbers -- so a host can publish exactly what it committed
+// without holding anything alive. They exist so that "what was rendered" is
+// answerable from outside the process, by a checker that never links the
+// renderer, rather than only from a picture of the result.
+struct FrameNodeRecord {
+    std::string path;
+    std::string type;
+    Rect slot;          // in the parent's coordinates
+    Size actual;        // the render size
+    double origin_x = 0.0;  // the accumulated render origin, in surface space
+    double origin_y = 0.0;
+    double opacity = 1.0;
+    bool visible = true;
+    bool has_layout_storage = false;
+    std::size_t commands = 0;
+};
+
+// One solid rectangle the frame painted, in surface coordinates, with the
+// colour it was painted in. `what` says which part of the element it is.
+struct FrameFillRecord {
+    std::string path;
+    std::string what;
+    Rect bounds;
+    Color color;
+};
+
+// One text run's box, in surface coordinates. A checker uses these to know
+// which points of the surface a fill colour alone does not predict.
+struct FrameTextRecord {
+    std::string path;
+    Rect bounds;
+};
+
 class IslandFrameCache {
 public:
     IslandFrameCache() = default;
@@ -78,6 +115,30 @@ public:
     bool has_transparency() const { return has_transparency_; }
 
     const std::string& last_build_error() const { return last_build_error_; }
+    // The committed frame's scene, as values. A frame built from no content
+    // has all three empty; a frame that was rebuilt and refused keeps the
+    // previous frame's records, exactly as it keeps the previous pixels.
+    const std::vector<FrameNodeRecord>& scene_nodes() const { return scene_nodes_; }
+    const std::vector<FrameFillRecord>& scene_fills() const { return scene_fills_; }
+    const std::vector<FrameTextRecord>& scene_texts() const { return scene_texts_; }
+    // How many nodes and fills the scene had before this cap was applied.
+    std::size_t scene_node_total() const { return scene_node_total_; }
+    std::size_t scene_fill_total() const { return scene_fill_total_; }
+    // A frame is not allowed to make an unbounded record. Everything past
+    // these counts is dropped and reported by the totals above.
+    static constexpr std::size_t kMaxSceneRecords = 512;
+
+    // The scene of one frame, before it is committed. Public because the
+    // compilation that produces it is a free function beside Rebuild rather
+    // than a member: it reads a display list and writes values, and has no
+    // business seeing the cache's frame state.
+    struct SceneRecords {
+        std::vector<FrameNodeRecord> nodes;
+        std::vector<FrameFillRecord> fills;
+        std::vector<FrameTextRecord> texts;
+        std::size_t node_total = 0;
+        std::size_t fill_total = 0;
+    };
     const std::vector<Refusal>& refusals() const { return refusals_; }
     const std::vector<std::string>& text_failures() const { return text_failures_; }
     const std::vector<RenderIssue>& render_issues() const { return render_issues_; }
@@ -101,7 +162,8 @@ private:
     bool CommitFrame(Surface&& pixels, std::unique_ptr<DibTarget>&& dib,
                      std::vector<Refusal>&& refusals,
                      std::vector<std::string>&& text_failures,
-                     std::vector<RenderIssue>&& render_issues);
+                     std::vector<RenderIssue>&& render_issues,
+                     SceneRecords&& scene);
 
     std::unique_ptr<DibTarget> dib_;
     bool ready_ = false;
@@ -113,6 +175,11 @@ private:
     std::vector<Refusal> refusals_;
     std::vector<std::string> text_failures_;
     std::vector<RenderIssue> render_issues_;
+    std::vector<FrameNodeRecord> scene_nodes_;
+    std::vector<FrameFillRecord> scene_fills_;
+    std::vector<FrameTextRecord> scene_texts_;
+    std::size_t scene_node_total_ = 0;
+    std::size_t scene_fill_total_ = 0;
 };
 
 }  // namespace render

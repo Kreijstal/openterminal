@@ -364,6 +364,63 @@ void TransparentClearAndTextAreHandledWithoutInventingAlpha() {
 
 }  // namespace
 
+// The scene record is what a checker outside the process reads to learn what
+// the committed frame was built from. It has to describe *this* frame: a
+// cleared frame must not present the previous frame's nodes as its own, and a
+// refused rebuild must keep the record that goes with the pixels still on
+// screen.
+void SceneRecordsDescribeTheCommittedFrame() {
+    IslandFrameCache cache;
+    Grid root;
+    root.set_background_brush(
+        BrushValue{true, true, Color{0xff, 0x0c, 0x0c, 0x0c}});
+    auto child = std::make_unique<Border>();
+    child->set_background_brush(
+        BrushValue{true, true, Color{0xff, 0x33, 0x66, 0x99}});
+    child->set_width(4.0);
+    child->set_height(2.0);
+    root.AddChild(std::move(child));
+    root.Measure({8.0, 6.0});
+    root.Arrange({0.0, 0.0, 8.0, 6.0});
+    CHECK(cache.Rebuild(root, {8.0, 6.0}, Color{}));
+
+    CHECK(cache.scene_nodes().size() >= 2);
+    CHECK(cache.scene_node_total() == cache.scene_nodes().size());
+    CHECK(cache.scene_nodes().front().type == root.TypeName());
+    CHECK(cache.scene_nodes().front().actual.width == 8.0);
+    CHECK(cache.scene_nodes().front().visible);
+    CHECK(!cache.scene_nodes().front().path.empty());
+
+    bool recorded_root_fill = false;
+    bool recorded_child_fill = false;
+    for (const FrameFillRecord& fill : cache.scene_fills()) {
+        if (fill.color.r == 0x0c && fill.color.g == 0x0c && fill.color.b == 0x0c &&
+            fill.color.a == 0xff && fill.bounds.width == 8.0 &&
+            fill.bounds.height == 6.0) {
+            recorded_root_fill = true;
+        }
+        if (fill.color.r == 0x33 && fill.color.g == 0x66 && fill.color.b == 0x99 &&
+            fill.bounds.width == 4.0 && fill.bounds.height == 2.0) {
+            recorded_child_fill = true;
+        }
+    }
+    CHECK(recorded_root_fill);
+    CHECK(recorded_child_fill);
+    CHECK(cache.scene_fill_total() == cache.scene_fills().size());
+
+    // A failed rebuild keeps the frame, so it must keep the frame's record.
+    const std::size_t nodes = cache.scene_nodes().size();
+    CHECK(!cache.Rebuild(root, {-1.0, 6.0}, Color{}));
+    CHECK(cache.scene_nodes().size() == nodes);
+
+    // A cleared frame was built from nothing and says so.
+    CHECK(cache.RebuildClear({8.0, 6.0}, Color{}));
+    CHECK(cache.scene_nodes().empty());
+    CHECK(cache.scene_fills().empty());
+    CHECK(cache.scene_texts().empty());
+    CHECK(cache.scene_node_total() == 0);
+}
+
 int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--diagnostics-only") {
         DiagnosticsDescribeTheCommittedFrameAndFailedAttempt();
@@ -377,6 +434,7 @@ int main(int argc, char** argv) {
     }
 
     ClearCoversTheWholeFrameAndPresentDoesNotRebuild();
+    SceneRecordsDescribeTheCommittedFrame();
     RebuildCommitsACompleteNewFrame();
     ClearOnlyRebuildReplacesContentAtomically();
     DiagnosticsDescribeTheCommittedFrameAndFailedAttempt();
