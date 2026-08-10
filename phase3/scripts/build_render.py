@@ -50,6 +50,7 @@ RENDER_SOURCES = [
     "surface.cpp",
     "cpu_raster_backend.cpp",
     "case_runner.cpp",
+    "external_surface_reader.cpp",
 ]
 
 DEFAULT_ROOT = Path("/tmp/openterminal-render")

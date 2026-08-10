@@ -8,6 +8,7 @@
 
 #include "border.h"
 #include "dwrite_text_provider.h"
+#include "external_surface_reader.h"
 #include "grid.h"
 #include "island_frame_cache.h"
 #include "surface.h"
@@ -727,7 +728,184 @@ void SceneRecordsDescribeTheCommittedFrame() {
     CHECK(cache.scene_nodes().empty());
     CHECK(cache.scene_fills().empty());
     CHECK(cache.scene_texts().empty());
+    CHECK(cache.scene_external_surfaces().empty());
     CHECK(cache.scene_node_total() == 0);
+}
+
+namespace {
+
+// A producer that publishes premultiplied pixels it owns.
+//
+// This stands where TermControl's AtlasEngine will stand: a SwapChainPanel is
+// bound to a surface the producer draws into and presents, and XAML composites
+// whatever is in it at the panel's arranged rect without rebuilding the scene.
+// The kind here is CpuBgraImage because that is the one source a CPU backend
+// can import with no graphics device; a DXGI swap chain arrives through the
+// same ExternalSurfaceReader seam once its back buffer is readable.
+struct ProducerStorage {
+    std::vector<std::uint32_t> pixels;
+    CpuExternalImage image;
+};
+
+std::shared_ptr<ProducerStorage> MakeProducerStorage(int width, int height,
+                                                     std::vector<std::uint32_t> pixels) {
+    // A separate allocation for the storage, not make_shared's inplace control
+    // block: GCC 16 misreads the combined object at -O2 and warns about an
+    // out-of-bounds array index that the code does not have.
+    std::shared_ptr<ProducerStorage> storage(new ProducerStorage());
+    storage->pixels = std::move(pixels);
+    storage->image.width = width;
+    storage->image.height = height;
+    storage->image.stride_pixels = static_cast<std::size_t>(width);
+    storage->image.pixels = storage->pixels.data();
+    return storage;
+}
+
+class CpuImageProducer final : public ExternalSurfaceProvider {
+public:
+    explicit CpuImageProducer(std::shared_ptr<ProducerStorage> storage)
+        : storage_(std::move(storage)) {}
+
+    ExternalSurfaceReference CaptureExternalSurface() const noexcept override {
+        ExternalSurfaceReference reference;
+        reference.kind = ExternalSurfaceKind::CpuBgraImage;
+        reference.generation = generation_;
+        reference.native_value = reinterpret_cast<std::uintptr_t>(&storage_->image);
+        reference.lifetime = std::static_pointer_cast<const void>(storage_);
+        return reference;
+    }
+
+private:
+    std::shared_ptr<ProducerStorage> storage_;
+    std::uint64_t generation_ = 1;
+};
+
+// The panel's own pixel at (x, y): distinct per column and row so a frame that
+// composited a shifted, flipped or stale copy cannot pass, plus one fully
+// transparent pixel that must let the XAML background behind it through.
+std::uint32_t ProducerPixel(int x, int y) {
+    if (x == 3 && y == 2) return 0x00000000u;
+    return PackPremultiplied(0xff, static_cast<unsigned char>(0x20 + 0x10 * x),
+                             static_cast<unsigned char>(0x50 + 0x10 * y), 0x90);
+}
+
+std::vector<std::uint32_t> ProducerPixels(int width, int height) {
+    std::vector<std::uint32_t> pixels;
+    pixels.reserve(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x) pixels.push_back(ProducerPixel(x, y));
+    return pixels;
+}
+
+bool HasExternalSurfaceIssue(const IslandFrameCache& cache,
+                             const std::string& fragment) {
+    for (const RenderIssue& issue : cache.render_issues()) {
+        if (issue.code != RenderIssueCode::UnsupportedExternalSurface) continue;
+        if (issue.message.find(fragment) != std::string::npos) return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+// Pixels produced outside XAML land inside the composed frame, at the rect
+// layout arranged the panel to and nowhere else.
+//
+// This is the whole point of a SwapChainPanel: its content is not painted by
+// the scene, it is composited into it. The frame must therefore contain the
+// producer's exact pixels at the arranged origin, must let a transparent
+// producer pixel reveal the XAML background behind it rather than punching a
+// hole, and must leave every pixel outside the arranged rect alone.
+void ExternalSurfaceContentIsCompositedAtItsArrangedRect() {
+    const Color background{0xff, 0x0c, 0x0c, 0x0c};
+    const auto producer =
+        std::make_shared<CpuImageProducer>(MakeProducerStorage(4, 3, ProducerPixels(4, 3)));
+
+    Grid root;
+    root.set_background_brush(BrushValue{true, true, background});
+    auto panel = std::make_unique<Grid>();
+    panel->set_width(4.0);
+    panel->set_height(3.0);
+    panel->set_horizontal_alignment(HorizontalAlignment::Left);
+    panel->set_vertical_alignment(VerticalAlignment::Top);
+    panel->set_margin(Thickness{2.0, 1.0, 0.0, 0.0});
+    panel->SetExternalSurfaceProvider(producer);
+    root.AddChild(std::move(panel));
+    root.Measure({10.0, 6.0});
+    root.Arrange({0.0, 0.0, 10.0, 6.0});
+
+    CpuExternalSurfaceReader reader;
+    IslandFrameCache cache;
+    CHECK(cache.Rebuild(root, {10.0, 6.0}, background, &reader));
+    CHECK(cache.render_issues().empty());
+    CHECK(cache.refusals().empty());
+
+    // The record says a region of this frame came from outside XAML.
+    CHECK(cache.scene_external_surfaces().size() == 1);
+    if (cache.scene_external_surfaces().size() == 1) {
+        const FrameExternalSurfaceRecord& record = cache.scene_external_surfaces().front();
+        CHECK(record.kind == ExternalSurfaceKind::CpuBgraImage);
+        CHECK(record.generation == 1);
+        CHECK(record.bounds.x == 2.0);
+        CHECK(record.bounds.y == 1.0);
+        CHECK(record.bounds.width == 4.0);
+        CHECK(record.bounds.height == 3.0);
+        CHECK(record.path.find("Controls.Grid[0]") != std::string::npos);
+    }
+
+    const Surface composed = PresentToSurface(cache, Color{0xff, 0xff, 0x00, 0xff});
+    CHECK(composed.width() == 10);
+    CHECK(composed.height() == 6);
+    for (int y = 0; y < composed.height(); ++y) {
+        for (int x = 0; x < composed.width(); ++x) {
+            const bool inside = x >= 2 && x < 6 && y >= 1 && y < 4;
+            const std::uint32_t source =
+                inside ? ProducerPixel(x - 2, y - 1) : 0x00000000u;
+            // A transparent producer pixel composites source-over, so the
+            // XAML background behind the panel is what stays there.
+            const std::uint32_t expected =
+                (source >> 24) == 0 ? Pack(background) : source;
+            CHECK(composed.At(x, y) == expected);
+        }
+    }
+
+    // A frame with no way to import the source says so and paints nothing
+    // there. Absent pixels must never be indistinguishable from composited
+    // ones, and the background must not be overwritten by a guess.
+    IslandFrameCache unreadable;
+    CHECK(unreadable.Rebuild(root, {10.0, 6.0}, background, nullptr));
+    CHECK(unreadable.scene_external_surfaces().size() == 1);
+    CHECK(HasExternalSurfaceIssue(unreadable, "no external surface reader"));
+    const Surface refused = PresentToSurface(unreadable, Color{0xff, 0xff, 0x00, 0xff});
+    for (int y = 0; y < refused.height(); ++y)
+        for (int x = 0; x < refused.width(); ++x)
+            CHECK(refused.At(x, y) == Pack(background));
+
+    // A source whose extent is not the arranged extent is named, not scaled:
+    // resampling a producer's pixels would invent content it never presented.
+    const auto small =
+        std::make_shared<CpuImageProducer>(MakeProducerStorage(2, 2, ProducerPixels(2, 2)));
+    Grid mismatched_root;
+    mismatched_root.set_background_brush(BrushValue{true, true, background});
+    auto mismatched_panel = std::make_unique<Grid>();
+    mismatched_panel->set_width(4.0);
+    mismatched_panel->set_height(3.0);
+    mismatched_panel->set_horizontal_alignment(HorizontalAlignment::Left);
+    mismatched_panel->set_vertical_alignment(VerticalAlignment::Top);
+    mismatched_panel->set_margin(Thickness{2.0, 1.0, 0.0, 0.0});
+    mismatched_panel->SetExternalSurfaceProvider(small);
+    mismatched_root.AddChild(std::move(mismatched_panel));
+    mismatched_root.Measure({10.0, 6.0});
+    mismatched_root.Arrange({0.0, 0.0, 10.0, 6.0});
+
+    IslandFrameCache mismatched;
+    CHECK(mismatched.Rebuild(mismatched_root, {10.0, 6.0}, background, &reader));
+    CHECK(HasExternalSurfaceIssue(mismatched, "2x2"));
+    CHECK(HasExternalSurfaceIssue(mismatched, "4x3"));
+    const Surface unscaled = PresentToSurface(mismatched, Color{0xff, 0xff, 0x00, 0xff});
+    for (int y = 0; y < unscaled.height(); ++y)
+        for (int x = 0; x < unscaled.width(); ++x)
+            CHECK(unscaled.At(x, y) == Pack(background));
 }
 
 int main(int argc, char** argv) {
@@ -746,6 +924,7 @@ int main(int argc, char** argv) {
 
     ClearCoversTheWholeFrameAndPresentDoesNotRebuild();
     SceneRecordsDescribeTheCommittedFrame();
+    ExternalSurfaceContentIsCompositedAtItsArrangedRect();
     RebuildCommitsACompleteNewFrame();
     ClearOnlyRebuildReplacesContentAtomically();
     DiagnosticsDescribeTheCommittedFrameAndFailedAttempt();

@@ -190,7 +190,8 @@ CaseResult LayOutCase(const std::string& case_json) {
 
 Surface RasterizeDisplayList(const DisplayList& list, TextBackend* backend, Color clear,
                              Color /*legacy_text_ink*/, std::vector<std::string>& text_failures,
-                             std::vector<RenderIssue>& render_issues) {
+                             std::vector<RenderIssue>& render_issues,
+                             ExternalSurfaceReader* external_reader) {
     text_failures.clear();
     render_issues.clear();
     if (!list.scene) {
@@ -207,7 +208,8 @@ Surface RasterizeDisplayList(const DisplayList& list, TextBackend* backend, Colo
     if (backend) {
         text_adapter = std::make_unique<TextBackendAdapter>(*backend, text_failures);
     }
-    RasterResult rendered = rasterizer.Render(*list.scene, clear, text_adapter.get());
+    RasterResult rendered =
+        rasterizer.Render(*list.scene, clear, text_adapter.get(), external_reader);
     render_issues = std::move(rendered.issues);
     return std::move(rendered.surface);
 }

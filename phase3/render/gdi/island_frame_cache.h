@@ -66,6 +66,23 @@ struct FrameTextRecord {
     Rect bounds;
 };
 
+// One producer-owned surface the frame composited, in surface coordinates.
+//
+// This is the record that says a region of the frame came from outside XAML:
+// which element it belongs to, where it landed, which kind of source it was,
+// and which generation of that source the frame was built from. A checker
+// reading it knows that no fill record predicts those pixels and that the
+// content changes when `generation` does. Whether the pixels actually arrived
+// is not asserted here -- a source that could not be imported is named in
+// render_issues() as UnsupportedExternalSurface beside this record, exactly as
+// a refused fill is.
+struct FrameExternalSurfaceRecord {
+    std::string path;
+    Rect bounds;
+    ExternalSurfaceKind kind = ExternalSurfaceKind::None;
+    std::uint64_t generation = 0;
+};
+
 class IslandFrameCache {
 public:
     IslandFrameCache() = default;
@@ -77,7 +94,16 @@ public:
     // Builds into temporary state and commits only after the complete surface
     // is resident in a DIB. A failed rebuild leaves the previous frame and its
     // generation intact, while last_build_error describes the failed attempt.
-    bool Rebuild(const Element& arranged_root, Size surface, Color clear) noexcept;
+    //
+    // `external_reader` is how content produced outside XAML gets into the
+    // frame: a SwapChainPanel's bound surface is composited at its arranged
+    // rect through it. Passing none is not "this frame has no external
+    // surfaces" -- it is "this frame cannot import one", and any that the tree
+    // declares are reported in render_issues() rather than silently dropped.
+    // The reader is borrowed for the duration of the call and never retained;
+    // a committed frame owns pixels and values only.
+    bool Rebuild(const Element& arranged_root, Size surface, Color clear,
+                 ExternalSurfaceReader* external_reader = nullptr) noexcept;
 
     // Commits a complete frame containing only the caller's clear color. This
     // is the null-content counterpart to Rebuild: it requires no Element and
@@ -121,6 +147,9 @@ public:
     const std::vector<FrameNodeRecord>& scene_nodes() const { return scene_nodes_; }
     const std::vector<FrameFillRecord>& scene_fills() const { return scene_fills_; }
     const std::vector<FrameTextRecord>& scene_texts() const { return scene_texts_; }
+    const std::vector<FrameExternalSurfaceRecord>& scene_external_surfaces() const {
+        return scene_external_surfaces_;
+    }
     // How many nodes and fills the scene had before this cap was applied.
     std::size_t scene_node_total() const { return scene_node_total_; }
     std::size_t scene_fill_total() const { return scene_fill_total_; }
@@ -136,6 +165,7 @@ public:
         std::vector<FrameNodeRecord> nodes;
         std::vector<FrameFillRecord> fills;
         std::vector<FrameTextRecord> texts;
+        std::vector<FrameExternalSurfaceRecord> external_surfaces;
         std::size_t node_total = 0;
         std::size_t fill_total = 0;
     };
@@ -178,6 +208,7 @@ private:
     std::vector<FrameNodeRecord> scene_nodes_;
     std::vector<FrameFillRecord> scene_fills_;
     std::vector<FrameTextRecord> scene_texts_;
+    std::vector<FrameExternalSurfaceRecord> scene_external_surfaces_;
     std::size_t scene_node_total_ = 0;
     std::size_t scene_fill_total_ = 0;
 };

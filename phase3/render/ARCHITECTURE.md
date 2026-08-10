@@ -313,6 +313,65 @@ reorder operations, or consult XAML objects.  It can cache realizations, batch
 compatible commands, and choose API calls, provided its observable result is
 unchanged.
 
+## External surface boundary
+
+A `SwapChainPanel` does not paint; a producer draws into a surface it owns and
+presents it, and the frame composites whatever is in that surface at the
+panel's arranged rectangle.  The scene therefore carries a
+`LocalExternalSurface` command holding the panel's local rectangle and an
+`ExternalSurfaceReference`: a kind, a generation and an opaque native value,
+plus a lifetime token that keeps the duplicated handle or AddRef'd swap chain
+alive for the whole immutable snapshot.  Layout learns nothing about `HANDLE`,
+`IUnknown`, DXGI or DirectComposition.
+
+Placement is the renderer's and never the producer's.  The arranged rectangle,
+the retained clip above it, paint order and the frame's scene record are all
+resolved by the backend from the snapshot.  The one question a CPU backend
+cannot answer for itself is *what pixels the source is*, because importing a
+swap chain or a composition surface handle needs a graphics device.  That, and
+only that, is the seam:
+
+```cpp
+class ExternalSurfaceReader {
+public:
+    virtual bool ReadExternalSurface(const ExternalSurfaceReference& source,
+                                     ExternalSurfaceView& view,
+                                     std::string& message) = 0;
+};
+```
+
+`ExternalSurfaceView` is premultiplied BGRA8, top row first, with a stride --
+the same colour model as everything else at this boundary.  It is borrowed for
+the duration of one `Render` call, so a reader may return a mapping it releases
+afterwards.
+
+Two implementations exist or are expected:
+
+* `CpuExternalSurfaceReader` imports `ExternalSurfaceKind::CpuBgraImage`, a
+  producer's premultiplied image already resident in the process.  It refuses
+  every other kind by name.
+* A DXGI reader implements the same interface for
+  `ExternalSurfaceKind::DxgiSwapChain`: `GetBuffer` on the presented back
+  buffer, copy to a staging texture, map, return the mapping as a view.  It is
+  the only part of this path that needs `Present` to work, and nothing
+  downstream of the view changes when it arrives.
+
+The CPU compositor composites the imported pixels source-over at whole pixels,
+one for one.  It never resamples: a producer sizes its surface to the panel it
+is bound to, and stretching what it presented would put content on the screen
+the producer never drew.  A surface whose extent is not the arranged extent, a
+scaled or rotated transform above it, a non-axis-aligned clip over it, a source
+no reader could import, and a frame with no reader bound at all are each named
+as `UnsupportedExternalSurface` with the measurements in the message.  None of
+them leaves pixels that could be mistaken for composited ones.
+
+DirectComposition takes the other route for a GPU source: it imports the
+resource the producer already owns and gives it a visual, rather than reading
+pixels back.  `ExternalSurfaceKind::CpuBgraImage` is `E_NOTIMPL` there, because
+turning a producer's CPU image into a composition surface means uploading and
+owning a copy of it every frame, which is a different design and not one this
+project has decided.
+
 ## Text boundary
 
 Text is shaped before display-list construction.  `DrawGlyphRun` references an

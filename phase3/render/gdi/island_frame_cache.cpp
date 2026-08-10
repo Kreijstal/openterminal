@@ -189,13 +189,22 @@ IslandFrameCache::SceneRecords RecordSceneOf(const DisplayList& list) {
     for (std::size_t index = 0; index < text_count; ++index)
         records.texts.push_back(
             FrameTextRecord{list.texts[index].path, list.texts[index].bounds});
+
+    const std::size_t external_count =
+        std::min(list.externals.size(), IslandFrameCache::kMaxSceneRecords);
+    records.external_surfaces.reserve(external_count);
+    for (std::size_t index = 0; index < external_count; ++index) {
+        const ExternalSurfaceOp& external = list.externals[index];
+        records.external_surfaces.push_back(FrameExternalSurfaceRecord{
+            external.path, external.bounds, external.kind, external.generation});
+    }
     return records;
 }
 
 }  // namespace
 
-bool IslandFrameCache::Rebuild(const Element& arranged_root, Size surface,
-                               Color clear) noexcept {
+bool IslandFrameCache::Rebuild(const Element& arranged_root, Size surface, Color clear,
+                               ExternalSurfaceReader* external_reader) noexcept {
     last_build_error_.clear();
 
     try {
@@ -221,7 +230,7 @@ bool IslandFrameCache::Rebuild(const Element& arranged_root, Size surface,
             GdiTextBackend text_backend(*next_dib);
             pixels = RasterizeDisplayList(display_list, &text_backend, clear,
                                           ProbeInkColor(), next_text_failures,
-                                          next_render_issues);
+                                          next_render_issues, external_reader);
             if (pixels.width() != extent.right || pixels.height() != extent.bottom) {
                 last_build_error_ = "the rasterizer returned a surface with the wrong extent";
                 return false;
@@ -231,7 +240,7 @@ bool IslandFrameCache::Rebuild(const Element& arranged_root, Size surface,
             // is no GDI allocation and Present becomes a successful no-op.
             pixels = RasterizeDisplayList(display_list, nullptr, clear,
                                           ProbeInkColor(), next_text_failures,
-                                          next_render_issues);
+                                          next_render_issues, external_reader);
             if (pixels.width() != extent.right || pixels.height() != extent.bottom) {
                 last_build_error_ = "the degenerate frame rasterized to the wrong extent";
                 return false;
@@ -317,6 +326,7 @@ bool IslandFrameCache::CommitFrame(Surface&& pixels, std::unique_ptr<DibTarget>&
     scene_nodes_ = std::move(scene.nodes);
     scene_fills_ = std::move(scene.fills);
     scene_texts_ = std::move(scene.texts);
+    scene_external_surfaces_ = std::move(scene.external_surfaces);
     scene_node_total_ = scene.node_total;
     scene_fill_total_ = scene.fill_total;
     ready_ = true;
@@ -346,6 +356,7 @@ bool IslandFrameCache::PublishFrom(IslandFrameCache&& candidate,
     scene_nodes_ = std::move(candidate.scene_nodes_);
     scene_fills_ = std::move(candidate.scene_fills_);
     scene_texts_ = std::move(candidate.scene_texts_);
+    scene_external_surfaces_ = std::move(candidate.scene_external_surfaces_);
     scene_node_total_ = candidate.scene_node_total_;
     scene_fill_total_ = candidate.scene_fill_total_;
     ready_ = true;

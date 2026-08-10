@@ -170,6 +170,12 @@ void Surface::CompositeLayer(const Surface& layer, double opacity) {
     }
 }
 
+void Surface::BlendPremultipliedPixel(int x, int y, std::uint32_t premultiplied) {
+    if (x < 0 || y < 0 || x >= width_ || y >= height_) return;
+    std::uint32_t& destination = pixels_[static_cast<size_t>(y) * width_ + x];
+    destination = SourceOver(premultiplied, destination);
+}
+
 std::string ToPpm(const Surface& surface) {
     std::string out = "P6\n";
     out += std::to_string(surface.width());

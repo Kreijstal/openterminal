@@ -264,6 +264,8 @@ struct Walker {
                   *content);
 
         if (external_surface) {
+            out.externals.push_back(ExternalSurfaceOp{
+                bounds, path, external_surface.kind, external_surface.generation});
             content->commands.push_back(
                 LocalExternalSurface{local_bounds, std::move(external_surface)});
         }

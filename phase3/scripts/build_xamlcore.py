@@ -63,7 +63,8 @@ LAYOUT_SOURCES += ["binding.cpp", "visual_state.cpp", "default_styles.cpp",
 # CPU frame and presents its cached DIB from WM_PAINT. Keep this in step with
 # render/CMakeLists.txt and build_render.py.
 RENDER_SOURCES = ["display_list.cpp", "scene.cpp", "surface.cpp",
-                  "cpu_raster_backend.cpp", "case_runner.cpp"]
+                  "cpu_raster_backend.cpp", "case_runner.cpp",
+                  "external_surface_reader.cpp"]
 GDI_RENDER_SOURCES = ["gdi_target.cpp", "dwrite_text_provider.cpp",
                       "island_frame_cache.cpp"]
 DCOMP_RENDER_SOURCES = ["dcomp_scene_backend.cpp"]

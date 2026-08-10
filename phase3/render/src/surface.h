@@ -84,6 +84,17 @@ public:
     // it source-over this surface. Dimensions must match.
     void CompositeLayer(const Surface& layer, double opacity);
 
+    // Composites one already-premultiplied source pixel source-over this
+    // surface, using the same integer arithmetic every other blend here uses.
+    //
+    // This is the primitive imported content needs. A brush colour arrives
+    // straight and is premultiplied on the way in; a pixel produced outside
+    // XAML -- a composition surface, a swap chain back buffer -- is already
+    // premultiplied, and premultiplying it again would darken it. Coordinates
+    // outside the surface are a no-op rather than an error, so a caller may
+    // walk a rectangle that the surface only partly contains.
+    void BlendPremultipliedPixel(int x, int y, std::uint32_t premultiplied);
+
 private:
     int width_;
     int height_;

@@ -14,7 +14,8 @@ namespace render {
 class CpuRasterBackend final : public RasterBackend {
 public:
     RasterResult Render(const SceneSnapshot& scene, Color clear,
-                        TextRasterizer* text_rasterizer = nullptr) const override;
+                        TextRasterizer* text_rasterizer = nullptr,
+                        ExternalSurfaceReader* external_reader = nullptr) const override;
 };
 
 }  // namespace render
