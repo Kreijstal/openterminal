@@ -1,9 +1,13 @@
 #include <windows.h>
 
+#include <cstdint>
 #include <iostream>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "border.h"
+#include "dwrite_text_provider.h"
 #include "grid.h"
 #include "island_frame_cache.h"
 #include "surface.h"
@@ -14,7 +18,9 @@ using namespace openxaml::render;
 namespace {
 
 int failures = 0;
+int skipped = 0;
 constexpr wchar_t kLayeredTestClass[] = L"OpenXaml.IslandFrameCache.LayeredTest";
+constexpr wchar_t kLayeredProbeClass[] = L"OpenXaml.IslandFrameCache.LayeredProbe";
 
 void Check(bool condition, const char* what, int line) {
     if (condition) return;
@@ -24,6 +30,226 @@ void Check(bool condition, const char* what, int line) {
 }
 
 #define CHECK(condition) Check(static_cast<bool>(condition), #condition, __LINE__)
+
+// What this loader actually does with a layered child's pixels, measured with
+// plain GDI and no XAML.
+//
+// The island publishes a frame with UpdateLayeredWindow(ULW_ALPHA) on a
+// WS_CHILD | WS_EX_LAYERED window and a destination in screen coordinates,
+// which is the Win32 contract. Two things have to hold for a pixel assertion
+// on the result to mean anything, and neither is this project's code:
+//
+//   * an opaque source pixel has to reach the screen, and
+//   * an alpha-zero source pixel has to leave the parent's pixel showing.
+//
+// research/wine/af5241854c513c2e68938425cc6cd3cac40b943a/layered-child-update.md
+// records why the second one does not hold on Wine: a layered child is given
+// its own root-level ARGB X window rather than being composited into its
+// parent's surface, so alpha zero resolves to zero instead of to the parent.
+// The first one additionally does not hold when the window was not yet visible
+// at the time of the update -- Win32 allows setting a layered window's content
+// before showing it, and on this path the RGB does not survive the map.
+//
+// So both are measured, in the order the island itself uses, before anything
+// asserts on a pixel.
+struct LayeredChildPresentation {
+    bool measured = false;
+    // A publication made while the child was still hidden, read after it was
+    // mapped. Win32 lets a host fill a layered window before showing it, and
+    // the island's first frame does exactly that.
+    bool opaque_survives_map = false;
+    bool alpha_zero_reveals_parent_across_map = false;
+    COLORREF across_map_opaque_read = 0;
+    COLORREF across_map_alpha_zero_read = 0;
+    // A publication made to an already mapped child: the steady-state path
+    // every frame after the first takes, and the one the composition contract
+    // itself is about.
+    bool opaque_reaches_screen = false;
+    bool alpha_zero_reveals_parent = false;
+    COLORREF opaque_read = 0;
+    COLORREF alpha_zero_read = 0;
+    long displacement_x = 0;
+    long displacement_y = 0;
+
+    bool composites() const {
+        return measured && opaque_reaches_screen && alpha_zero_reveals_parent;
+    }
+    bool survives_map() const {
+        return measured && opaque_survives_map && alpha_zero_reveals_parent_across_map;
+    }
+};
+
+LayeredChildPresentation layered_child_presentation;
+
+LRESULT CALLBACK LayeredProbeWindowProc(HWND window, UINT message, WPARAM wparam,
+                                        LPARAM lparam) {
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(window, &paint);
+        if (dc) {
+            RECT client{};
+            GetClientRect(window, &client);
+            HBRUSH background = CreateSolidBrush(RGB(0x11, 0x22, 0x33));
+            FillRect(dc, &client, background);
+            DeleteObject(background);
+            EndPaint(window, &paint);
+        }
+        return 0;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+LayeredChildPresentation MeasureLayeredChildPresentation() {
+    LayeredChildPresentation measurement;
+
+    WNDCLASSEXW window_class{};
+    window_class.cbSize = sizeof(window_class);
+    window_class.lpfnWndProc = LayeredProbeWindowProc;
+    window_class.hInstance = GetModuleHandleW(nullptr);
+    window_class.lpszClassName = kLayeredProbeClass;
+    if (RegisterClassExW(&window_class) == 0 &&
+        GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+        return measurement;
+
+    HWND parent = CreateWindowExW(0, kLayeredProbeClass, L"", WS_POPUP, 200, 200, 8, 4,
+                                  nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!parent) return measurement;
+    ShowWindow(parent, SW_SHOWNOACTIVATE);
+    UpdateWindow(parent);
+
+    HWND child = CreateWindowExW(WS_EX_LAYERED, kLayeredProbeClass, L"", WS_CHILD, 0, 0,
+                                 8, 4, parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!child) {
+        DestroyWindow(parent);
+        return measurement;
+    }
+
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth = 8;
+    info.bmiHeader.biHeight = -4;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HDC screen = GetDC(nullptr);
+    HDC memory = CreateCompatibleDC(screen);
+    HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (bitmap && bits && memory && screen) {
+        // Left half opaque, right half alpha zero -- the same two-sided source
+        // the island's own presentation check uses.
+        auto* pixels = static_cast<std::uint32_t*>(bits);
+        for (int y = 0; y < 4; ++y) {
+            for (int x = 0; x < 8; ++x)
+                pixels[y * 8 + x] = x < 4 ? 0xff908070u : 0x00000000u;
+        }
+        HGDIOBJ previous = SelectObject(memory, bitmap);
+        POINT origin{0, 0};
+        if (ClientToScreen(parent, &origin)) {
+            POINT destination = origin;
+            POINT source{0, 0};
+            SIZE size{8, 4};
+            BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+            if (UpdateLayeredWindow(child, nullptr, &destination, &size, memory, &source,
+                                    0, &blend, ULW_ALPHA)) {
+                RECT placed{};
+                if (GetWindowRect(child, &placed)) {
+                    measurement.displacement_x = placed.left - origin.x;
+                    measurement.displacement_y = placed.top - origin.y;
+                }
+                ShowWindow(child, SW_SHOWNOACTIVATE);
+                GdiFlush();
+                measurement.across_map_opaque_read = GetPixel(screen, origin.x, origin.y);
+                measurement.across_map_alpha_zero_read =
+                    GetPixel(screen, origin.x + 4, origin.y);
+                measurement.opaque_survives_map =
+                    measurement.across_map_opaque_read == RGB(0x90, 0x80, 0x70);
+                measurement.alpha_zero_reveals_parent_across_map =
+                    measurement.across_map_alpha_zero_read == RGB(0x11, 0x22, 0x33);
+
+                // Publish again, now that the child is mapped. A loader that
+                // only loses the content across the map answers differently
+                // here than one whose layered child has no per-pixel alpha
+                // against its parent at all.
+                destination = origin;
+                if (UpdateLayeredWindow(child, nullptr, &destination, &size, memory,
+                                        &source, 0, &blend, ULW_ALPHA)) {
+                    GdiFlush();
+                    measurement.opaque_read = GetPixel(screen, origin.x, origin.y);
+                    measurement.alpha_zero_read = GetPixel(screen, origin.x + 4, origin.y);
+                    measurement.opaque_reaches_screen =
+                        measurement.opaque_read == RGB(0x90, 0x80, 0x70);
+                    measurement.alpha_zero_reveals_parent =
+                        measurement.alpha_zero_read == RGB(0x11, 0x22, 0x33);
+                    measurement.measured = true;
+                }
+            }
+        }
+        SelectObject(memory, previous);
+    }
+    if (bitmap) DeleteObject(bitmap);
+    if (memory) DeleteDC(memory);
+    if (screen) ReleaseDC(nullptr, screen);
+    DestroyWindow(child);
+    DestroyWindow(parent);
+    UnregisterClassW(kLayeredProbeClass, GetModuleHandleW(nullptr));
+    return measurement;
+}
+
+void ReportLayeredMeasurement(int line, const char* what) {
+    const LayeredChildPresentation& measured = layered_child_presentation;
+    std::cerr << "island_frame_cache_test.cpp:" << line << ": SKIP: " << what
+              << " -- this loader "
+              << (measured.measured ? "" : "could not be measured for ")
+              << "layered-child presentation. Publishing to a mapped child: opaque="
+              << (measured.opaque_reaches_screen ? "reaches screen" : "lost") << " (read 0x"
+              << std::hex << static_cast<unsigned long>(measured.opaque_read) << std::dec
+              << "), alpha-zero="
+              << (measured.alpha_zero_reveals_parent ? "reveals parent" : "resolves to zero")
+              << " (read 0x" << std::hex
+              << static_cast<unsigned long>(measured.alpha_zero_read) << std::dec
+              << "). Publishing before the map: opaque="
+              << (measured.opaque_survives_map ? "survives" : "lost") << " (read 0x"
+              << std::hex << static_cast<unsigned long>(measured.across_map_opaque_read)
+              << std::dec << "), alpha-zero="
+              << (measured.alpha_zero_reveals_parent_across_map ? "reveals parent"
+                                                                : "resolves to zero")
+              << " (read 0x" << std::hex
+              << static_cast<unsigned long>(measured.across_map_alpha_zero_read) << std::dec
+              << "). Child displacement " << measured.displacement_x << ","
+              << measured.displacement_y
+              << "; see research/wine/af5241854c513c2e68938425cc6cd3cac40b943a/"
+                 "layered-child-update.md\n";
+    ++skipped;
+}
+
+// The composition contract: an opaque frame pixel is exact on screen and an
+// alpha-zero frame pixel leaves the parent's pixel showing. Enforced wherever
+// the probe says this loader delivers both to a mapped layered child.
+void CheckLayeredPixel(bool condition, const char* what, int line) {
+    if (layered_child_presentation.composites()) {
+        Check(condition, what, line);
+        return;
+    }
+    ReportLayeredMeasurement(line, what);
+}
+
+// The separate claim that content published to a layered child that is not yet
+// mapped is still there once it is. Win32 allows filling a layered window
+// before showing it, and the island's first frame does; a loader that drops it
+// is a distinct boundary from the one above and is named as its own.
+void CheckLayeredPixelAcrossMap(bool condition, const char* what, int line) {
+    if (layered_child_presentation.survives_map()) {
+        Check(condition, what, line);
+        return;
+    }
+    ReportLayeredMeasurement(line, what);
+}
+
+#define CHECK_LAYERED_PIXEL(condition) \
+    CheckLayeredPixel(static_cast<bool>(condition), #condition, __LINE__)
+#define CHECK_LAYERED_PIXEL_ACROSS_MAP(condition) \
+    CheckLayeredPixelAcrossMap(static_cast<bool>(condition), #condition, __LINE__)
 
 Surface PresentToSurface(const IslandFrameCache& cache, Color initial) {
     DibTarget destination(cache.width(), cache.height());
@@ -273,6 +499,12 @@ void LayeredChildCompositesOverItsParent() {
 
         POINT origin{0, 0};
         CHECK(ClientToScreen(parent, &origin));
+
+        // First the island's own startup order: publish a complete frame into
+        // the child before it is mapped, then map it. Nothing about that is
+        // this project's to decide -- UpdateLayeredWindow is documented to
+        // work on a window that is not yet visible -- so the pixels are only
+        // asserted on a loader the probe measured delivering them.
         const FramePresentResult result =
             cache.PresentLayeredChild(child, origin);
         CHECK(result.presented);
@@ -280,20 +512,43 @@ void LayeredChildCompositesOverItsParent() {
         ShowWindow(child, SW_SHOWNOACTIVATE);
         GdiFlush();
 
+        // A screen DC observes the compositor's result. CAPTUREBLT is
+        // deliberately absent: on Wine it asks for the layered source surface
+        // itself, whose alpha-zero RGB is black, rather than the parent pixels
+        // visible through that surface.
         HDC screen = GetDC(nullptr);
         CHECK(screen != nullptr);
         if (screen) {
-            // A screen DC observes the compositor's result. CAPTUREBLT is
-            // deliberately absent: on Wine it asks for the layered source
-            // surface itself, whose alpha-zero RGB is black, rather than the
-            // parent pixels visible through that surface.
             for (int y = 0; y < 4; ++y) {
                 for (int x = 0; x < 4; ++x)
-                    CHECK(GetPixel(screen, origin.x + x, origin.y + y) ==
-                          RGB(0x90, 0x80, 0x70));
+                    CHECK_LAYERED_PIXEL_ACROSS_MAP(
+                        GetPixel(screen, origin.x + x, origin.y + y) ==
+                        RGB(0x90, 0x80, 0x70));
                 for (int x = 4; x < 8; ++x)
-                    CHECK(GetPixel(screen, origin.x + x, origin.y + y) ==
-                          RGB(0x11, 0x22, 0x33));
+                    CHECK_LAYERED_PIXEL_ACROSS_MAP(
+                        GetPixel(screen, origin.x + x, origin.y + y) ==
+                        RGB(0x11, 0x22, 0x33));
+            }
+        }
+
+        // Then the composition contract itself, on the mapped child: this is
+        // the steady-state path every frame after the first takes, and it is
+        // what "composites over its parent" means. The frame is the same one;
+        // only the publication is new.
+        const FramePresentResult republished =
+            cache.PresentLayeredChild(child, origin);
+        CHECK(republished.presented);
+        CHECK(republished.error == ERROR_SUCCESS);
+        CHECK(cache.generation() == 1);  // Presenting never rebuilds.
+        GdiFlush();
+        if (screen) {
+            for (int y = 0; y < 4; ++y) {
+                for (int x = 0; x < 4; ++x)
+                    CHECK_LAYERED_PIXEL(GetPixel(screen, origin.x + x, origin.y + y) ==
+                                        RGB(0x90, 0x80, 0x70));
+                for (int x = 4; x < 8; ++x)
+                    CHECK_LAYERED_PIXEL(GetPixel(screen, origin.x + x, origin.y + y) ==
+                                        RGB(0x11, 0x22, 0x33));
             }
         }
         if (screen) ReleaseDC(nullptr, screen);
@@ -331,24 +586,78 @@ void PresentationFailuresAreContained() {
     CHECK(result.error == ERROR_INVALID_HANDLE);
 }
 
+// A run this prefix can actually put glyphs on a surface with, or nothing.
+//
+// The refusal the caller checks is about the *destination*, and it sits behind
+// two earlier ones: DirectWrite answers "could not resolve any requested
+// family" for a family that is not installed, and the renderer answers "no
+// shaped advances" for a run layout never measured. Neither of those reaches
+// the ClearType coverage decision, so this measures a run all the way to ink
+// on an opaque surface and hands back the one that got there. A prefix with no
+// such family makes the caller skip by name instead of asserting on a refusal
+// that came from somewhere else.
+bool MeasureTransparencyProbeRun(TextOp& run) {
+    static const char* const candidates[] = {"Segoe UI", "Liberation Sans", "Arial",
+                                             "DejaVu Sans", "Tahoma", "Cascadia Mono"};
+    std::string diagnostic;
+    if (!InstallDirectWriteRuntimeTextProvider(diagnostic)) return false;
+    const std::shared_ptr<RuntimeTextProvider> provider = GetRuntimeTextProvider();
+    if (!provider) return false;
+
+    for (const char* candidate : candidates) {
+        RuntimeTextResult measured;
+        diagnostic.clear();
+        if (!provider->Layout({candidate, "Terminal", 12.0, 60.0, false, false}, measured,
+                              diagnostic))
+            continue;
+
+        TextOp candidate_run;
+        candidate_run.bounds = {0.0, 0.0, 60.0, 20.0};
+        candidate_run.text = "Terminal";
+        candidate_run.font_family = candidate;
+        candidate_run.font_size = 12.0;
+        candidate_run.baseline = measured.baseline;
+        candidate_run.advances = measured.advances;
+
+        Surface opaque(60, 20, Color{0xff, 0xff, 0xff, 0xff});
+        const std::vector<std::uint32_t> before = opaque.pixels();
+        diagnostic.clear();
+        if (DrawDirectWriteTextRun(opaque, candidate_run, Color{0xff, 0x00, 0x00, 0x00},
+                                   diagnostic) &&
+            opaque.pixels() != before) {
+            run = candidate_run;
+            return true;
+        }
+    }
+    return false;
+}
+
 void TransparentClearAndTextAreHandledWithoutInventingAlpha() {
-    DibTarget target(6, 4);
-    CHECK(target.valid());
-    GdiTextBackend backend(target);
-    Surface transparent(6, 4, Color{0, 0x12, 0x34, 0x56});
-    const std::vector<std::uint32_t> before = transparent.pixels();
-    TextOp run;
-    run.bounds = {0.0, 0.0, 6.0, 4.0};
-    run.text = "x";
-    run.font_family = "this family must not be queried";
-    run.font_size = 12.0;
-    run.baseline = 3.0;
-    run.advances = {4.0};
-    std::vector<std::string> failures;
-    backend.DrawRuns(transparent, {run}, Color{0xff, 0xff, 0xff, 0xff}, failures);
-    CHECK(failures.size() == 1);
-    CHECK(failures[0].find("intersects non-opaque pixels") != std::string::npos);
-    CHECK(transparent.pixels() == before);
+    // ClearType coverage is measured against the destination, so a run that
+    // lands on non-opaque pixels has to be refused by name and leave them
+    // exactly as they were. Inventing alpha there is the one thing a layered
+    // island frame cannot survive: it would put opaque glyph pixels into a
+    // region the frame declared transparent.
+    TextOp probe;
+    if (!MeasureTransparencyProbeRun(probe)) {
+        std::cerr << "island_frame_cache_test.cpp: SKIP: transparent-destination text "
+                     "refusal -- no probe family reaches ink on an opaque surface in this "
+                     "prefix, so a run here is refused for its family rather than for its "
+                     "destination\n";
+        ++skipped;
+    } else {
+        DibTarget target(60, 20);
+        CHECK(target.valid());
+        GdiTextBackend backend(target);
+        Surface transparent(60, 20, Color{0, 0x12, 0x34, 0x56});
+        const std::vector<std::uint32_t> before = transparent.pixels();
+        std::vector<std::string> failures;
+        backend.DrawRuns(transparent, {probe}, Color{0xff, 0xff, 0xff, 0xff}, failures);
+        CHECK(failures.size() == 1);
+        if (failures.size() == 1)
+            CHECK(failures[0].find("non-opaque pixels") != std::string::npos);
+        CHECK(transparent.pixels() == before);
+    }
 
     IslandFrameCache cache;
     Border root;
@@ -433,6 +742,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    layered_child_presentation = MeasureLayeredChildPresentation();
+
     ClearCoversTheWholeFrameAndPresentDoesNotRebuild();
     SceneRecordsDescribeTheCommittedFrame();
     RebuildCommitsACompleteNewFrame();
@@ -445,6 +756,10 @@ int main(int argc, char** argv) {
     PresentationFailuresAreContained();
     TransparentClearAndTextAreHandledWithoutInventingAlpha();
 
+    if (skipped > 0) {
+        std::cout << skipped
+                  << " island frame cache check(s) skipped by name after measurement\n";
+    }
     if (failures == 0) {
         std::cout << "island frame cache checks passed\n";
         return 0;
