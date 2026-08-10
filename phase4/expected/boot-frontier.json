@@ -3,7 +3,7 @@
   "crash": null,
   "executable": "WindowsTerminal.exe",
   "exit_code": 124,
-  "first_missing_class": "Windows.Web.Http.HttpClient",
+  "first_missing_class": null,
   "first_not_implemented": null,
   "first_xbf_failure": null,
   "milestones": {
@@ -12,9 +12,7 @@
     "reached_winrt_activation": true,
     "window_driver_present": true
   },
-  "missing_classes": [
-    "Windows.Web.Http.HttpClient"
-  ],
+  "missing_classes": [],
   "missing_imports": [],
   "timed_out": true
 }
