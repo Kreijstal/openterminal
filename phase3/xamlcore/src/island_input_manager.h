@@ -11,12 +11,38 @@
 
 #include <windows.h>
 
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <memory>
 #include <optional>
 
 namespace openxaml::winrt {
+
+// The opt-in trace of the input path, from the host window's message to the
+// routed event that carries it. A keystroke that never arrives, one that
+// arrives at an unfocused island, and one that is routed to nothing are three
+// different failures with the same symptom -- nothing happens -- and only a
+// record written at each of those points can tell them apart.
+//
+// The environment is read once: this sits on the message path, and a
+// GetEnvironmentVariable per keystroke would be a cost paid by every run.
+inline bool IslandInputTraceEnabled() noexcept {
+    static const bool enabled =
+        GetEnvironmentVariableW(L"OPENXAML_TRACE_INPUT", nullptr, 0) != 0;
+    return enabled;
+}
+
+inline void TraceIslandInput(const char* format, ...) noexcept {
+    if (!IslandInputTraceEnabled()) return;
+    char line[320]{};
+    std::va_list arguments;
+    va_start(arguments, format);
+    std::vsnprintf(line, sizeof(line), format, arguments);
+    va_end(arguments);
+    OutputDebugStringA(line);
+}
 
 struct IslandPhysicalKeyStatus {
     std::uint32_t repeat_count = 0;

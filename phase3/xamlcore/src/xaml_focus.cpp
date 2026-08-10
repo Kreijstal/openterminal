@@ -1275,8 +1275,14 @@ bool XamlFocusScope::RequestFocus(
             SetDesired(nullptr, ABI::Windows::UI::Xaml::FocusState_Unfocused);
             Reconcile();
         }
+        TraceIslandInput("OpenXaml input event=focus-request granted=0 "
+                         "reason=host-refused state=%d\n",
+                         static_cast<int>(state));
         return false;
     }
+    TraceIslandInput("OpenXaml input event=focus-request granted=%d state=%d "
+                     "host_focused=%d\n", active_ == &target ? 1 : 0,
+                     static_cast<int>(state), host_focused_ ? 1 : 0);
     return active_ == &target;
 }
 
@@ -1319,6 +1325,14 @@ void XamlFocusScope::OnIslandFocusChanged(bool focused) noexcept {
 bool XamlFocusScope::OnIslandKey(const IslandKeyEvent& event) noexcept {
     try {
     RetainedRoute route = SnapshotRoute(active_);
+    // An empty route is the difference between "the key was not handled" and
+    // "there was nobody to hand it to". Only a record written here can tell
+    // an unfocused island apart from a control that ignored the key.
+    TraceIslandInput("OpenXaml input event=key-route vk=%u focused=%d "
+                     "targets=%u\n",
+                     static_cast<unsigned>(event.virtual_key),
+                     active_ ? 1 : 0,
+                     static_cast<unsigned>(route.targets.size()));
     if (route.empty()) return false;
     auto* args = new (std::nothrow) KeyRoutedEventArgsObject(event);
     if (!args) {
@@ -1355,6 +1369,9 @@ bool XamlFocusScope::OnIslandCharacter(
     if (event.character > 0xffff) return false;
     try {
     RetainedRoute route = SnapshotRoute(active_);
+    TraceIslandInput("OpenXaml input event=char-route char=%u focused=%d "
+                     "targets=%u\n", event.character, active_ ? 1 : 0,
+                     static_cast<unsigned>(route.targets.size()));
     if (route.empty()) return false;
     auto* args = new (std::nothrow) CharacterRoutedEventArgsObject(event);
     if (!args) {
