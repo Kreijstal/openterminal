@@ -1,0 +1,40 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "openterminal-mingw-dependencies",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "cli11",
+    "cmark",
+    "fmt",
+    "icu",
+    "jsoncpp",
+    "ms-gsl"
+  ],
+  "overrides": [
+    {
+      "name": "cli11",
+      "version": "2.6.1"
+    },
+    {
+      "name": "cmark",
+      "version": "0.31.1"
+    },
+    {
+      "name": "fmt",
+      "version": "12.1.0"
+    },
+    {
+      "name": "icu",
+      "version": "78.3"
+    },
+    {
+      "name": "jsoncpp",
+      "version": "1.9.6"
+    },
+    {
+      "name": "ms-gsl",
+      "version": "4.2.2"
+    }
+  ],
+  "builtin-baseline": "927f62e4b8838bd7e441e9c45103a16ffd75007e"
+}

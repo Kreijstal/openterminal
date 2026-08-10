@@ -1,0 +1,200 @@
+{
+  "programs": [
+    {
+      "name": "d2d_window",
+      "purpose": "Create an HWND, own Direct2D resources, draw one primitive, resize and repaint.",
+      "source_sets": [
+        "direct2d_hello_window"
+      ]
+    },
+    {
+      "local_context": [
+        "phase3/render/src/display_list.h",
+        "phase3/render/src/display_list.cpp",
+        "phase3/render/gdi/xaml_window.cpp"
+      ],
+      "name": "d2d_display_list",
+      "purpose": "Replace the hard-wired primitive with OpenTerminal's existing display list.",
+      "source_sets": [
+        "direct2d_hello_window",
+        "direct2d_device_resources"
+      ]
+    },
+    {
+      "name": "d2d_tree",
+      "purpose": "Accumulate parent offsets, preserve z-order, transform children and apply a clip.",
+      "source_sets": [
+        "composition_visual_tree",
+        "composition_layout_transforms"
+      ]
+    },
+    {
+      "name": "d2d_alpha",
+      "purpose": "Render overlapping translucent subtrees and make layer composition observable.",
+      "source_sets": [
+        "composition_visual_tree",
+        "composition_layout_transforms"
+      ]
+    },
+    {
+      "name": "dwrite_text",
+      "purpose": "Create a text layout, draw it, then expose glyph runs through a custom renderer.",
+      "source_sets": [
+        "directwrite_hello",
+        "directwrite_custom_renderer"
+      ]
+    },
+    {
+      "name": "dcomp_window",
+      "purpose": "Attach a DirectComposition target and visual tree to an HWND and commit it.",
+      "source_sets": [
+        "directcomposition_hwnd",
+        "composition_visual_tree"
+      ]
+    },
+    {
+      "local_context": [
+        "phase3/layout/src/markup.cpp",
+        "phase3/render/src/display_list.cpp"
+      ],
+      "name": "mini_xaml",
+      "purpose": "Turn one declarative XAML object into layout and a display-list primitive.",
+      "source_sets": [
+        "xaml_minimal_object",
+        "composition_xaml_interop"
+      ]
+    },
+    {
+      "local_context": [
+        "phase3/layout/src/grid.cpp",
+        "phase3/layout/src/stack_panel.cpp",
+        "phase3/render/src/display_list.cpp"
+      ],
+      "name": "nested_xaml",
+      "purpose": "Expand nested Grid, StackPanel, Border and text into an ordered visual tree.",
+      "source_sets": [
+        "xaml_nested_layout",
+        "composition_xaml_interop"
+      ]
+    }
+  ],
+  "repositories": {
+    "classic": {
+      "commit": "d59e5f1dc9c768615e4e1ab1f0f009e6a3ed747c",
+      "license": "MIT",
+      "url": "https://github.com/microsoft/Windows-classic-samples"
+    },
+    "composition": {
+      "commit": "92e5ee73e78ff81bfe46b8045f50c948dc55d6e1",
+      "license": "MIT",
+      "url": "https://github.com/microsoft/WindowsCompositionSamples"
+    },
+    "composition-win32": {
+      "commit": "ee50e2ea137dcef7b82ba504eff7435e5ebf5294",
+      "license": "MIT",
+      "url": "https://github.com/microsoft/Windows.UI.Composition-Win32-Samples"
+    },
+    "universal": {
+      "commit": "4eb2fcb499c5bc549e918920cfd2b64396a650d9",
+      "license": "MIT",
+      "url": "https://github.com/microsoft/Windows-universal-samples"
+    }
+  },
+  "schema_version": 1,
+  "source_sets": {
+    "composition_layout_transforms": {
+      "paths": [
+        "LICENSE.txt",
+        "SampleGallery/Samples/SDK 10586/BasicLayoutAndTransforms/BasicLayoutAndTransforms.xaml",
+        "SampleGallery/Samples/SDK 10586/BasicLayoutAndTransforms/BasicLayoutAndTransforms.xaml.cs",
+        "SampleGallery/Samples/SDK 10586/BasicLayoutAndTransforms/TransformPropertyModel.cs"
+      ],
+      "repository": "composition"
+    },
+    "composition_visual_tree": {
+      "paths": [
+        "LICENSE",
+        "Samples/CompositionVisual/cpp/CompositionVisual.vcxproj",
+        "Samples/CompositionVisual/cpp/Package.appxmanifest",
+        "Samples/CompositionVisual/cpp/VisualProperties.cpp",
+        "Samples/CompositionVisual/cpp/VisualProperties.h",
+        "Samples/CompositionVisual/cpp/pch.h"
+      ],
+      "repository": "universal"
+    },
+    "composition_xaml_interop": {
+      "paths": [
+        "LICENSE.txt",
+        "SampleGallery/Samples/SDK 10586/BasicXamlInterop/BasicXamlInterop.xaml",
+        "SampleGallery/Samples/SDK 10586/BasicXamlInterop/BasicXamlInterop.xaml.cs"
+      ],
+      "repository": "composition"
+    },
+    "direct2d_device_resources": {
+      "paths": [
+        "Samples/Win7Samples/multimedia/Direct2D/SimpleDirect2DApplication/README.md",
+        "Samples/Win7Samples/multimedia/Direct2D/SimpleDirect2DApplication/SimpleDirect2dApplication.cpp",
+        "Samples/Win7Samples/multimedia/Direct2D/SimpleDirect2DApplication/SimpleDirect2dApplication.h"
+      ],
+      "repository": "classic"
+    },
+    "direct2d_hello_window": {
+      "paths": [
+        "LICENSE",
+        "Samples/Win7Samples/multimedia/Direct2D/Direct2DHelloWorld/DeclareDPIAware.manifest",
+        "Samples/Win7Samples/multimedia/Direct2D/Direct2DHelloWorld/Direct2DHelloWorld.cpp",
+        "Samples/Win7Samples/multimedia/Direct2D/Direct2DHelloWorld/Direct2DHelloWorld.h",
+        "Samples/Win7Samples/multimedia/Direct2D/Direct2DHelloWorld/README.md"
+      ],
+      "repository": "classic"
+    },
+    "directcomposition_hwnd": {
+      "paths": [
+        "LICENSE",
+        "cpp/HelloComposition/README.md",
+        "cpp/HelloComposition/HelloComposition/CompositionHost.cpp",
+        "cpp/HelloComposition/HelloComposition/CompositionHost.h",
+        "cpp/HelloComposition/HelloComposition/HelloComposition.cpp",
+        "cpp/HelloComposition/HelloComposition/HelloComposition.h",
+        "cpp/HelloComposition/HelloComposition/pch.h"
+      ],
+      "repository": "composition-win32"
+    },
+    "directwrite_custom_renderer": {
+      "paths": [
+        "Samples/Win7Samples/multimedia/DirectWrite/HelloWorld/CustomText.cpp",
+        "Samples/Win7Samples/multimedia/DirectWrite/HelloWorld/CustomText.h",
+        "Samples/Win7Samples/multimedia/DirectWrite/HelloWorld/CustomTextRenderer.cpp",
+        "Samples/Win7Samples/multimedia/DirectWrite/HelloWorld/CustomTextRenderer.h"
+      ],
+      "repository": "classic"
+    },
+    "directwrite_hello": {
+      "paths": [
+        "Samples/Win7Samples/multimedia/DirectWrite/SimpleHelloWorld/DemoApp.cpp",
+        "Samples/Win7Samples/multimedia/DirectWrite/SimpleHelloWorld/DemoApp.h",
+        "Samples/Win7Samples/multimedia/DirectWrite/SimpleHelloWorld/DeclareDPIAware.manifest",
+        "Samples/Win7Samples/multimedia/DirectWrite/SimpleHelloWorld/SimpleHelloWorld.h",
+        "Samples/Win7Samples/multimedia/DirectWrite/SimpleHelloWorld/readme.txt",
+        "Samples/Win7Samples/multimedia/DirectWrite/SimpleHelloWorld/winmain.cpp"
+      ],
+      "repository": "classic"
+    },
+    "xaml_minimal_object": {
+      "paths": [
+        "Samples/XamlBind/cpp/MyUserControl1.xaml",
+        "Samples/XamlBind/cpp/MyUserControl1.xaml.cpp",
+        "Samples/XamlBind/cpp/MyUserControl1.xaml.h"
+      ],
+      "repository": "universal"
+    },
+    "xaml_nested_layout": {
+      "paths": [
+        "Samples/XamlBind/cpp/BasicTests.xaml",
+        "Samples/XamlBind/cpp/Templates.xaml",
+        "SharedContent/xaml/MainPage.xaml"
+      ],
+      "repository": "universal"
+    }
+  }
+}

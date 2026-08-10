@@ -1,0 +1,604 @@
+{
+  "files": [
+    {
+      "bytes": 1231,
+      "encoding": "utf-8",
+      "lines": 24,
+      "path": "LICENSE",
+      "repository": "classic",
+      "sha256": "3645a237b872306e4955bc2ce75783537bd7123bcb57332f8819e4cfbcf50b45",
+      "used_by": [
+        "d2d_display_list",
+        "d2d_window"
+      ]
+    },
+    {
+      "bytes": 723,
+      "encoding": "utf-8",
+      "lines": 15,
+      "path": "Samples/Win7Samples/multimedia/Direct2D/Direct2DHelloWorld/DeclareDPIAware.manifest",
+      "repository": "classic",
+      "sha256": "6ee5809bcd18c6e4f59d3afa64c7171800451ee4319c77ea2e67538f4099da61",
+      "used_by": [
+        "d2d_display_list",
+        "d2d_window"
+      ]
+    },
+    {
+      "bytes": 10195,
+      "encoding": "utf-8",
+      "lines": 394,
+      "path": "Samples/Win7Samples/multimedia/Direct2D/Direct2DHelloWorld/Direct2DHelloWorld.cpp",
+      "repository": "classic",
+      "sha256": "ea1067b4996f41b35f39a358c0407473c843fe4402406dee1de55694784709fb",
+      "used_by": [
+        "d2d_display_list",
+        "d2d_window"
+      ]
+    },
+    {
+      "bytes": 3357,
+      "encoding": "utf-8",
+      "lines": 120,
+      "path": "Samples/Win7Samples/multimedia/Direct2D/Direct2DHelloWorld/Direct2DHelloWorld.h",
+      "repository": "classic",
+      "sha256": "a327fcab70b631e2768b96bfcb2cc1e8f4772452bd73ba69e8c65803e18b389f",
+      "used_by": [
+        "d2d_display_list",
+        "d2d_window"
+      ]
+    },
+    {
+      "bytes": 1343,
+      "encoding": "utf-8",
+      "lines": 43,
+      "path": "Samples/Win7Samples/multimedia/Direct2D/Direct2DHelloWorld/README.md",
+      "repository": "classic",
+      "sha256": "e13412295f44f40eee9e44524b69ffdfbe4ddc148500e384a2d3d5ea180dac02",
+      "used_by": [
+        "d2d_display_list",
+        "d2d_window"
+      ]
+    },
+    {
+      "bytes": 1391,
+      "encoding": "utf-8",
+      "lines": 44,
+      "path": "Samples/Win7Samples/multimedia/Direct2D/SimpleDirect2DApplication/README.md",
+      "repository": "classic",
+      "sha256": "82a3f7505ed0d6bc7f61e428f5ea99ed1603966381d79a47b31ceb294b565947",
+      "used_by": [
+        "d2d_display_list"
+      ]
+    },
+    {
+      "bytes": 26517,
+      "encoding": "utf-8",
+      "lines": 894,
+      "path": "Samples/Win7Samples/multimedia/Direct2D/SimpleDirect2DApplication/SimpleDirect2dApplication.cpp",
+      "repository": "classic",
+      "sha256": "0fd4f668c11f39c62871557da5a94f64bd19668a8dbd94db63ffe43203ed828c",
+      "used_by": [
+        "d2d_display_list"
+      ]
+    },
+    {
+      "bytes": 4263,
+      "encoding": "utf-8",
+      "lines": 151,
+      "path": "Samples/Win7Samples/multimedia/Direct2D/SimpleDirect2DApplication/SimpleDirect2dApplication.h",
+      "repository": "classic",
+      "sha256": "17c0efba14663efcf4b1166cbc5efda16fed96c5a7a35546cbe741aa72466eb8",
+      "used_by": [
+        "d2d_display_list"
+      ]
+    },
+    {
+      "bytes": 21859,
+      "encoding": "utf-8",
+      "lines": 729,
+      "path": "Samples/Win7Samples/multimedia/DirectWrite/HelloWorld/CustomText.cpp",
+      "repository": "classic",
+      "sha256": "e49f5e7de540d1a3316298e00d0f436655d94d42ace2bd1d5ce0286db9b53da9",
+      "used_by": [
+        "dwrite_text"
+      ]
+    },
+    {
+      "bytes": 2670,
+      "encoding": "utf-8",
+      "lines": 106,
+      "path": "Samples/Win7Samples/multimedia/DirectWrite/HelloWorld/CustomText.h",
+      "repository": "classic",
+      "sha256": "3dfe3b96faa11b69e975eb1cd0321d4a14303508684f38d4a9047179a3ea9142",
+      "used_by": [
+        "dwrite_text"
+      ]
+    },
+    {
+      "bytes": 14931,
+      "encoding": "utf-8",
+      "lines": 446,
+      "path": "Samples/Win7Samples/multimedia/DirectWrite/HelloWorld/CustomTextRenderer.cpp",
+      "repository": "classic",
+      "sha256": "50c23ecb0c6527999d3361142a9960e55185153f75a32f933364152a6017970f",
+      "used_by": [
+        "dwrite_text"
+      ]
+    },
+    {
+      "bytes": 3984,
+      "encoding": "utf-8",
+      "lines": 118,
+      "path": "Samples/Win7Samples/multimedia/DirectWrite/HelloWorld/CustomTextRenderer.h",
+      "repository": "classic",
+      "sha256": "0ffd7202ae447d80c15bc80ff7223fa8e5e0a42a0abf686711d1d61ed9005ca6",
+      "used_by": [
+        "dwrite_text"
+      ]
+    },
+    {
+      "bytes": 722,
+      "encoding": "utf-8",
+      "lines": 14,
+      "path": "Samples/Win7Samples/multimedia/DirectWrite/SimpleHelloWorld/DeclareDPIAware.manifest",
+      "repository": "classic",
+      "sha256": "92a4dfa5bfe1f717fe14820540552e572b380e402e4e499fcd95b76bc4357278",
+      "used_by": [
+        "dwrite_text"
+      ]
+    },
+    {
+      "bytes": 14900,
+      "encoding": "utf-8",
+      "lines": 462,
+      "path": "Samples/Win7Samples/multimedia/DirectWrite/SimpleHelloWorld/DemoApp.cpp",
+      "repository": "classic",
+      "sha256": "a2e7b3dd2b9417edd39743bd1c9327ff1b852be3073a6d40d1ccb45971e7baef",
+      "used_by": [
+        "dwrite_text"
+      ]
+    },
+    {
+      "bytes": 2207,
+      "encoding": "utf-8",
+      "lines": 91,
+      "path": "Samples/Win7Samples/multimedia/DirectWrite/SimpleHelloWorld/DemoApp.h",
+      "repository": "classic",
+      "sha256": "500360c26b746e2cf90994ef0afacf3919aea659e735a170e9ffc37801475ed4",
+      "used_by": [
+        "dwrite_text"
+      ]
+    },
+    {
+      "bytes": 2576,
+      "encoding": "utf-8",
+      "lines": 83,
+      "path": "Samples/Win7Samples/multimedia/DirectWrite/SimpleHelloWorld/SimpleHelloWorld.h",
+      "repository": "classic",
+      "sha256": "a3ce82ef780dd0454e07fadee91c8db7ab9a96874f794b37e1783bce9a20e80e",
+      "used_by": [
+        "dwrite_text"
+      ]
+    },
+    {
+      "bytes": 866,
+      "encoding": "windows-1252",
+      "lines": 26,
+      "path": "Samples/Win7Samples/multimedia/DirectWrite/SimpleHelloWorld/readme.txt",
+      "repository": "classic",
+      "sha256": "14a9e65e21f4a4c00390ecb5cdd617c458c9e2d2b3e5336fc275d8d98c37e91a",
+      "used_by": [
+        "dwrite_text"
+      ]
+    },
+    {
+      "bytes": 1994,
+      "encoding": "utf-8",
+      "lines": 68,
+      "path": "Samples/Win7Samples/multimedia/DirectWrite/SimpleHelloWorld/winmain.cpp",
+      "repository": "classic",
+      "sha256": "cecbb5367f8758731521a45e170c4a56ef8d008def3f5e3aa708944d0a2c2d4a",
+      "used_by": [
+        "dwrite_text"
+      ]
+    },
+    {
+      "bytes": 1141,
+      "encoding": "utf-8",
+      "lines": 24,
+      "path": "LICENSE.txt",
+      "repository": "composition",
+      "sha256": "5b07ec9cceed764ee085702108fae45cdae23395bea1d810b16a4aa7635122a7",
+      "used_by": [
+        "d2d_alpha",
+        "d2d_tree",
+        "mini_xaml",
+        "nested_xaml"
+      ]
+    },
+    {
+      "bytes": 2669,
+      "encoding": "utf-8-sig",
+      "lines": 55,
+      "path": "SampleGallery/Samples/SDK 10586/BasicLayoutAndTransforms/BasicLayoutAndTransforms.xaml",
+      "repository": "composition",
+      "sha256": "76e89a3b94f9d437a6d0ec17b5190dc51b87cc778f9d628911ea020064d8e596",
+      "used_by": [
+        "d2d_alpha",
+        "d2d_tree"
+      ]
+    },
+    {
+      "bytes": 7399,
+      "encoding": "utf-8-sig",
+      "lines": 140,
+      "path": "SampleGallery/Samples/SDK 10586/BasicLayoutAndTransforms/BasicLayoutAndTransforms.xaml.cs",
+      "repository": "composition",
+      "sha256": "121fc515981dcf32c0a86a7fa6616f9282bea429e16feaaee86dac767f6889c6",
+      "used_by": [
+        "d2d_alpha",
+        "d2d_tree"
+      ]
+    },
+    {
+      "bytes": 1984,
+      "encoding": "utf-8-sig",
+      "lines": 58,
+      "path": "SampleGallery/Samples/SDK 10586/BasicLayoutAndTransforms/TransformPropertyModel.cs",
+      "repository": "composition",
+      "sha256": "73560871896c679b9316949c96207a5a326b8aa4b2a5769d4273f050b26f923d",
+      "used_by": [
+        "d2d_alpha",
+        "d2d_tree"
+      ]
+    },
+    {
+      "bytes": 2236,
+      "encoding": "utf-8-sig",
+      "lines": 43,
+      "path": "SampleGallery/Samples/SDK 10586/BasicXamlInterop/BasicXamlInterop.xaml",
+      "repository": "composition",
+      "sha256": "87dde4899dc50fe21104420fef1590ec2f269b1aa20a005728b48076015a018e",
+      "used_by": [
+        "mini_xaml",
+        "nested_xaml"
+      ]
+    },
+    {
+      "bytes": 6297,
+      "encoding": "utf-8-sig",
+      "lines": 131,
+      "path": "SampleGallery/Samples/SDK 10586/BasicXamlInterop/BasicXamlInterop.xaml.cs",
+      "repository": "composition",
+      "sha256": "d3961dd53d8131170fafb2ac256f8ecc960e1e54939bc20cf78900153b7cccb4",
+      "used_by": [
+        "mini_xaml",
+        "nested_xaml"
+      ]
+    },
+    {
+      "bytes": 1162,
+      "encoding": "utf-8",
+      "lines": 21,
+      "path": "LICENSE",
+      "repository": "composition-win32",
+      "sha256": "27ebda9d51f0a56b7e281ccd8230a27236dcb51c05f64b07869ecf6e965d68b0",
+      "used_by": [
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 2947,
+      "encoding": "utf-8",
+      "lines": 107,
+      "path": "cpp/HelloComposition/HelloComposition/CompositionHost.cpp",
+      "repository": "composition-win32",
+      "sha256": "a3cfae0addc797f77ffacdf8166e2be72bc8d3f33039d9b93fa1880aa18fe9c4",
+      "used_by": [
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 698,
+      "encoding": "utf-8",
+      "lines": 26,
+      "path": "cpp/HelloComposition/HelloComposition/CompositionHost.h",
+      "repository": "composition-win32",
+      "sha256": "6ffa32c104876e85db127760372d0b6e8ded47fac7cfe1f1684b2f33249f9fe1",
+      "used_by": [
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 5032,
+      "encoding": "utf-8",
+      "lines": 203,
+      "path": "cpp/HelloComposition/HelloComposition/HelloComposition.cpp",
+      "repository": "composition-win32",
+      "sha256": "9319a87ccb877a457d701c3721a5ef9db94b532329c831691735abdfb1aba179",
+      "used_by": [
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 36,
+      "encoding": "utf-8",
+      "lines": 3,
+      "path": "cpp/HelloComposition/HelloComposition/HelloComposition.h",
+      "repository": "composition-win32",
+      "sha256": "005051c1e7e6305d567e92b02a84a198201d3479f924b9ff9f49410b67664231",
+      "used_by": [
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 541,
+      "encoding": "utf-8",
+      "lines": 23,
+      "path": "cpp/HelloComposition/HelloComposition/pch.h",
+      "repository": "composition-win32",
+      "sha256": "b0bc60dc8295cbab1193456e19e1fd222b49c1d2a527bae549192042a3375f16",
+      "used_by": [
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 2024,
+      "encoding": "utf-8",
+      "lines": 38,
+      "path": "cpp/HelloComposition/README.md",
+      "repository": "composition-win32",
+      "sha256": "300f7f60ce9292954ea66ddafd8606652d00ea693e9bac32936208a600856a54",
+      "used_by": [
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 1095,
+      "encoding": "utf-8",
+      "lines": 21,
+      "path": "LICENSE",
+      "repository": "universal",
+      "sha256": "693ec2093ced2cd46d24646644e9fca8cb3b3edce928e6df35522962e3175041",
+      "used_by": [
+        "d2d_alpha",
+        "d2d_tree",
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 9474,
+      "encoding": "utf-8-sig",
+      "lines": 178,
+      "path": "Samples/CompositionVisual/cpp/CompositionVisual.vcxproj",
+      "repository": "universal",
+      "sha256": "af02545b5bb8aea7e56e3d3fc979b14f9d0fe067475252d6cd8966f8305024b1",
+      "used_by": [
+        "d2d_alpha",
+        "d2d_tree",
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 1961,
+      "encoding": "utf-8",
+      "lines": 49,
+      "path": "Samples/CompositionVisual/cpp/Package.appxmanifest",
+      "repository": "universal",
+      "sha256": "9b679a006540750143c27725547204929ce1d537203fa4c61cfb53f9757cb4af",
+      "used_by": [
+        "d2d_alpha",
+        "d2d_tree",
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 10400,
+      "encoding": "utf-8",
+      "lines": 343,
+      "path": "Samples/CompositionVisual/cpp/VisualProperties.cpp",
+      "repository": "universal",
+      "sha256": "dd25a6867bb8ae5289ae8fafaebfeee0d8acd835722256f28706be331053c8ec",
+      "used_by": [
+        "d2d_alpha",
+        "d2d_tree",
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 1843,
+      "encoding": "utf-8",
+      "lines": 51,
+      "path": "Samples/CompositionVisual/cpp/VisualProperties.h",
+      "repository": "universal",
+      "sha256": "1c7060e283446729453f50ca8e3e637e66aa5c3281969ef97972b87caa2f9497",
+      "used_by": [
+        "d2d_alpha",
+        "d2d_tree",
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 124,
+      "encoding": "utf-8",
+      "lines": 10,
+      "path": "Samples/CompositionVisual/cpp/pch.h",
+      "repository": "universal",
+      "sha256": "252973a315276528958a8a26cd499602504f06f181f4c062d01a7e82451ebca8",
+      "used_by": [
+        "d2d_alpha",
+        "d2d_tree",
+        "dcomp_window"
+      ]
+    },
+    {
+      "bytes": 10489,
+      "encoding": "utf-8-sig",
+      "lines": 158,
+      "path": "Samples/XamlBind/cpp/BasicTests.xaml",
+      "repository": "universal",
+      "sha256": "7ce90dcc1cca8bc72e2c4702045db9cc060fb81103e212edc7721d37abd06e1b",
+      "used_by": [
+        "nested_xaml"
+      ]
+    },
+    {
+      "bytes": 594,
+      "encoding": "utf-8-sig",
+      "lines": 16,
+      "path": "Samples/XamlBind/cpp/MyUserControl1.xaml",
+      "repository": "universal",
+      "sha256": "7d9cbd4c9fcabe136a96f07ca9c4016ebb057662451c7a92b4fa8928e57da8b0",
+      "used_by": [
+        "mini_xaml"
+      ]
+    },
+    {
+      "bytes": 821,
+      "encoding": "utf-8-sig",
+      "lines": 28,
+      "path": "Samples/XamlBind/cpp/MyUserControl1.xaml.cpp",
+      "repository": "universal",
+      "sha256": "5191f2c331af3207fdcf2adc3bfb6e4874acee567c096f7a54dd55048f00fe00",
+      "used_by": [
+        "mini_xaml"
+      ]
+    },
+    {
+      "bytes": 1023,
+      "encoding": "utf-8-sig",
+      "lines": 39,
+      "path": "Samples/XamlBind/cpp/MyUserControl1.xaml.h",
+      "repository": "universal",
+      "sha256": "50e5b85c51aa91a7e953035aa6a2d601c56c5059b031f7a4e9e8fa9e3c447d92",
+      "used_by": [
+        "mini_xaml"
+      ]
+    },
+    {
+      "bytes": 728,
+      "encoding": "utf-8-sig",
+      "lines": 16,
+      "path": "Samples/XamlBind/cpp/Templates.xaml",
+      "repository": "universal",
+      "sha256": "b9db83b865a6aea26dc61db5116229f2207540ec4fb30c0b21b37a7e663ac0e2",
+      "used_by": [
+        "nested_xaml"
+      ]
+    },
+    {
+      "bytes": 6152,
+      "encoding": "utf-8-sig",
+      "lines": 84,
+      "path": "SharedContent/xaml/MainPage.xaml",
+      "repository": "universal",
+      "sha256": "791ba75320d320b26b9b4f59c5396e9871b58725188b28930ac156c39f14fd22",
+      "used_by": [
+        "nested_xaml"
+      ]
+    }
+  ],
+  "programs": [
+    {
+      "name": "d2d_window",
+      "purpose": "Create an HWND, own Direct2D resources, draw one primitive, resize and repaint.",
+      "source_sets": [
+        "direct2d_hello_window"
+      ]
+    },
+    {
+      "local_context": [
+        "phase3/render/src/display_list.h",
+        "phase3/render/src/display_list.cpp",
+        "phase3/render/gdi/xaml_window.cpp"
+      ],
+      "name": "d2d_display_list",
+      "purpose": "Replace the hard-wired primitive with OpenTerminal's existing display list.",
+      "source_sets": [
+        "direct2d_hello_window",
+        "direct2d_device_resources"
+      ]
+    },
+    {
+      "name": "d2d_tree",
+      "purpose": "Accumulate parent offsets, preserve z-order, transform children and apply a clip.",
+      "source_sets": [
+        "composition_visual_tree",
+        "composition_layout_transforms"
+      ]
+    },
+    {
+      "name": "d2d_alpha",
+      "purpose": "Render overlapping translucent subtrees and make layer composition observable.",
+      "source_sets": [
+        "composition_visual_tree",
+        "composition_layout_transforms"
+      ]
+    },
+    {
+      "name": "dwrite_text",
+      "purpose": "Create a text layout, draw it, then expose glyph runs through a custom renderer.",
+      "source_sets": [
+        "directwrite_hello",
+        "directwrite_custom_renderer"
+      ]
+    },
+    {
+      "name": "dcomp_window",
+      "purpose": "Attach a DirectComposition target and visual tree to an HWND and commit it.",
+      "source_sets": [
+        "directcomposition_hwnd",
+        "composition_visual_tree"
+      ]
+    },
+    {
+      "local_context": [
+        "phase3/layout/src/markup.cpp",
+        "phase3/render/src/display_list.cpp"
+      ],
+      "name": "mini_xaml",
+      "purpose": "Turn one declarative XAML object into layout and a display-list primitive.",
+      "source_sets": [
+        "xaml_minimal_object",
+        "composition_xaml_interop"
+      ]
+    },
+    {
+      "local_context": [
+        "phase3/layout/src/grid.cpp",
+        "phase3/layout/src/stack_panel.cpp",
+        "phase3/render/src/display_list.cpp"
+      ],
+      "name": "nested_xaml",
+      "purpose": "Expand nested Grid, StackPanel, Border and text into an ordered visual tree.",
+      "source_sets": [
+        "xaml_nested_layout",
+        "composition_xaml_interop"
+      ]
+    }
+  ],
+  "repositories": {
+    "classic": {
+      "commit": "d59e5f1dc9c768615e4e1ab1f0f009e6a3ed747c",
+      "license": "MIT",
+      "url": "https://github.com/microsoft/Windows-classic-samples"
+    },
+    "composition": {
+      "commit": "92e5ee73e78ff81bfe46b8045f50c948dc55d6e1",
+      "license": "MIT",
+      "url": "https://github.com/microsoft/WindowsCompositionSamples"
+    },
+    "composition-win32": {
+      "commit": "ee50e2ea137dcef7b82ba504eff7435e5ebf5294",
+      "license": "MIT",
+      "url": "https://github.com/microsoft/Windows.UI.Composition-Win32-Samples"
+    },
+    "universal": {
+      "commit": "4eb2fcb499c5bc549e918920cfd2b64396a650d9",
+      "license": "MIT",
+      "url": "https://github.com/microsoft/Windows-universal-samples"
+    }
+  },
+  "schema_version": 1
+}

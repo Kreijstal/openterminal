@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "cppwinrt": {
+    "commit": "69c78cfc7920367c4ce9cc024cf8c5b8d217fb1b",
+    "ref": "2.0.250303.1",
+    "repository": "https://github.com/microsoft/cppwinrt.git"
+  },
+  "icu": {
+    "commit": "21d1eb0f306e1141c10931e914dfc038c06121da",
+    "ref": "release-78.3",
+    "repository": "https://github.com/unicode-org/icu.git"
+  },
+  "microsoft_ui_xaml_2_8_4": {
+    "commit": "4aa80ad6d272241a6a603f85507063e9fb6bcf92",
+    "ref": "v2.8.4",
+    "repository": "https://github.com/microsoft/microsoft-ui-xaml.git"
+  },
+  "windows_ui_xaml_source": {
+    "commit": "188f602b27cdb47572b28c380e9c087b02e1ccee",
+    "repository": "https://github.com/microsoft/microsoft-ui-xaml.git"
+  },
+  "microsoft_ui_xaml_package": {
+    "id": "Microsoft.UI.Xaml",
+    "sha256": "486dbe1f271b31057ec01ecb7ce4df3eedad11efdc26569170fb128ee4a4e964",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ui.xaml/2.8.4/microsoft.ui.xaml.2.8.4.nupkg",
+    "version": "2.8.4",
+    "winmd_path": "lib/uap10.0/Microsoft.UI.Xaml.winmd"
+  },
+  "microsoft_web_webview2_package": {
+    "id": "Microsoft.Web.WebView2",
+    "sha256": "bad4c011c20ab68526c4c1448da05a6297586806123019ac89387fc62f46c3ce",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.1661.34/microsoft.web.webview2.1.0.1661.34.nupkg",
+    "version": "1.0.1661.34",
+    "winmd_path": "lib/Microsoft.Web.WebView2.Core.winmd"
+  },
+  "microsoft_visualstudio_setup_configuration_native_package": {
+    "header_path": "lib/native/include/Setup.Configuration.h",
+    "id": "Microsoft.VisualStudio.Setup.Configuration.Native",
+    "sha256": "43c2d1c5694a846d04d5f1cb3c3a8269ebad3b0432954da2948e53b33c5ed5fb",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.visualstudio.setup.configuration.native/2.3.2262/microsoft.visualstudio.setup.configuration.native.2.3.2262.nupkg",
+    "version": "2.3.2262"
+  },
+  "microsoft_windows_package_manager_cominterop_package": {
+    "id": "Microsoft.WindowsPackageManager.ComInterop",
+    "sha256": "9b8a8a5186a554e56fcb7997b6ea48f3432813c0945a2d9ba60930d1241cfe2b",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windowspackagemanager.cominterop/1.8.1911/microsoft.windowspackagemanager.cominterop.1.8.1911.nupkg",
+    "version": "1.8.1911",
+    "winmd_path": "lib/Microsoft.Management.Deployment.winmd"
+  },
+  "winmd": {
+    "commit": "0f1eae3bfa63fa2ba3c2912cbfe72a01db94cc5a",
+    "repository": "https://github.com/microsoft/winmd.git"
+  },
+  "vcpkg": {
+    "commit": "927f62e4b8838bd7e441e9c45103a16ffd75007e",
+    "repository": "https://github.com/microsoft/vcpkg.git"
+  },
+  "wil": {
+    "commit": "b6ec76a2d9a609897f25a7fa0a0bdf4238e94e35",
+    "ref": "v1.0.250325.1",
+    "repository": "https://github.com/microsoft/wil.git"
+  },
+  "windows_terminal": {
+    "commit": "e74649d5f18b1c123556461b30f763407aea558f",
+    "ref": "main",
+    "repository": "https://github.com/microsoft/terminal.git"
+  },
+  "windows_sdk_cpp": {
+    "id": "Microsoft.Windows.SDK.CPP",
+    "platform_version": "10.0.26100.0",
+    "sha256": "b4730a467a8f29145fc0136b2b3f626767e985f6aa6e32f1352953c38d6ff5d2",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp/10.0.26100.1/microsoft.windows.sdk.cpp.10.0.26100.1.nupkg",
+    "version": "10.0.26100.1"
+  },
+  "wpf": {
+    "commit": "2ca037562c207924e53cfcc99286e523d3694de3",
+    "ref": "main",
+    "repository": "https://github.com/dotnet/wpf.git"
+  }
+}

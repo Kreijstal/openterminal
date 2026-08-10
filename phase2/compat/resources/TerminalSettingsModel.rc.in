@@ -1,0 +1,9 @@
+// Resources owned by the settings model are embedded in the final executable
+// when the model is linked statically. The upstream MSBuild project places
+// these JSON files in a generated directory before compiling its resource
+// script; the MinGW build uses their exact source paths instead.
+#pragma code_page(65001)
+
+101 RCDATA "@OPENTERMINAL_DEFAULTS_JSON@"
+102 RCDATA "@OPENTERMINAL_USER_DEFAULTS_JSON@"
+103 RCDATA "@OPENTERMINAL_ENABLE_COLOR_SELECTION_JSON@"

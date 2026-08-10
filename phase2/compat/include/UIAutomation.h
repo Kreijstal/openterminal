@@ -1,0 +1,29 @@
+#pragma once
+
+// The Windows SDK ships this spelling; mingw-w64 installs headers lowercase.
+#include <uiautomation.h>
+
+// Newer Windows SDKs expose this managed/UIA contract alongside the native
+// provider declarations. mingw-w64 currently omits it.
+enum TextDecorationLineStyle
+{
+    TextDecorationLineStyle_Other = -1,
+    TextDecorationLineStyle_None = 0,
+    TextDecorationLineStyle_Single = 1,
+    TextDecorationLineStyle_WordsOnly = 2,
+    TextDecorationLineStyle_Double = 3,
+    TextDecorationLineStyle_Dot = 4,
+    TextDecorationLineStyle_Dash = 5,
+    TextDecorationLineStyle_DashDot = 6,
+    TextDecorationLineStyle_DashDotDot = 7,
+    TextDecorationLineStyle_Wavy = 8,
+    TextDecorationLineStyle_ThickSingle = 9,
+    TextDecorationLineStyle_DoubleWavy = 11,
+    TextDecorationLineStyle_ThickWavy = 12,
+    TextDecorationLineStyle_LongDash = 13,
+    TextDecorationLineStyle_ThickDash = 14,
+    TextDecorationLineStyle_ThickDashDot = 15,
+    TextDecorationLineStyle_ThickDashDotDot = 16,
+    TextDecorationLineStyle_ThickDot = 17,
+    TextDecorationLineStyle_ThickLongDash = 18,
+};

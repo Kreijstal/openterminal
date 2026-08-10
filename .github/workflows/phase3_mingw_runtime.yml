@@ -1,0 +1,91 @@
+name: Phase 3 - MinGW runtime boundary
+
+# Windows-only renderer and WinRT ABI code must not disappear behind the
+# platform-neutral Linux CMake build. All SDK payloads, Wine prefixes and PE
+# outputs remain under the runner's temporary directory.
+on:
+  push:
+    paths:
+      - 'phase2/upstreams.json'
+      - 'phase2/toolchains/**'
+      - 'phase3/layout/**'
+      - 'phase3/render/**'
+      - 'phase3/xamlcore/**'
+      - 'phase3/scripts/build_render.py'
+      - 'phase3/scripts/build_xamlcore.py'
+      - 'phase3/scripts/prepare_runtime_fonts.py'
+      - 'phase4/scripts/run_terminal_integration.py'
+      - 'phase4/tests/test_terminal_integration.py'
+      - '.github/workflows/phase3_mingw_runtime.yml'
+  pull_request:
+    paths:
+      - 'phase2/upstreams.json'
+      - 'phase2/toolchains/**'
+      - 'phase3/layout/**'
+      - 'phase3/render/**'
+      - 'phase3/xamlcore/**'
+      - 'phase3/scripts/build_render.py'
+      - 'phase3/scripts/build_xamlcore.py'
+      - 'phase3/scripts/prepare_runtime_fonts.py'
+      - 'phase4/scripts/run_terminal_integration.py'
+      - 'phase4/tests/test_terminal_integration.py'
+      - '.github/workflows/phase3_mingw_runtime.yml'
+  workflow_dispatch:
+
+jobs:
+  mingw-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install MinGW and Wine
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++-mingw-w64-x86-64-posix wine wine64 wine32:i386 \
+            xvfb xauth fonts-liberation
+
+      - name: Cross-compile the retained DComp boundary
+        run: |
+          cmake -S phase3/render -B "$RUNNER_TEMP/render-mingw" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/phase2/toolchains/x64-mingw-static.cmake"
+          cmake --build "$RUNNER_TEMP/render-mingw" \
+            --target dcomp_scene_backend_tests --parallel 2
+
+      - name: Run the DComp transaction test under Wine
+        env:
+          WINEPREFIX: ${{ runner.temp }}/dcomp-prefix
+          WINEARCH: win64
+          WINEDEBUG: -all
+        run: |
+          export WINEPATH="$(python3 -B -c \
+            "import sys; sys.path.insert(0, 'phase4/scripts'); \
+             import run_terminal_integration as i; print(i.find_mingw_runtime())")"
+          wineboot -u
+          wine "$RUNNER_TEMP/render-mingw/dcomp_scene_backend_tests.exe"
+
+      - name: Build and run the OpenXaml ABI smokes
+        run: |
+          python3 -B phase3/scripts/prepare_runtime_fonts.py \
+            --output-root "$RUNNER_TEMP/runtime-fonts" --path-style wine
+          python3 -B phase3/scripts/build_xamlcore.py \
+            --root "$RUNNER_TEMP/xamlcore" --skip-run
+
+      - name: Check the artifact-coupled launch contract
+        run: python3 -B -m unittest phase4.tests.test_terminal_integration -v
+
+      - name: Repository remains free of generated binaries
+        run: |
+          if find phase2 phase3 phase4 -type f \
+              \( -iname '*.exe' -o -iname '*.dll' -o -iname '*.lib' \
+                 -o -iname '*.a' -o -iname '*.xbf' \) -print -quit | grep -q .; then
+            echo '::error::generated binary escaped the runner temporary directory'
+            exit 1
+          fi

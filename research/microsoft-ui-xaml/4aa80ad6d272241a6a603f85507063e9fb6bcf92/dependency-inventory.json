@@ -1,0 +1,678 @@
+{
+  "nuget_references": [
+    {
+      "declaration": "package",
+      "file": "build/Helix/packages.config",
+      "id": "MUXCustomBuildTasks",
+      "version": "1.0.74"
+    },
+    {
+      "declaration": "package",
+      "file": "build/Helix/packages.config",
+      "id": "Microsoft.Internal.WinUI.Helix",
+      "version": "0.5.8"
+    },
+    {
+      "declaration": "package",
+      "file": "build/Helix/packages.config",
+      "id": "Microsoft.NETCore.App.Runtime.win-x64",
+      "version": "3.1.23"
+    },
+    {
+      "declaration": "package",
+      "file": "build/Helix/packages.config",
+      "id": "Microsoft.NETCore.App.Runtime.win-x86",
+      "version": "3.1.23"
+    },
+    {
+      "declaration": "package",
+      "file": "build/Helix/packages.config",
+      "id": "TAEF.Redist.Wlk",
+      "version": "10.31.180822002"
+    },
+    {
+      "declaration": "package",
+      "file": "build/SourceIndexing/packages.config",
+      "id": "Microsoft.Debugging.Tools.PdbStr",
+      "version": "20230202.1638.0"
+    },
+    {
+      "declaration": "package",
+      "file": "build/SourceIndexing/packages.config",
+      "id": "Microsoft.Debugging.Tools.SrcTool",
+      "version": "20230202.1638.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "dev/Microsoft.UI.Xaml.FrameworkPackagePRI/Microsoft.UI.Xaml.FrameworkPackagePRI.csproj",
+      "id": "Microsoft.NETCore.UniversalWindowsPlatform",
+      "version": "6.2.10"
+    },
+    {
+      "declaration": "package",
+      "file": "dev/dll/packages.config",
+      "id": "MUXCustomBuildTasks",
+      "version": "1.0.74"
+    },
+    {
+      "declaration": "package",
+      "file": "dev/dll/packages.config",
+      "id": "Microsoft.Build.Tasks.Git",
+      "version": "1.0.0-beta2-18618-05"
+    },
+    {
+      "declaration": "package",
+      "file": "dev/dll/packages.config",
+      "id": "Microsoft.CodeAnalysis.BinSkim",
+      "version": "1.3.9"
+    },
+    {
+      "declaration": "package",
+      "file": "dev/dll/packages.config",
+      "id": "Microsoft.Gsl",
+      "version": "0.1.2.1"
+    },
+    {
+      "declaration": "package",
+      "file": "dev/dll/packages.config",
+      "id": "Microsoft.SourceLink.Common",
+      "version": "1.0.0-beta2-18618-05"
+    },
+    {
+      "declaration": "package",
+      "file": "dev/dll/packages.config",
+      "id": "Microsoft.SourceLink.GitHub",
+      "version": "1.0.0-beta2-18618-05"
+    },
+    {
+      "declaration": "package",
+      "file": "dev/dll/packages.config",
+      "id": "Microsoft.UI.Xaml",
+      "version": "2.6.1"
+    },
+    {
+      "declaration": "package",
+      "file": "dev/dll/packages.config",
+      "id": "Microsoft.Web.WebView2",
+      "version": "1.0.1264.42"
+    },
+    {
+      "declaration": "package",
+      "file": "dev/dll/packages.config",
+      "id": "Microsoft.Windows.CppWinRT",
+      "version": "2.0.210309.3"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/IXMPTestApp/MSTest/IXMPTestApp.csproj",
+      "id": "MSTest.TestAdapter",
+      "version": "2.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/IXMPTestApp/MSTest/IXMPTestApp.csproj",
+      "id": "MSTest.TestFramework",
+      "version": "2.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/IXMPTestApp/MSTest/IXMPTestApp.csproj",
+      "id": "MUXCustomBuildTasks",
+      "version": "1.0.74"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/IXMPTestApp/MSTest/IXMPTestApp.csproj",
+      "id": "Microsoft.NET.Test.Sdk",
+      "version": "16.7.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/IXMPTestApp/MSTest/IXMPTestApp.csproj",
+      "id": "Microsoft.NETCore.UniversalWindowsPlatform",
+      "version": "6.2.8"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/IXMPTestApp/MSTest/IXMPTestApp.csproj",
+      "id": "Microsoft.Net.Native.Compiler",
+      "version": "2.2.3"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/IXMPTestApp/MSTest/IXMPTestApp.csproj",
+      "id": "Newtonsoft.Json",
+      "version": "13.0.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/MSTest/MUXControls.Test.csproj",
+      "id": "Axe.Windows",
+      "version": "1.0.4"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/MSTest/MUXControls.Test.csproj",
+      "id": "MSTest.TestAdapter",
+      "version": "2.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/MSTest/MUXControls.Test.csproj",
+      "id": "MSTest.TestFramework",
+      "version": "2.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/MSTest/MUXControls.Test.csproj",
+      "id": "Microsoft.NET.Test.Sdk",
+      "version": "16.7.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/MSTest/MUXControls.Test.csproj",
+      "id": "Microsoft.Web.WebView2",
+      "version": "1.0.1264.42"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/MSTest/MUXControls.Test.csproj",
+      "id": "Microsoft.Win32.Registry",
+      "version": "4.7.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/MSTest/MUXControls.Test.csproj",
+      "id": "Microsoft.Windows.Apps.Test",
+      "version": "1.0.181205002"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/MSTest/MUXControls.Test.csproj",
+      "id": "Newtonsoft.Json",
+      "version": "13.0.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/MSTest/MUXControls.Test.csproj",
+      "id": "System.Diagnostics.Process",
+      "version": "4.3.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/MSTest/MUXControls.Test.csproj",
+      "id": "System.Drawing.Common",
+      "version": "4.7.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/MSTest/MUXControls.Test.csproj",
+      "id": "System.Drawing.Primitives",
+      "version": "4.3.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/MSTest/MUXControls.Test.csproj",
+      "id": "System.Reflection.TypeExtensions",
+      "version": "4.5.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/TAEF/MUXControls.Test.TAEF.csproj",
+      "id": "Axe.Windows",
+      "version": "1.0.4"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/TAEF/MUXControls.Test.TAEF.csproj",
+      "id": "Microsoft.Web.WebView2",
+      "version": "1.0.1264.42"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/TAEF/MUXControls.Test.TAEF.csproj",
+      "id": "Microsoft.Win32.Registry",
+      "version": "4.7.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/TAEF/MUXControls.Test.TAEF.csproj",
+      "id": "Microsoft.Windows.Apps.Test",
+      "version": "1.0.181205002"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/TAEF/MUXControls.Test.TAEF.csproj",
+      "id": "Newtonsoft.Json",
+      "version": "13.0.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/TAEF/MUXControls.Test.TAEF.csproj",
+      "id": "System.Drawing.Common",
+      "version": "4.7.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControls.Test/TAEF/MUXControls.Test.TAEF.csproj",
+      "id": "TAEF.Redist.Wlk",
+      "version": "10.31.180822002"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/AppThatUsesMUXIndirectly/AppThatUsesMUXIndirectly.csproj",
+      "id": "MUXCustomBuildTasks",
+      "version": "1.0.67"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/AppThatUsesMUXIndirectly/AppThatUsesMUXIndirectly.csproj",
+      "id": "Microsoft.NETCore.UniversalWindowsPlatform",
+      "version": "6.2.8"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/AppThatUsesMUXIndirectly/AppThatUsesMUXIndirectly.csproj",
+      "id": "RuntimeComponentThatUsesMUX",
+      "version": "1.0.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/LibraryThatUsesMUX/LibraryThatUsesMUX.csproj",
+      "id": "Microsoft.NETCore.UniversalWindowsPlatform",
+      "version": "6.2.8"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/LibraryThatUsesMUX/LibraryThatUsesMUX.csproj",
+      "id": "Microsoft.UI.Xaml",
+      "version": "2.6.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/MUXControls.ReleaseTest/MSTest/MUXControls.ReleaseTest.csproj",
+      "id": "MSTest.TestAdapter",
+      "version": "2.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/MUXControls.ReleaseTest/MSTest/MUXControls.ReleaseTest.csproj",
+      "id": "MSTest.TestFramework",
+      "version": "2.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/MUXControls.ReleaseTest/MSTest/MUXControls.ReleaseTest.csproj",
+      "id": "Microsoft.NET.Test.Sdk",
+      "version": "16.7.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/MUXControls.ReleaseTest/MSTest/MUXControls.ReleaseTest.csproj",
+      "id": "Microsoft.Win32.Registry",
+      "version": "4.7.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/MUXControls.ReleaseTest/MSTest/MUXControls.ReleaseTest.csproj",
+      "id": "Microsoft.Windows.Apps.Test",
+      "version": "1.0.181205002"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/MUXControls.ReleaseTest/MSTest/MUXControls.ReleaseTest.csproj",
+      "id": "System.Diagnostics.Process",
+      "version": "4.3.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/MUXControls.ReleaseTest/MSTest/MUXControls.ReleaseTest.csproj",
+      "id": "System.Drawing.Primitives",
+      "version": "4.3.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/MUXControls.ReleaseTest/MSTest/MUXControls.ReleaseTest.csproj",
+      "id": "System.Reflection.TypeExtensions",
+      "version": "4.5.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/MUXControls.ReleaseTest/TAEF/MUXControls.ReleaseTest.TAEF.csproj",
+      "id": "Microsoft.Win32.Registry",
+      "version": "4.7.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/MUXControls.ReleaseTest/TAEF/MUXControls.ReleaseTest.TAEF.csproj",
+      "id": "Microsoft.Windows.Apps.Test",
+      "version": "1.0.181205002"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/MUXControls.ReleaseTest/TAEF/MUXControls.ReleaseTest.TAEF.csproj",
+      "id": "TAEF.Redist.Wlk",
+      "version": "10.31.180822002"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/NugetPackageTestApp/NugetPackageTestApp.csproj",
+      "id": "MUXCustomBuildTasks",
+      "version": "1.0.67"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/NugetPackageTestApp/NugetPackageTestApp.csproj",
+      "id": "Microsoft.NETCore.UniversalWindowsPlatform",
+      "version": "6.2.8"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/NugetPackageTestApp/NugetPackageTestApp.csproj",
+      "id": "Microsoft.UI.Xaml",
+      "version": "2.6.1"
+    },
+    {
+      "declaration": "package",
+      "file": "test/MUXControlsReleaseTest/NugetPackageTestAppCX/packages.config",
+      "id": "MUXCustomBuildTasks",
+      "version": "1.0.74"
+    },
+    {
+      "declaration": "package",
+      "file": "test/MUXControlsReleaseTest/NugetPackageTestAppCX/packages.config",
+      "id": "Microsoft.NETCore.UniversalWindowsPlatform",
+      "version": "6.2.8"
+    },
+    {
+      "declaration": "package",
+      "file": "test/MUXControlsReleaseTest/NugetPackageTestAppCX/packages.config",
+      "id": "Microsoft.UI.Xaml",
+      "version": "2.6.1"
+    },
+    {
+      "declaration": "package",
+      "file": "test/MUXControlsReleaseTest/RuntimeComponentThatUsesMUX/packages.config",
+      "id": "Microsoft.UI.Xaml",
+      "version": "2.6.1"
+    },
+    {
+      "declaration": "package",
+      "file": "test/MUXControlsReleaseTest/RuntimeComponentThatUsesMUX/packages.config",
+      "id": "Microsoft.Web.WebView2",
+      "version": "1.0.1264.42"
+    },
+    {
+      "declaration": "package",
+      "file": "test/MUXControlsReleaseTest/RuntimeComponentThatUsesMUX/packages.config",
+      "id": "Microsoft.Windows.CppWinRT",
+      "version": "2.0.200615.7"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/UwpAppWithFullTrustProcess/UwpAppWithFullTrustProcess/UwpAppWithFullTrustProcess.csproj",
+      "id": "Microsoft.NETCore.UniversalWindowsPlatform",
+      "version": "6.2.8"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/UwpAppWithFullTrustProcess/UwpAppWithFullTrustProcess/UwpAppWithFullTrustProcess.csproj",
+      "id": "Microsoft.UI.Xaml",
+      "version": "2.6.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/XamlIslandsTestApp/UwpApp/UwpApp.csproj",
+      "id": "Microsoft.NETCore.UniversalWindowsPlatform",
+      "version": "6.2.8"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/XamlIslandsTestApp/UwpApp/UwpApp.csproj",
+      "id": "Microsoft.Toolkit.Win32.UI.XamlApplication",
+      "version": "6.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/XamlIslandsTestApp/UwpApp/UwpApp.csproj",
+      "id": "Microsoft.UI.Xaml",
+      "version": "2.6.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsReleaseTest/XamlIslandsTestApp/WpfApp/WpfApp.csproj",
+      "id": "Microsoft.Toolkit.Wpf.UI.XamlHost",
+      "version": "6.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsTestApp/MSTest/MUXControlsTestApp.csproj",
+      "id": "DiffPlex",
+      "version": "1.2.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsTestApp/MSTest/MUXControlsTestApp.csproj",
+      "id": "MSTest.TestAdapter",
+      "version": "2.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsTestApp/MSTest/MUXControlsTestApp.csproj",
+      "id": "MSTest.TestFramework",
+      "version": "2.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsTestApp/MSTest/MUXControlsTestApp.csproj",
+      "id": "MUXCustomBuildTasks",
+      "version": "1.0.74"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsTestApp/MSTest/MUXControlsTestApp.csproj",
+      "id": "Microsoft.NET.Test.Sdk",
+      "version": "16.7.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsTestApp/MSTest/MUXControlsTestApp.csproj",
+      "id": "Microsoft.NETCore.UniversalWindowsPlatform",
+      "version": "6.2.8"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsTestApp/MSTest/MUXControlsTestApp.csproj",
+      "id": "Microsoft.Net.Native.Compiler",
+      "version": "2.2.3"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsTestApp/MSTest/MUXControlsTestApp.csproj",
+      "id": "Microsoft.Web.WebView2",
+      "version": "1.0.1264.42"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsTestApp/MSTest/MUXControlsTestApp.csproj",
+      "id": "Newtonsoft.Json",
+      "version": "13.0.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXControlsTestApp/MSTest/MUXControlsTestApp.csproj",
+      "id": "Win2D.uwp",
+      "version": "1.22.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimental.Test/MSTest/MUXExperimental.Test.csproj",
+      "id": "MSTest.TestAdapter",
+      "version": "2.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimental.Test/MSTest/MUXExperimental.Test.csproj",
+      "id": "MSTest.TestFramework",
+      "version": "2.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimental.Test/MSTest/MUXExperimental.Test.csproj",
+      "id": "Microsoft.NET.Test.Sdk",
+      "version": "16.7.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimental.Test/MSTest/MUXExperimental.Test.csproj",
+      "id": "Microsoft.Win32.Registry",
+      "version": "4.7.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimental.Test/MSTest/MUXExperimental.Test.csproj",
+      "id": "Microsoft.Windows.Apps.Test",
+      "version": "1.0.181205002"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimental.Test/MSTest/MUXExperimental.Test.csproj",
+      "id": "System.Diagnostics.Process",
+      "version": "4.3.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimental.Test/MSTest/MUXExperimental.Test.csproj",
+      "id": "System.Drawing.Primitives",
+      "version": "4.3.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimental.Test/MSTest/MUXExperimental.Test.csproj",
+      "id": "System.Reflection.TypeExtensions",
+      "version": "4.5.1"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimental.Test/TAEF/MUXExperimental.Test.TAEF.csproj",
+      "id": "Microsoft.Win32.Registry",
+      "version": "4.7.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimental.Test/TAEF/MUXExperimental.Test.TAEF.csproj",
+      "id": "Microsoft.Windows.Apps.Test",
+      "version": "1.0.181205002"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimental.Test/TAEF/MUXExperimental.Test.TAEF.csproj",
+      "id": "TAEF.Redist.Wlk",
+      "version": "10.31.180822002"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimentalTestApp/MUXExperimentalTestApp.csproj",
+      "id": "MUXCustomBuildTasks",
+      "version": "1.0.67"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimentalTestApp/MUXExperimentalTestApp.csproj",
+      "id": "Microsoft.NETCore.UniversalWindowsPlatform",
+      "version": "6.2.8"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/MUXExperimentalTest/MUXExperimentalTestApp/MUXExperimentalTestApp.csproj",
+      "id": "Microsoft.UI.Xaml",
+      "version": "2.6.1"
+    },
+    {
+      "declaration": "package",
+      "file": "test/TestAppCX/packages.config",
+      "id": "Microsoft.Web.WebView2",
+      "version": "1.0.1264.42"
+    },
+    {
+      "declaration": "package",
+      "file": "test/testinfra/AppTestAutomationHelpers/packages.config",
+      "id": "Microsoft.Windows.CppWinRT",
+      "version": "2.0.210309.3"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/testinfra/MUXTestInfra/MSTest/MUXTestInfra.MSTest.csproj",
+      "id": "MSTest.TestFramework",
+      "version": "2.1.2"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/testinfra/MUXTestInfra/MSTest/MUXTestInfra.MSTest.csproj",
+      "id": "Microsoft.Win32.Registry",
+      "version": "4.7.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/testinfra/MUXTestInfra/MSTest/MUXTestInfra.MSTest.csproj",
+      "id": "Microsoft.Windows.Apps.Test",
+      "version": "1.0.181205002"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/testinfra/MUXTestInfra/TAEF/MUXTestInfra.TAEF.csproj",
+      "id": "Microsoft.Win32.Registry",
+      "version": "4.7.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/testinfra/MUXTestInfra/TAEF/MUXTestInfra.TAEF.csproj",
+      "id": "Microsoft.Windows.Apps.Test",
+      "version": "1.0.181205002"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "test/testinfra/MUXTestInfra/TAEF/MUXTestInfra.TAEF.csproj",
+      "id": "TAEF.Redist.Wlk",
+      "version": "10.31.180822002"
+    },
+    {
+      "declaration": "package",
+      "file": "tools/CustomTasks/packages.config",
+      "id": "System.Management.Automation.dll",
+      "version": "10.0.10586.0"
+    },
+    {
+      "declaration": "package",
+      "file": "tools/CustomTasks/packages.config",
+      "id": "System.ValueTuple",
+      "version": "4.5.0"
+    },
+    {
+      "declaration": "package",
+      "file": "tools/CustomTasksTool/packages.config",
+      "id": "System.ValueTuple",
+      "version": "4.5.0"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "tools/MUXBaselineResourcesGenerator/MUXBaselineResourcesGenerator/MUXBaselineResourcesGenerator.csproj",
+      "id": "Microsoft.NETCore.UniversalWindowsPlatform",
+      "version": "6.2.10"
+    },
+    {
+      "declaration": "PackageReference",
+      "file": "tools/MUXBaselineResourcesGenerator/MUXBaselineResourcesGenerator/MUXBaselineResourcesGenerator.csproj",
+      "id": "Microsoft.UI.Xaml",
+      "version": "2.6.1"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "commit": "4aa80ad6d272241a6a603f85507063e9fb6bcf92",
+    "commit_date": "2023-05-02T09:06:38-07:00",
+    "repository": "https://github.com/microsoft/microsoft-ui-xaml.git"
+  },
+  "vcpkg_manifests": [],
+  "vendored_entries": []
+}
