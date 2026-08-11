@@ -37,3 +37,11 @@ phase3/xaml-db/cases/
 # materialized rather than committed. It is also somebody else's code -- what
 # belongs in this repository is a script that reads it, not a copy of it.
 phase3/xaml-db/theme-resources/
+
+# The recorded glyph outlines, harvested by harvest_glyph_outlines.py through
+# phase3/harness/glyph_outline_probe.cpp. Same rule again, and one more on top
+# of it: this is a reading of a font's ink, which is a heavier claim than a
+# reading of its metrics, so it may exist in a working tree and in a CI
+# artifact and never in a commit. The README beside it is source; the JSON is
+# not.
+phase3/xaml-db/glyph-outlines/*.json

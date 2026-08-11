@@ -388,6 +388,68 @@ jobs:
              phase3\harness\dwrite_glyph_probe.cpp ^
              /link dwrite.lib ole32.lib || exit /b 1
 
+      # The ink, as outlines, for the one family whose outlines may be
+      # recorded. 113 render cases refuse with "DirectWrite could not resolve
+      # any requested family in \"Segoe UI\"": they lay out against harvested
+      # metrics and then reach the draw with nothing to draw, because a widths
+      # table cannot be painted. Recording shapes the way widths are already
+      # recorded is the only route to those pixels that does not install a font
+      # we do not have or invent one.
+      #
+      # Cascadia Mono, and only Cascadia Mono. Outlines are a different
+      # licensing claim from metrics -- the design is generally not
+      # copyrightable, the outline data generally is -- and
+      # harvest_glyph_outlines.py refuses any family not in its committed
+      # CLEARED list. Cascadia Mono is on it because it is SIL OFL and Terminal
+      # ships the file; Segoe UI is not, and putting it there is a human
+      # decision made in a reviewable commit, not something this workflow can
+      # do. What this step establishes is that the pipeline works end to end on
+      # a family where the question does not arise.
+      - name: Build the glyph outline probe
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
+          if not defined VSDIR echo ::error::no Visual Studio with the x64 C++ toolset && exit /b 1
+          call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          cl /nologo /std:c++17 /EHsc ^
+             /Fe:phase3\harness\glyph_outline_probe.exe ^
+             phase3\harness\glyph_outline_probe.cpp ^
+             /link dwrite.lib ole32.lib || exit /b 1
+
+      # --font-file, not a family lookup: Cascadia Mono is not installed on the
+      # runner, it is a file in the pinned Terminal checkout, which is also
+      # where its metrics were read from one step above. Every advance in the
+      # outline reading is checked against every advance in the metrics
+      # reading, so agreement means both came off the same glyphs of the same
+      # file -- and the file's SHA-256 is compared too.
+      - name: Harvest the glyph outlines of the font Terminal ships
+        shell: bash
+        run: |
+          python3 -B phase3/scripts/harvest_glyph_outlines.py \
+            --family "Cascadia Mono" \
+            --metrics phase3/xaml-db/fonts/cascadia-mono.json \
+            --probe phase3/harness/glyph_outline_probe.exe \
+            --font-file "_terminal/res/fonts/CascadiaMono.ttf" \
+            --output phase3/xaml-db/glyph-outlines/cascadia-mono.json
+          test -s phase3/xaml-db/glyph-outlines/cascadia-mono.json
+
+      # An uncleared family must be refused by the script and not by the
+      # absence of a step asking for it. Asserting the refusal here means the
+      # licence gate is exercised on every run rather than trusted.
+      - name: The licence gate refuses an uncleared family
+        shell: bash
+        run: |
+          if python3 -B phase3/scripts/harvest_glyph_outlines.py \
+               --family "Segoe UI" \
+               --metrics phase3/xaml-db/fonts/segoe-ui.json \
+               --probe phase3/harness/glyph_outline_probe.exe \
+               --output "$RUNNER_TEMP/segoe-ui-outlines.json"; then
+            echo "::error::Segoe UI outlines were harvested; the licence gate did not hold"
+            exit 1
+          fi
+          test ! -f "$RUNNER_TEMP/segoe-ui-outlines.json"
+          echo "the licence gate refused Segoe UI, as it must"
+
       # RenderTargetBitmap is the stable XAML output boundary. Raw BGRA stays
       # in the workflow artifact (never the repository); reviewable JSON holds
       # the visual tree, environment, dimensions and exact content hashes.
@@ -568,6 +630,15 @@ jobs:
         with:
           name: xaml-fonts-${{ env.os_build }}
           path: phase3/xaml-db/fonts/*.json
+
+      # The recorded ink. Its own artifact, not folded into xaml-fonts-*,
+      # because it is a different kind of reading with a different licensing
+      # story and the two must not be conflated by living in one directory.
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('phase3/xaml-db/glyph-outlines/*.json') != ''
+        with:
+          name: xaml-glyph-outlines-${{ env.os_build }}
+          path: phase3/xaml-db/glyph-outlines/*.json
 
       # The cases are generator output and not committed, so the corpus the
       # oracle just measured travels as an artifact. The layout job measures

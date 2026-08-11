@@ -7,6 +7,15 @@ what arrived agrees with the numbers the corpus solved for itself. A harvest
 that quietly disagrees with the recorded measurements is the failure worth
 catching, because it turns into pixel widths that are slightly off everywhere
 rather than into an error.
+
+The other half of the contract is what happens to a family the corpus has
+never derived anything for. Icon fonts are the standing example: nothing has
+solved Segoe MDL2 Assets out of the recorded measurements, so there is no
+independent statement to check its harvest against. That is not a disagreement
+-- there is nothing to disagree with -- and refusing the whole artifact over it
+blocks every family that *can* be checked. It is also not nothing: a harvest of
+the wrong file for such a family would sail through. So it is reported by name,
+separately, and whether it blocks is an explicit choice.
 """
 
 from __future__ import annotations
@@ -20,7 +29,13 @@ from pathlib import Path
 SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIRECTORY))
 
-from fetch_measurements import fonts_directory, verify_fonts  # noqa: E402
+from fetch_measurements import (  # noqa: E402
+    fonts_directory,
+    glyph_outlines_directory,
+    report_theme_resources,
+    theme_resources_directory,
+    verify_fonts,
+)
 
 DERIVED = (Path(__file__).resolve().parents[1]
            / "xaml-db" / "fonts" / "derived" / "segoe-ui.json")
@@ -72,7 +87,10 @@ class VerifyFontsTest(unittest.TestCase):
 
     def test_a_harvest_that_agrees_passes(self) -> None:
         self.write("segoe-ui.json", SEGOE_UI)
-        self.assertEqual(verify_fonts(self.fonts, DERIVED.parent), [])
+        checked = verify_fonts(self.fonts, DERIVED.parent)
+        self.assertEqual(checked.problems, [])
+        self.assertEqual(checked.unchecked, [])
+        self.assertEqual(checked.verified, ["Segoe UI"])
 
     def test_a_harvest_of_the_wrong_font_is_caught(self) -> None:
         # Liberation Sans' numbers under Segoe UI's name: metrically unlike it,
@@ -80,12 +98,12 @@ class VerifyFontsTest(unittest.TestCase):
         wrong = dict(SEGOE_UI, hhea={"ascender": 1854, "descender": -434, "line_gap": 67},
                      advances={"77": 1706})
         self.write("segoe-ui.json", wrong)
-        problems = verify_fonts(self.fonts, DERIVED.parent)
+        problems = verify_fonts(self.fonts, DERIVED.parent).problems
         self.assertTrue(any("baseline to baseline" in p for p in problems))
         self.assertTrue(all("Segoe UI" in p for p in problems))
 
     def test_an_empty_artifact_is_caught(self) -> None:
-        problems = verify_fonts(self.fonts, DERIVED.parent)
+        problems = verify_fonts(self.fonts, DERIVED.parent).problems
         self.assertEqual(len(problems), 1)
         self.assertIn("no font metrics", problems[0])
 
@@ -94,16 +112,118 @@ class VerifyFontsTest(unittest.TestCase):
         # file arriving in it would pass every cross-check trivially, being the
         # thing the cross-check compares against.
         self.write("segoe-ui.json", dict(SEGOE_UI, provenance="derived"))
-        problems = verify_fonts(self.fonts, DERIVED.parent)
+        problems = verify_fonts(self.fonts, DERIVED.parent).problems
         self.assertEqual(len(problems), 1)
         self.assertIn("provenance", problems[0])
 
-    def test_a_family_nothing_can_check_is_said_out_loud(self) -> None:
+    def test_a_family_nothing_can_check_is_named_not_refused(self) -> None:
+        # Nothing in xaml-db/fonts/derived covers Consolas, so there is no
+        # independent statement to check its harvest against. Saying so is the
+        # honest answer; calling it a disagreement is not, because nothing
+        # disagreed.
         self.write("consolas.json", dict(SEGOE_UI, family="Consolas"))
-        problems = verify_fonts(self.fonts, DERIVED.parent)
+        checked = verify_fonts(self.fonts, DERIVED.parent)
+        self.assertEqual(checked.problems, [])
+        self.assertEqual(len(checked.unchecked), 1)
+        self.assertIn("Consolas", checked.unchecked[0])
+        self.assertIn("nothing", checked.unchecked[0])
+        self.assertEqual(checked.verified, [])
+
+    def test_an_unchecked_family_does_not_hide_a_checked_one(self) -> None:
+        # The failure this whole split exists to prevent: an icon font nobody
+        # has derived anything for must not stop Segoe UI's harvest from being
+        # compared against the numbers the corpus solved.
+        self.write("consolas.json", dict(SEGOE_UI, family="Consolas"))
+        wrong = dict(SEGOE_UI, hhea={"ascender": 1854, "descender": -434, "line_gap": 67})
+        self.write("segoe-ui.json", wrong)
+        checked = verify_fonts(self.fonts, DERIVED.parent)
+        self.assertTrue(any("baseline to baseline" in p for p in checked.problems))
+        self.assertEqual(len(checked.unchecked), 1)
+
+    def test_a_broken_file_is_a_problem_not_an_unchecked_family(self) -> None:
+        # A file that is not readable JSON says nothing about coverage. It is
+        # a broken artifact and must block, or a truncated download reads as
+        # "this family happens to be unchecked".
+        (self.fonts / "segoe-ui.json").write_text("{ not json", encoding="utf-8")
+        problems = verify_fonts(self.fonts, DERIVED.parent).problems
         self.assertEqual(len(problems), 1)
-        self.assertIn("Consolas", problems[0])
-        self.assertIn("nothing", problems[0])
+        self.assertIn("segoe-ui.json", problems[0])
+
+
+class OtherArtifactsOfTheSameRunTest(unittest.TestCase):
+    """`gh run download` fetches all of them; saying which is the whole job."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "xaml-measurements-10.0.26100.33158").mkdir()
+
+    def test_the_theme_resource_artifact_is_found(self) -> None:
+        wanted = self.root / "xaml-theme-resources-10.0.26100.33158"
+        wanted.mkdir()
+        self.assertEqual(theme_resources_directory(self.root), wanted)
+
+    def test_a_run_without_glyph_outlines_is_not_an_error(self) -> None:
+        # Which is every run there has ever been.
+        self.assertIsNone(glyph_outlines_directory(self.root))
+
+
+class ThemeResourceReportTest(unittest.TestCase):
+    """A half-empty dictionary directory reads exactly like a working one."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.theme = Path(self.tmp.name)
+
+    def test_the_missing_half_is_named_and_so_is_its_cost(self) -> None:
+        # Exactly the artifact of the latest green run, 31234396062.
+        (self.theme / "winui-2.8.4.json").write_text("{}", encoding="utf-8")
+        lines = report_theme_resources(self.theme)
+        self.assertIn("winui-2.8.4.json: present", lines)
+        absent = next(line for line in lines if line.startswith("default-styles"))
+        self.assertIn("ABSENT", absent)
+        self.assertIn("L5-defaults-framework-only-key", absent)
+        self.assertIn("regenerate_theme_resources.py", absent)
+
+    def test_a_complete_directory_says_so(self) -> None:
+        for name in ("winui-2.8.4.json", "default-styles.json"):
+            (self.theme / name).write_text("{}", encoding="utf-8")
+        self.assertTrue(all(line.endswith("present")
+                            for line in report_theme_resources(self.theme)))
+
+
+class UncheckedFamiliesBlockOnlyWhenAskedTest(unittest.TestCase):
+    """The explicit half of the contract: naming is the default, refusing opts in."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.fonts = Path(self.tmp.name) / "fonts"
+        self.fonts.mkdir()
+        (self.fonts / "segoe-ui.json").write_text(json.dumps(SEGOE_UI), encoding="utf-8")
+        (self.fonts / "consolas.json").write_text(
+            json.dumps(dict(SEGOE_UI, family="Consolas")), encoding="utf-8")
+
+    def test_by_default_unchecked_families_do_not_block(self) -> None:
+        checked = verify_fonts(self.fonts, DERIVED.parent)
+        self.assertFalse(checked.blocking(require_coverage=False))
+
+    def test_requiring_coverage_makes_them_block(self) -> None:
+        checked = verify_fonts(self.fonts, DERIVED.parent)
+        blocking = checked.blocking(require_coverage=True)
+        self.assertTrue(blocking)
+        self.assertTrue(any("Consolas" in line for line in blocking))
+
+    def test_a_real_disagreement_blocks_either_way(self) -> None:
+        (self.fonts / "segoe-ui.json").write_text(
+            json.dumps(dict(SEGOE_UI, hhea={"ascender": 1854, "descender": -434,
+                                            "line_gap": 67})),
+            encoding="utf-8")
+        checked = verify_fonts(self.fonts, DERIVED.parent)
+        self.assertTrue(checked.blocking(require_coverage=False))
+        self.assertTrue(checked.blocking(require_coverage=True))
 
 
 if __name__ == "__main__":

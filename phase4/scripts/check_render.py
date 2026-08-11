@@ -637,6 +637,12 @@ def main() -> int:
     origins_not_re_derived = 0
     failures: list[dict[str, Any]] = []
     refusal_features: dict[str, int] = {}
+    # Named, not just counted. A case that does not lay out is either the
+    # oracle refusing -- recorded, permanent, and correct -- or an artifact
+    # this machine does not have. The count spells those identically, so a
+    # local gap reads as a settled fact and a regression into this column
+    # reads as nothing at all.
+    not_laid_out_cases: list[dict[str, Any]] = []
 
     for sidecar_path in iter_cases(args.dumps):
         sidecar = json.loads(sidecar_path.read_text())
@@ -652,6 +658,8 @@ def main() -> int:
         case_id = sidecar["case_id"]
         if "load_error" in sidecar:
             not_laid_out += 1
+            not_laid_out_cases.append(
+                {"case_id": case_id, "load_error": sidecar["load_error"]})
             continue
         if sidecar["refusals"] or sidecar["text_failures"] or sidecar.get("render_issues", []):
             refused += 1
@@ -710,6 +718,16 @@ def main() -> int:
             )
         )
 
+    if not_laid_out_cases:
+        print()
+        print("| not laid out | why |")
+        print("|---|---|")
+        for entry in sorted(not_laid_out_cases, key=lambda item: item["case_id"]):
+            reason = " ".join(str(entry["load_error"]).split())
+            if len(reason) > 160:
+                reason = reason[:157] + "..."
+            print(f"| {entry['case_id']} | {reason} |")
+
     if refusal_features:
         print()
         print("| named no-draw | elements |")
@@ -729,6 +747,8 @@ def main() -> int:
         "refused": refused,
         "failed": len(failures),
         "not_laid_out": not_laid_out,
+        "not_laid_out_cases": sorted(not_laid_out_cases,
+                                     key=lambda item: item["case_id"]),
         "cases_with_text": with_text,
         "ink_checked": ink_checked,
         "total": total,

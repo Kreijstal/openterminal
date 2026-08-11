@@ -471,6 +471,72 @@ class SidecarSchema(unittest.TestCase):
         self.assertEqual(json.loads(report.read_text())["total"], 1)
 
 
+class NotLaidOutCasesAreNamed(unittest.TestCase):
+    """A count is not a report.
+
+    "not laid out (no tree to paint) | 7" is where seven cases go to be
+    forgotten. Some of them are the oracle refusing, recorded and permanent;
+    some are an artifact this machine happens not to have. Those are opposite
+    situations and the number spells them identically, so a local gap reads as
+    a settled fact and a regression into that column reads as nothing at all.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.dir.name)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def write_unlaid(self, case_id, load_error):
+        (self.root / f"{case_id}.json").write_text(json.dumps({
+            "schema_version": check_render.REQUIRED_SIDECAR_SCHEMA,
+            "case_id": case_id,
+            "load_error": load_error,
+        }))
+
+    def run_main(self):
+        report = self.root / "report.json"
+        argv = sys.argv
+        sys.argv = ["check_render.py", "--dumps", str(self.root), "--output", str(report)]
+        try:
+            return check_render.main(), json.loads(report.read_text())
+        finally:
+            sys.argv = argv
+
+    def test_every_unlaid_case_is_named_with_its_reason(self):
+        self.write_unlaid(
+            "L5-defaults-framework-only-key",
+            "resource 'ControlContentThemeFontSize' not found")
+        self.write_unlaid(
+            "L4-icon-rule-mdl2-latin-14",
+            'no family in "Segoe MDL2 Assets" has an advance for U+004D')
+        code, report = self.run_main()
+        self.assertEqual(code, 0)
+        self.assertEqual(report["not_laid_out"], 2)
+        named = {entry["case_id"]: entry["load_error"]
+                 for entry in report["not_laid_out_cases"]}
+        self.assertEqual(set(named), {"L5-defaults-framework-only-key",
+                                      "L4-icon-rule-mdl2-latin-14"})
+        self.assertIn("ControlContentThemeFontSize",
+                      named["L5-defaults-framework-only-key"])
+
+    def test_the_named_list_matches_the_count(self):
+        # The invariant that makes the list usable as the report: if these two
+        # can disagree, the list is decoration.
+        for index in range(5):
+            self.write_unlaid(f"L0-props-{index:04d}", "whatever the runtime said")
+        _, report = self.run_main()
+        self.assertEqual(len(report["not_laid_out_cases"]), report["not_laid_out"])
+
+    def test_a_corpus_that_all_lays_out_reports_an_empty_list(self):
+        card = sidecar(4, 2, [])
+        (self.root / "synthetic.json").write_text(json.dumps(card))
+        (self.root / "synthetic.ppm").write_bytes(ppm(4, 2, surface(4, 2, [])))
+        _, report = self.run_main()
+        self.assertEqual(report["not_laid_out_cases"], [])
+
+
 class ReadPpm(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
