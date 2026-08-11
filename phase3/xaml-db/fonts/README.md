@@ -37,6 +37,15 @@ pair kerning in `kern` and `GPOS` on the Windows runner — the same runner, in
 the same job, as the oracle those metrics are checked against — and writes one
 JSON file per family.
 
+That list of tables is exhaustive on purpose, and no outline table is on it.
+`glyf`, `loca`, `CFF ` and `CFF2` are the shapes, and reading shapes is a
+heavier claim than reading widths — the typeface design is generally not
+copyrightable, the outline data in the file generally is. Recording them is
+what would let the 113 cases refusing `DirectWrite could not resolve any
+requested family in "Segoe UI"` actually paint, and the machinery to do it
+exists in `../glyph-outlines/`, gated on a committed per-family licence list
+that Segoe UI is deliberately not on. See that directory's README.
+
 The kern tables are read as **evidence**, into `font_kerning`, and the two
 sources are kept apart — `{"gpos": {…}, "kern": {…}}` — rather than merged.
 Nothing in the layout core reads either. Only the `kern` feature is taken out of
