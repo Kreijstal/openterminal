@@ -93,8 +93,12 @@ public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
         if (!object) return E_POINTER;
         *object = nullptr;
-        if (IsEqualIID(iid, IID_IUnknown) || IsEqualIID(iid, IID_IDWritePixelSnapping) ||
-            IsEqualIID(iid, IID_IDWriteTextRenderer)) {
+        // __uuidof, matching DWriteCreateFactory below: the DirectWrite
+        // headers declare their interfaces with DECLSPEC_UUID and publish no
+        // `IID_IDWrite*` constants for cl to find.
+        if (IsEqualIID(iid, __uuidof(IUnknown)) ||
+            IsEqualIID(iid, __uuidof(IDWritePixelSnapping)) ||
+            IsEqualIID(iid, __uuidof(IDWriteTextRenderer))) {
             *object = static_cast<IDWriteTextRenderer*>(this);
             AddRef();
             return S_OK;

@@ -85,8 +85,13 @@ public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
         if (!object) return E_POINTER;
         *object = nullptr;
-        if (IsEqualIID(iid, IID_IUnknown) ||
-            IsEqualIID(iid, IID_IDWriteTextAnalysisSource)) {
+        // __uuidof rather than an IID_ symbol: the DirectWrite headers declare
+        // their interfaces with DECLSPEC_UUID and publish no `IID_IDWrite*`
+        // constants. mingw-w64's headers happen to define them anyway, which
+        // is why this compiled here and never once compiled on the Windows
+        // runner -- see the comment above main().
+        if (IsEqualIID(iid, __uuidof(IUnknown)) ||
+            IsEqualIID(iid, __uuidof(IDWriteTextAnalysisSource))) {
             *object = static_cast<IDWriteTextAnalysisSource*>(this);
             AddRef();
             return S_OK;
@@ -182,7 +187,7 @@ std::wstring FontPath(IDWriteFont* font) {
     ComPtr<IDWriteFontFileLoader> loader;
     Check(file->GetLoader(loader.Put()), "GetLoader");
     ComPtr<IDWriteLocalFontFileLoader> local;
-    Check(loader->QueryInterface(IID_IDWriteLocalFontFileLoader,
+    Check(loader->QueryInterface(__uuidof(IDWriteLocalFontFileLoader),
                                  reinterpret_cast<void**>(local.Put())),
           "IDWriteLocalFontFileLoader");
     UINT32 length = 0;
@@ -220,7 +225,8 @@ int wmain(int argc, wchar_t** argv) {
         const std::wstring locale = argv[3];
 
         ComPtr<IDWriteFactory2> factory;
-        Check(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, IID_IDWriteFactory2,
+        Check(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
+                                  __uuidof(IDWriteFactory2),
                                   reinterpret_cast<IUnknown**>(factory.Put())),
               "DWriteCreateFactory");
         ComPtr<IDWriteFontFallback> fallback;
