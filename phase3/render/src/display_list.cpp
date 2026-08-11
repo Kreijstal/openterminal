@@ -103,6 +103,29 @@ struct Walker {
                 origin = {Canvas::GetLeft(element), Canvas::GetTop(element)};
             return {origin, element.specified_size(), true};
         }
+
+        // The root is the other measured exception, and the corpus states it
+        // outright. A Shape at the root of a tree is not a layout element, so
+        // nothing measures or arranges it and it never gets layout storage --
+        // but the runtime still answers ActualWidth and ActualHeight out of the
+        // specified size once the element has been measured, which is what
+        // Element::render_size reproduces. The recorded tree for
+        // L7-terminal-65dec6afa8 is exactly one such Rectangle: desired
+        // [0, 0], actual [12, 12], offset [0, 0]. The oracle gives it a rect,
+        // so refusing it as unarranged contradicts the measurement.
+        //
+        // Root-only on purpose. Below the root it is the parent that decides
+        // whether a child was arranged, and the only unarranged children the
+        // corpus has are the Canvas ones the branch above already answers;
+        // widening this to them would be a rule no recorded tree asked for.
+        //
+        // Measured, not merely constructed: render_size answers zero while the
+        // element is still measure-dirty, and a zero extent is no rect at all.
+        if (element.visual_parent() == nullptr && HasExplicitExtent(element)) {
+            const Size size = element.render_size();
+            if (size.width > 0.0 && size.height > 0.0)
+                return {element.render_origin(), size, true};
+        }
         return {element.render_origin(), element.render_size(), false};
     }
 
@@ -297,6 +320,37 @@ struct Walker {
                    "the live ImageSource type '" + image->source_type() +
                        "' is retained, but immutable resource decoding and sampling "
                        "are not implemented");
+        }
+
+        // A rounded Rectangle is named for the reason a rounded Border is.
+        //
+        // RadiusX and RadiusY round the corners with the same antialiased arc
+        // CornerRadius draws, and phase4/scripts/check_render.py recovers
+        // axis-aligned rectangles out of the pixels and nothing else. Painting
+        // the fill as a sharp rectangle would put pixels in the four corners
+        // the runtime leaves empty, and the round trip would then confirm the
+        // rectangle this project drew rather than the shape the markup asked
+        // for. Refusing the arc is the same answer, under the same rule.
+        //
+        // Only when something would be drawn with it, as CornerRadius does: a
+        // radius on a Rectangle whose Fill and Stroke both paint nothing
+        // changes no pixel, and refusing that would report a no-draw as a gap.
+        if (const auto* rectangle = dynamic_cast<const Rectangle*>(&element)) {
+            const bool rounded =
+                rectangle->radius_x() != 0.0 || rectangle->radius_y() != 0.0;
+            const bool paints_shape =
+                potentially_paints(element.fill_brush()) ||
+                (rectangle->stroke_thickness() > 0.0 &&
+                 potentially_paints(element.stroke_brush()));
+            if (rounded && paints_shape) {
+                // Named for whichever property actually rounds them: either
+                // one alone is enough, and reporting the other would name a
+                // property this markup never set.
+                Refuse(path, rectangle->radius_x() != 0.0 ? "RadiusX" : "RadiusY",
+                       "the Rectangle is drawn with rounded corners, which are not the "
+                       "axis-aligned rectangles this pass paints and the round trip "
+                       "recovers; no recorded measurement gives their pixels");
+            }
         }
 
         if (element.fill_brush().declared) {
