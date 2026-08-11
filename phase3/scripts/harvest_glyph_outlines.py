@@ -50,15 +50,20 @@ OS/2, hmtx, cmap, kern, GPOS -- and lists no outline table.
 
 So this script refuses, by name, to harvest a family nobody has cleared:
 
-    Segoe UI: outline harvesting is not cleared for this family. Recording a
-    font's outlines is a different act from recording its metrics ... The
-    decision is a licensing question and belongs to a human.
+    Segoe MDL2 Assets: outline harvesting is not cleared for this family.
+    Recording a font's outlines is a different act from recording its
+    metrics ... The decision is a licensing question and belongs to a human.
 
 `CLEARED` is the committed list. Cascadia Mono is on it: SIL Open Font
 License 1.1, and Terminal ships the file in its own repository, so the
-outlines already travel. That is what the pipeline is proven on. Segoe UI is
-not on it, and adding it is a deliberate, reviewable commit by somebody with
-the standing to make that call -- not a flag a harvest run can pass.
+outlines already travel. That is what the pipeline was proven on. Segoe UI is
+on it too, and its entry is not a licence: it is a proprietary Microsoft
+typeface, and the repository owner directed the harvest (2026-08-11) on the
+terms the entry records -- the recording stays in short-lived CI artifacts,
+read fresh each run from the runner's font file, and never enters the
+repository. Both entries are what an entry has to be: a deliberate,
+reviewable commit by somebody with the standing to make that call -- not a
+flag a harvest run can pass.
 
     python3 phase3/scripts/harvest_glyph_outlines.py \\
         --family "Cascadia Mono" \\
@@ -79,13 +84,19 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 
-#: Families whose outlines may be recorded, and the licence that says so.
+#: Families whose outlines may be recorded, and the reason that says so --
+#: a licence that permits it, or a dated human decision to record anyway.
 #: Adding to this is a licensing decision. See the module docstring.
 CLEARED: dict[str, str] = {
     "Cascadia Mono": "SIL Open Font License 1.1; shipped in microsoft/terminal "
                      "as res/fonts/CascadiaMono.ttf",
     "Cascadia Code": "SIL Open Font License 1.1; shipped in microsoft/terminal "
                      "as res/fonts/CascadiaCode.ttf",
+    "Segoe UI": "proprietary Microsoft typeface, not open-licensed; recorded "
+                "at the repository owner's direction (2026-08-11); the "
+                "recording lives only in short-lived CI artifacts, read fresh "
+                "each run from the font file Microsoft installs on the "
+                "runner, and never enters the repository",
 }
 
 

@@ -89,26 +89,31 @@ the same glyph of the same file. A codepoint the metrics cover and the outlines
 do not is fatal — a partial harvest paints part of a string and refuses the
 rest, which looks like it worked.
 
-## The licence gate, which is why Segoe UI is not here
+## The licence gate, and the decision that was made at it
 
 `harvest_glyph_outlines.py` carries a committed `CLEARED` list and refuses any
 family not on it, by name, before it runs the probe:
 
-    Segoe UI: outline harvesting is not cleared for this family. Recording a
-    font's outlines is a different act from recording its metrics -- the
-    metrics this project already keeps are not generally copyrightable and the
-    outline data generally is -- and phase3/xaml-db/fonts/README.md authorises
-    no outline table. The decision is a licensing question and belongs to a
-    human ...
+    Segoe MDL2 Assets: outline harvesting is not cleared for this family.
+    Recording a font's outlines is a different act from recording its metrics
+    -- the metrics this project already keeps are not generally copyrightable
+    and the outline data generally is -- and phase3/xaml-db/fonts/README.md
+    authorises no outline table. The decision is a licensing question and
+    belongs to a human ...
 
 Cleared today: **Cascadia Mono** and **Cascadia Code** — SIL OFL 1.1, and
-Terminal ships both files, so the outlines already travel. That is what the
-pipeline is proven on, and the workflow asserts the refusal of Segoe UI on
-every run so the gate is exercised rather than trusted.
+Terminal ships both files, so the outlines already travel — and **Segoe UI**.
+The Segoe entry is not a licence and does not pretend to be one: it is a
+proprietary Microsoft typeface, and the repository owner directed the harvest
+(2026-08-11) on recorded terms — the recording lives only in the short-lived
+`xaml-glyph-outlines-<os_build>` CI artifact, read fresh each run from the
+font file Microsoft installs on the runner, and never enters the repository.
+That was exactly the decision this machinery existed to put in front of
+somebody with the standing to make it, and the `CLEARED` entry is its record.
 
-**Adding Segoe UI to `CLEARED` is the decision this whole track exists to put
-in front of somebody who can make it.** The machinery is built so that the call
-can be made on the facts. It is not made here.
+The gate itself did not retire. The workflow asserts the refusal of a family
+nobody has cleared — Segoe MDL2 Assets — on every run, so the gate stays
+exercised rather than trusted.
 
 ## The consumption plan
 
@@ -188,14 +193,21 @@ render-oracle check and does not exist yet.
    the matching `build_render.py` flag;
 4. a sidecar field naming which painter drew each run;
 5. the runner-side coverage comparison in 4. above;
-6. and only then, if and when it is cleared, Segoe UI.
+6. and Segoe UI, which is now cleared and harvested, so nothing on this list
+   waits on a licensing call any more.
 
 ## Status
 
-**Nothing here has ever run.** `glyph_outline_probe.cpp` builds only on Windows;
-the workflow steps that build and run it are committed but have not been pushed,
-so no run has produced an artifact. `fetch_measurements.py --glyph-outlines`
-says exactly that and exits non-zero, and
-`phase3/tests/test_harvest_glyph_outlines.py` carries the end-to-end case as a
-named skip rather than a pass. The 113 refusals stand, and that is the honest
-state of them.
+**The harvest runs on every measurement run.** The measure job builds
+`glyph_outline_probe.cpp` on the Windows runner and records two families:
+Cascadia Mono, read by file out of the pinned Terminal checkout, and Segoe UI,
+resolved through the system font collection with simulations refused and the
+resolved file re-hashed against the SHA-256 the metrics harvest recorded — the
+same hash the run pins as its oracle identity. Both recordings travel only in
+the `xaml-glyph-outlines-<os_build>` artifact;
+`fetch_measurements.py --glyph-outlines` downloads it. A checkout still holds
+no JSON here, by design, and
+`phase3/tests/test_harvest_glyph_outlines.py` names that state as a skip that
+turns into structural checks over any harvest fetched into this directory.
+Consumption is the remaining half: until the renderer paints from the
+recordings, the 113 Segoe UI refusals stand.
