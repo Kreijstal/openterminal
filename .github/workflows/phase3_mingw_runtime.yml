@@ -65,9 +65,14 @@ jobs:
           WINEARCH: win64
           WINEDEBUG: -all
         run: |
-          export WINEPATH="$(python3 -B -c \
+          # The assignment is its own command so a finder refusal stops the
+          # step here, named, instead of letting wine fail later with an
+          # empty WINEPATH pointing away from the cause.
+          WINEPATH="$(python3 -B -c \
             "import sys; sys.path.insert(0, 'phase4/scripts'); \
-             import run_terminal_integration as i; print(i.find_mingw_runtime())")"
+             import run_terminal_integration as i; \
+             print(i.wine_search_path(i.find_mingw_runtime()))")"
+          export WINEPATH
           wineboot -u
           wine "$RUNNER_TEMP/render-mingw/dcomp_scene_backend_tests.exe"
 
