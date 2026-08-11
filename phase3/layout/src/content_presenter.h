@@ -45,6 +45,12 @@ public:
     }
     const Thickness& padding() const { return GetThickness(ChromePaddingProperty()); }
     void set_padding(Thickness value) { SetValue(ChromePaddingProperty(), value); }
+    const CornerRadius& corner_radius() const {
+        return GetCornerRadius(ChromeCornerRadiusProperty());
+    }
+    void set_corner_radius(CornerRadius value) {
+        SetValue(ChromeCornerRadiusProperty(), value);
+    }
 
     // Not the same properties as HorizontalAlignment/VerticalAlignment: these
     // place the content within the presenter. Left/Top is the documented

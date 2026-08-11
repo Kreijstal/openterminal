@@ -54,7 +54,8 @@ mistaken for a pass.
 | an element with no layout storage — a `Shape`, an `Image`, anything under a `Canvas` | it takes no part in layout, so no recorded measurement gives it a rect at all. `Fill` is refused for this reason and no other |
 | a case painting the reserved probe-ink colour | ink and background could not be told apart in the round trip |
 | a text run in a font the system has not got | substituting another face would put ink where nothing measured it |
-| `CornerRadius`, gradients, `ImageBrush`, shadows, `RenderTransform`, theme animation | the layout core does not carry them, and the new pixel harvest has not yet been connected to implementations of these features |
+| `CornerRadius` on chrome that is actually drawn | the layout core carries the property now — it loads, it round-trips, and it moves nothing, which is the runtime's behaviour — but a rounded corner is not one of the axis-aligned rectangles this pass paints and the round trip recovers, and no recorded measurement gives its pixels. A zero radius, or one on chrome with no brush, covers no pixel and is not refused |
+| gradients, `ImageBrush`, shadows, `RenderTransform`, theme animation | the layout core does not carry them, and the new pixel harvest has not yet been connected to implementations of these features |
 | `BorderBrush` from markup | no type registers the property, so the three corpus cases that set one fail at load — which is what the oracle answers for them too. The paint path takes a border brush; no markup can currently give it one |
 
 ## The gate

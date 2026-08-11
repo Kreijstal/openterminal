@@ -61,6 +61,19 @@ struct Walker {
         return false;
     }
 
+    // The corner radius the chrome would be drawn with, from whichever of the
+    // three carriers this element is. Not rounded: nothing here draws it, and
+    // rounding a number on the way to a refusal would invent a rule.
+    static CornerRadius CornerRadiusOf(const Element& element) {
+        if (const auto* border = dynamic_cast<const Border*>(&element))
+            return border->corner_radius();
+        if (const auto* panel = dynamic_cast<const ChromedPanel*>(&element))
+            return panel->corner_radius();
+        if (const auto* presenter = dynamic_cast<const ContentPresenter*>(&element))
+            return presenter->corner_radius();
+        return CornerRadius{};
+    }
+
     struct RenderGeometry {
         openxaml::Point origin;
         Size size;
@@ -311,6 +324,28 @@ struct Walker {
         if (BorderThicknessOf(element, border)) {
             const bool has_border = border.left > 0.0 || border.top > 0.0 ||
                                     border.right > 0.0 || border.bottom > 0.0;
+            // A rounded corner is not one of the axis-aligned rectangles this
+            // pass paints, and it is not a rectangle the round-trip check could
+            // recover out of the pixels either: the runtime antialiases the arc,
+            // and phase4/scripts/check_render.py exists precisely because a
+            // solid rect at whole-pixel edges is exactly invertible and nothing
+            // else is. No recorded measurement pins those pixels -- the three
+            // corpus cases that name a CornerRadius are cases the oracle
+            // refused -- so drawing an arc here would be a picture this project
+            // made up and then checked against itself. It is named instead.
+            //
+            // Only when something would actually be drawn with it. A radius on
+            // an element whose chrome paints nothing changes no pixel, and
+            // refusing that would report a no-draw as a gap.
+            const CornerRadius radius = CornerRadiusOf(element);
+            if (!radius.IsZero() &&
+                ((has_border && potentially_paints(element.border_brush())) ||
+                 potentially_paints(element.background_brush()))) {
+                Refuse(path, "CornerRadius",
+                       "the chrome is drawn with rounded corners, which are not the "
+                       "axis-aligned rectangles this pass paints and the round trip "
+                       "recovers; no recorded measurement gives their pixels");
+            }
             if (has_border && element.border_brush().declared) {
                 // Four rectangles, mitred the way a border is: the top and
                 // bottom run the full width, the sides fill what is left.

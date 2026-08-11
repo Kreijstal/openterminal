@@ -9,6 +9,13 @@ const DependencyProperty* const kBorderThickness =
     RegisterProperty("Border", "BorderThickness", {Thickness{}, false, true});
 const DependencyProperty* const kPadding =
     RegisterProperty("Border", "Padding", {Thickness{}, false, true});
+// Affects nothing this core measures -- see the CornerRadius comment in
+// layout.h -- so it is registered without the "affects layout" flag its two
+// neighbours carry. Border has had it since Windows 8; the panels grew theirs
+// in WinUI 2.6 and register it separately in chrome.cpp, the same split
+// BorderThickness and Padding already have.
+const DependencyProperty* const kCornerRadius =
+    RegisterProperty("Border", "CornerRadius", {CornerRadius{}, false, false});
 // Border is not a Panel, so it declares its own -- see element.h.
 const DependencyProperty* const kBackground =
     RegisterProperty("Border", "Background", {std::string(), false, false});
@@ -32,6 +39,7 @@ Element* SingleChild(const Border& border) {
 
 const DependencyProperty& Border::BorderThicknessProperty() { return *kBorderThickness; }
 const DependencyProperty& Border::PaddingProperty() { return *kPadding; }
+const DependencyProperty& Border::CornerRadiusProperty() { return *kCornerRadius; }
 const DependencyProperty& Border::BackgroundProperty() { return *kBackground; }
 const DependencyProperty& Border::BorderBrushProperty() { return *kBorderBrush; }
 

@@ -311,6 +311,93 @@ void MarkupRefusesAPropertyTheTypeDoesNotHave() {
     CHECK(refused);
 }
 
+// CornerRadius: the fifth chrome property, and the one that moves nothing.
+//
+// Held here rather than left to the corpus because the corpus cannot state it.
+// The three cases that name a CornerRadius are cases the oracle *refused*, so
+// no recorded tree says what a rounded Border measures -- and the claim being
+// made is precisely that it measures the same as an unrounded one. That is a
+// rule, and a rule the recorded numbers can neither confirm nor contradict has
+// to be written down somewhere it will be re-run.
+//
+// The spelling rules are `CCornerRadius::CornerRadiusFromString` and
+// `CCornerRadius::Validate`
+// (dxaml/xcp/components/primitiveDependencyObjects/CornerRadius.cpp,
+// microsoft-ui-xaml, MIT, 188f602b): four numbers or one, never two, never
+// negative.
+void CornerRadiusLoadsOnTheChromeCarriersAndMovesNothing() {
+    const std::string xmlns = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+
+    // Border's is its own property; the three that share chrome.h's owner share
+    // one -- the same split BorderThickness and Padding already have, and the
+    // case where a registry matching on the name alone would look right.
+    CHECK(FindProperty(Border::Owners(), "CornerRadius") == &Border::CornerRadiusProperty());
+    CHECK(FindProperty(Grid::Owners(), "CornerRadius") == &ChromeCornerRadiusProperty());
+    CHECK(FindProperty(StackPanel::Owners(), "CornerRadius") == &ChromeCornerRadiusProperty());
+    CHECK(FindProperty(ContentPresenter::Owners(), "CornerRadius") ==
+          &ChromeCornerRadiusProperty());
+    CHECK(&Border::CornerRadiusProperty() != &ChromeCornerRadiusProperty());
+    // Canvas took no Padding and takes no CornerRadius either: it is the one
+    // panel WinUI 2 left without the chrome.
+    CHECK(FindProperty(Canvas::Owners(), "CornerRadius") == nullptr);
+    CHECK(FindProperty(TextBlock::Owners(), "CornerRadius") == nullptr);
+
+    // One number is used all around; four are topLeft, topRight, bottomRight,
+    // bottomLeft, in that order.
+    std::unique_ptr<Element> root =
+        LoadMarkup("<Border xmlns=\"" + xmlns + "\" CornerRadius=\"4\"/>");
+    auto* border = dynamic_cast<Border*>(root.get());
+    CHECK(border != nullptr);
+    if (border) CHECK(border->corner_radius() == (CornerRadius{4.0, 4.0, 4.0, 4.0}));
+
+    root = LoadMarkup("<Border xmlns=\"" + xmlns + "\" CornerRadius=\"1,2,3,4\"/>");
+    border = dynamic_cast<Border*>(root.get());
+    CHECK(border != nullptr);
+    if (border) CHECK(border->corner_radius() == (CornerRadius{1.0, 2.0, 3.0, 4.0}));
+
+    // A Thickness accepts two numbers. A CornerRadius does not, and neither
+    // does it accept a negative one.
+    for (const char* spelling : {"4,8", "-1", "1,2,3", "1,2,3,4,5"}) {
+        bool refused = false;
+        try {
+            LoadMarkup("<Border xmlns=\"" + xmlns + "\" CornerRadius=\"" + spelling + "\"/>");
+        } catch (const MarkupError&) {
+            refused = true;
+        }
+        CHECK(refused);
+    }
+
+    // The rule the corpus cannot state: the radius is not chrome that costs
+    // room. A rounded Border measures and arranges its child exactly where an
+    // unrounded one does, and both deflate by the border thickness alone.
+    const std::string rounded = "<Border xmlns=\"" + xmlns +
+                                "\" BorderThickness=\"1\" Padding=\"4\" CornerRadius=\"8\">"
+                                "<Border Width=\"20\" Height=\"10\"/></Border>";
+    const std::string square = "<Border xmlns=\"" + xmlns +
+                               "\" BorderThickness=\"1\" Padding=\"4\">"
+                               "<Border Width=\"20\" Height=\"10\"/></Border>";
+    std::unique_ptr<Element> with = LoadMarkup(rounded);
+    std::unique_ptr<Element> without = LoadMarkup(square);
+    for (Element* subject : {with.get(), without.get()}) {
+        subject->Measure({400.0, 300.0});
+        subject->Arrange({0.0, 0.0, 400.0, 300.0});
+    }
+    CHECK_EQUAL(with->desired_size().width, without->desired_size().width);
+    CHECK_EQUAL(with->desired_size().height, without->desired_size().height);
+    CHECK_EQUAL(with->desired_size().width, 30.0);
+    Element* inner_with = with->Children().front();
+    Element* inner_without = without->Children().front();
+    CHECK_EQUAL(inner_with->layout_slot().x, inner_without->layout_slot().x);
+    CHECK_EQUAL(inner_with->layout_slot().y, inner_without->layout_slot().y);
+    CHECK_EQUAL(inner_with->layout_slot().x, 5.0);
+    CHECK_EQUAL(inner_with->render_size().width, inner_without->render_size().width);
+
+    // And it is a value the property store keeps, not a field the parser drops:
+    // markup that never named it leaves no local value behind.
+    CHECK(!without->HasLocalValue(Border::CornerRadiusProperty()));
+    CHECK(with->HasLocalValue(Border::CornerRadiusProperty()));
+}
+
 }  // namespace
 
 int main() {
@@ -326,6 +413,7 @@ int main() {
     AnAncestorChangingInvalidatesTheSubtree();
     MarkupSetsOnlyWhatItWrote();
     MarkupRefusesAPropertyTheTypeDoesNotHave();
+    CornerRadiusLoadsOnTheChromeCarriersAndMovesNothing();
 
     if (failures) {
         std::cerr << failures << " check(s) failed\n";

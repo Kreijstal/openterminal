@@ -101,8 +101,8 @@ inline HRESULT BoxPropertyValue(const openxaml::PropertyValue& value, IInspectab
         WindowsDeleteString(wide);
         return boxed;
     }
-    // A Thickness. See the note above: refused by name rather than boxed into
-    // something a projection cannot read back.
+    // A Thickness or a CornerRadius. See the note above: refused by name rather
+    // than boxed into something a projection cannot read back.
     return E_NOTIMPL;
 }
 

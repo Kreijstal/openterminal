@@ -216,6 +216,17 @@ std::vector<Glyph> Shape(const std::string& text, const std::string& family,
             }
             const auto fallback = font.system_fallbacks.find(code);
             if (fallback == font.system_fallbacks.end()) {
+                // The one case in the corpus that reaches here is
+                // L4-icon-rule-mdl2-latin-14, and the gap it names is in the
+                // *artifact*, not here: the reader above is complete, and the
+                // case measures the moment `segoe-mdl2-assets.json` carries a
+                // `system_fallbacks` entry for U+004D. The oracle records
+                // 10 x 14 for it but records neither the selected face nor its
+                // scale, so there is no way to produce that 10 from anything
+                // loaded -- only to write it down, which would be the recorded
+                // answer copied into the implementation. See
+                // phase3/scripts/harvest_system_font_fallbacks.py and the note
+                // in phase3/layout/README.md.
                 throw TextError("no family in \"" + family + "\" has an advance for " +
                                 Describe(code) + "; DirectWrite system fallback was not "
                                 "harvested for that codepoint");

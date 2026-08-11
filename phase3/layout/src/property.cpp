@@ -389,6 +389,12 @@ const Thickness& DependencyObject::GetThickness(const DependencyProperty& proper
     throw PropertyError("the property '" + property.name() + "' does not hold a Thickness");
 }
 
+const CornerRadius& DependencyObject::GetCornerRadius(const DependencyProperty& property) const {
+    const PropertyValue& value = GetValue(property);
+    if (const CornerRadius* radius = std::get_if<CornerRadius>(&value)) return *radius;
+    throw PropertyError("the property '" + property.name() + "' does not hold a CornerRadius");
+}
+
 const std::string& DependencyObject::GetString(const DependencyProperty& property) const {
     const PropertyValue& value = GetValue(property);
     if (const std::string* text = std::get_if<std::string>(&value)) return *text;
