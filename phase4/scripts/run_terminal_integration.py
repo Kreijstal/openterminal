@@ -170,29 +170,70 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def find_mingw_runtime() -> Path:
+def wine_search_path(directories: list[Path]) -> str:
+    """Join runtime directories the way WINEPATH expects: semicolons."""
+    return ";".join(wine_path(directory) for directory in directories)
+
+
+def find_mingw_runtime() -> list[Path]:
+    """Locate the directories that together provide the MinGW runtime DLLs.
+
+    Debian's posix-threads cross compiler splits the runtime: on ubuntu-24.04
+    with g++-mingw-w64-x86-64-posix, libstdc++-6.dll and libgcc_s_seh-1.dll
+    live in the GCC library directory (/usr/lib/gcc/<triple>/<version>-posix)
+    while libwinpthread-1.dll ships with the mingw-w64 sysroot
+    (/usr/<triple>/lib). Each DLL is therefore resolved on its own -- the
+    compiler's -print-file-name answer first, then the directories the
+    compiler's own location implies -- and the result is the ordered,
+    deduplicated list of directories covering all of them. A single directory
+    holding everything is still returned alone. A DLL found nowhere refuses
+    the whole search and is named.
+    """
     compiler = Path(require_tool("x86_64-w64-mingw32-g++")).resolve()
-    triple = subprocess.run(
-        [str(compiler), "-dumpmachine"], capture_output=True, text=True,
-        check=True).stdout.strip()
-    printed = subprocess.run(
-        [str(compiler), "-print-file-name=libstdc++-6.dll"], capture_output=True,
-        text=True, check=True).stdout.strip()
-    candidates = []
-    printed_path = Path(printed)
-    if printed_path.is_absolute() and printed_path.is_file():
-        candidates.append(printed_path.parent)
-    candidates.extend((
-        compiler.parent,
-        compiler.parent.parent / triple / "bin",
-        Path("/usr") / triple / "bin",
-    ))
+
+    def ask(argument: str) -> str:
+        return subprocess.run(
+            [str(compiler), argument], capture_output=True, text=True,
+            check=True).stdout.strip()
+
+    triple = ask("-dumpmachine")
     required = ("libstdc++-6.dll", "libgcc_s_seh-1.dll", "libwinpthread-1.dll")
-    for runtime in candidates:
-        if all((runtime / name).is_file() for name in required):
-            return runtime.resolve()
-    raise SystemExit("could not locate one MinGW runtime directory containing "
-                     + ", ".join(required))
+    printed: dict[str, Path] = {}
+    for name in required:
+        answer = Path(ask(f"-print-file-name={name}"))
+        if answer.is_absolute() and answer.is_file():
+            printed[name] = answer.parent.resolve()
+
+    # Every candidate derives from the compiler's own location; a hardcoded
+    # /usr would silently pick up an unrelated system toolchain.
+    prefix = compiler.parent.parent
+    shared = [compiler.parent, prefix / triple / "bin", prefix / triple / "lib"]
+    shared.extend(sorted(path for path in (prefix / "lib" / "gcc" / triple).glob("*")
+                         if path.is_dir()))
+    candidates = list(dict.fromkeys(
+        list(printed.values())
+        + [path.resolve() for path in shared if path.is_dir()]))
+
+    for candidate in candidates:
+        if all((candidate / name).is_file() for name in required):
+            return [candidate]
+
+    directories: list[Path] = []
+    missing: list[str] = []
+    for name in required:
+        homes = [printed[name]] if name in printed else []
+        homes.extend(path for path in candidates if path not in homes)
+        for home in homes:
+            if (home / name).is_file():
+                if home not in directories:
+                    directories.append(home)
+                break
+        else:
+            missing.append(name)
+    if missing:
+        raise SystemExit("could not locate MinGW runtime DLLs in any candidate "
+                         "directory: " + ", ".join(missing))
+    return directories
 
 
 def evaluate(returncode: int, log: str, timeout_seconds: int) -> dict:
@@ -261,7 +302,7 @@ def integrate(dll: Path, executable: Path, xbf_root: Path, prefix: Path,
     environment["WINEARCH"] = "win64"
     environment["WINEDEBUG"] = "err+all,warn+combase,warn+debugstr,fixme+combase"
     environment["WINEDLLOVERRIDES"] = "winedbg.exe=d"
-    environment["WINEPATH"] = wine_path(runtime)
+    environment["WINEPATH"] = wine_search_path(runtime)
     environment["OPENXAML_XBF_ROOT"] = wine_path(xbf_root)
     environment["OPENXAML_TRACE_FRAMES"] = "1"
     font_alias_manifest = prepare_runtime_fonts(

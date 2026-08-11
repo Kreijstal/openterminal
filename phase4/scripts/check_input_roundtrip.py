@@ -406,7 +406,7 @@ def launch(dll: Path, executable: Path, xbf_root: Path, prefix: Path,
     environment["WINEARCH"] = "win64"
     environment["WINEDEBUG"] = "err+all,warn+debugstr,fixme+combase"
     environment["WINEDLLOVERRIDES"] = "winedbg.exe=d"
-    environment["WINEPATH"] = integration.wine_path(runtime)
+    environment["WINEPATH"] = integration.wine_search_path(runtime)
     environment["OPENXAML_XBF_ROOT"] = integration.wine_path(xbf_root)
     environment["OPENXAML_TRACE_FRAMES"] = "1"
     environment["OPENXAML_TRACE_INPUT"] = "1"

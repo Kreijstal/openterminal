@@ -416,7 +416,7 @@ def launch(dll: Path, executable: Path, xbf_root: Path, prefix: Path,
     # hides half of the evidence this gate compares.
     environment["WINEDEBUG"] = "err+all,warn+debugstr,warn+seh,fixme+combase"
     environment["WINEDLLOVERRIDES"] = "winedbg.exe=d"
-    environment["WINEPATH"] = integration.wine_path(runtime)
+    environment["WINEPATH"] = integration.wine_search_path(runtime)
     environment["OPENXAML_XBF_ROOT"] = integration.wine_path(xbf_root)
     environment["OPENXAML_TRACE_FRAMES"] = "1"
     environment["OPENXAML_TRACE_SCENE"] = "1"
