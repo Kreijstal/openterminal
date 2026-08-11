@@ -159,6 +159,11 @@ struct MarkupNode {
     ShapeLineCap stroke_dash_cap = ShapeLineCap::Flat;
     bool has_stroke_dash_array = false;
     ShapeStretch shape_stretch = ShapeStretch::None;
+    // Rectangle.RadiusX / RadiusY. Zero is a square corner; anything else is a
+    // rounded rectangle, which the render pass has to be able to see before it
+    // decides whether it can paint one.
+    double radius_x = 0.0;
+    double radius_y = 0.0;
 
     // StackPanel.
     Orientation orientation = Orientation::Vertical;

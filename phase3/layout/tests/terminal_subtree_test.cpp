@@ -16,6 +16,7 @@
 #include "basic_controls.h"
 #include "fonts.h"
 #include "markup.h"
+#include "shape.h"
 #include "text.h"
 
 using namespace openxaml;
@@ -120,6 +121,36 @@ void ARenderTransformDoesNotReachLayout() {
     CHECK(refusal.find("<Border>") != std::string::npos);
 }
 
+// Rectangle.RadiusX and Rectangle.RadiusY are read, not merely accepted.
+//
+// Both are registered properties, so markup that sets them already parses --
+// but the value went into the property store and no accessor ever brought it
+// back out, which left the render pass unable to tell a rounded Rectangle from
+// a square-cornered one. L7-terminal-4302b18781 sets 10 on a 40 x 20 Rectangle
+// and L7-terminal-65dec6afa8 sets 7 on a 12 x 12 one; both are rounded, and a
+// renderer that cannot see the radius would paint them as sharp rectangles.
+void ARectangleCarriesItsCornerRadii() {
+    std::unique_ptr<Element> rounded = LoadMarkup(
+        std::string("<Rectangle") + kXamlNamespaces +
+        " Width=\"40\" Height=\"20\" RadiusX=\"10\" RadiusY=\"10\"/>");
+    const auto* shape = dynamic_cast<const Rectangle*>(rounded.get());
+    CHECK(shape != nullptr);
+    CHECK(shape->radius_x() == 10.0);
+    CHECK(shape->radius_y() == 10.0);
+
+    // Independently carried: a radius on one axis only is not two.
+    std::unique_ptr<Element> one_axis = LoadMarkup(
+        std::string("<Rectangle") + kXamlNamespaces + " Width=\"12\" RadiusY=\"7\"/>");
+    CHECK(dynamic_cast<const Rectangle*>(one_axis.get())->radius_x() == 0.0);
+    CHECK(dynamic_cast<const Rectangle*>(one_axis.get())->radius_y() == 7.0);
+
+    // Nothing written, nothing rounded. The default is a square corner.
+    std::unique_ptr<Element> square = LoadMarkup(
+        std::string("<Rectangle") + kXamlNamespaces + " Width=\"12\" Height=\"12\"/>");
+    CHECK(dynamic_cast<const Rectangle*>(square.get())->radius_x() == 0.0);
+    CHECK(dynamic_cast<const Rectangle*>(square.get())->radius_y() == 0.0);
+}
+
 // A font whose line box is exactly its em, so that a line height in this test
 // reads as the font size that produced it and nothing has to be un-rounded.
 FontMetrics EmTallFace() {
@@ -222,6 +253,7 @@ int main() {
     ATemplatedControlIsALeafInTheRecordedTree();
     AContentControlsElementContentIsRecorded();
     ARenderTransformDoesNotReachLayout();
+    ARectangleCarriesItsCornerRadii();
     AToolTipCarriesTheRecordedDefaultStyle();
     AStringContentIsNeitherANodeNorASize();
     std::cout << "terminal subtree rules ok\n";
