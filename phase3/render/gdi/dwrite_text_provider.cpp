@@ -140,12 +140,18 @@ struct ResolvedFont {
 class DirectWriteProvider;
 std::mutex g_provider_mutex;
 std::shared_ptr<DirectWriteProvider> g_provider;
+// Files handed to this process by name rather than by manifest. Read once, when
+// the provider builds its private collection; see AddPrivateDirectWriteFontFile.
+std::vector<std::wstring> g_added_font_paths;
 
 class DirectWriteProvider final : public RuntimeTextProvider,
                                   public std::enable_shared_from_this<DirectWriteProvider> {
 public:
     bool Initialize(std::string& diagnostic) {
         if (!LoadPrivateFontAliases(diagnostic)) return false;
+        private_font_paths_.insert(private_font_paths_.end(),
+                                   g_added_font_paths.begin(),
+                                   g_added_font_paths.end());
         HRESULT hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
                                           __uuidof(IDWriteFactory),
                                           reinterpret_cast<IUnknown**>(factory_.put()));
@@ -345,8 +351,11 @@ private:
             diagnostic = "the OpenXaml font-alias manifest could not be read completely";
             return false;
         }
-        if (private_font_paths_.empty() || font_aliases_.empty()) {
-            diagnostic = "the OpenXaml font-alias manifest must name a font and an alias";
+        // An alias is optional: a manifest may exist only to hand this process
+        // a face under the name written in it. A manifest naming no font at all
+        // is still a mistake, because then it declares nothing.
+        if (private_font_paths_.empty()) {
+            diagnostic = "the OpenXaml font-alias manifest must name at least one font";
             return false;
         }
         return true;
@@ -405,6 +414,13 @@ private:
                 IDWriteFontCollection* collection;
             };
             std::vector<Lookup> lookups{{&candidate, collection_.get()}};
+            // A face this process was handed answers to the family name written
+            // in the file. Reaching it only through an alias would make a font
+            // loaded under its own name unresolvable, which is what the ink
+            // samples hit: a real Cascadia Mono file was loaded and
+            // "Cascadia Mono" still did not resolve.
+            if (private_collection_)
+                lookups.push_back({&candidate, private_collection_.get()});
             const auto alias = font_aliases_.find(candidate);
             if (private_collection_ && alias != font_aliases_.end())
                 lookups.push_back({&alias->second, private_collection_.get()});
@@ -713,14 +729,107 @@ bool DirectWriteProvider::Draw(Surface& surface, const TextOp& run, Color ink,
     bounds.right = std::min(bounds.right, surface.width());
     bounds.bottom = std::min(bounds.bottom, surface.height());
     if (bounds.right <= bounds.left || bounds.bottom <= bounds.top) return true;
+    if (run.advances.empty() && !run.text.empty()) {
+        diagnostic = "the retained text run has no shaped advances";
+        return false;
+    }
+    std::wstring text;
+    if (!Widen(run.text, text, diagnostic)) return false;
+    ResolvedFont glyph_font;
+    if (!Resolve(run.font_family, run.bold, glyph_font, diagnostic, &text)) return false;
+
+    // One line, placed by us.
+    //
+    // This is the case the corpus is mostly made of and the one the delegated
+    // path below cannot serve. The layout core snaps an inline run's advances
+    // to 1/300 of a DIP (layout/src/text.cpp:105, rule 7) and DirectWrite's own
+    // shaping does not, so Cascadia Mono at size 14 is 8.203333 retained
+    // against 8.203125 shaped: a run drawn where DirectWrite would put it is
+    // drawn 1/4800 of a DIP per glyph away from where this project measured it,
+    // and demanding the two agree -- which is what this used to do -- refuses
+    // every snapped run in the corpus forever.
+    //
+    // So the glyph indices and the outlines are DirectWrite's, and every
+    // position is the layout's: one advance per codepoint, straight out of the
+    // display list, exactly as the pre-DirectWrite backend fed ExtTextOutW a
+    // distance array (see phase3/render/README.md). Nothing here re-measures.
+    bool valid_text = false;
+    const std::vector<UINT32> codepoints = DecodeUtf16(text, &valid_text);
+    if (!valid_text) {
+        diagnostic = "the UTF-16 text contains an unpaired surrogate";
+        return false;
+    }
+    bool breaks_line = false;
+    for (UINT32 code : codepoints)
+        breaks_line |= code == 0x0a || code == 0x0d || code == 0x2028 || code == 0x2029;
+    double retained_width = 0.0;
+    for (double advance : run.advances)
+        retained_width = static_cast<double>(
+            static_cast<float>(retained_width + advance));
+    // A run the layout broke into lines is not placeable from this list: the
+    // display list carries advances, not where the breaks went. Those runs go
+    // to the delegated path below, which can only accept them when DirectWrite
+    // reproduces every retained advance exactly.
+    const bool one_line = !breaks_line &&
+        (!run.wrap || retained_width <= run.bounds.width + 0.0001);
+
+    if (one_line && !codepoints.empty()) {
+        if (run.advances.size() != codepoints.size()) {
+            diagnostic = "the retained run has one advance per codepoint everywhere "
+                         "else and does not here; its glyph positions are unknown";
+            return false;
+        }
+        std::vector<UINT16> indices(codepoints.size());
+        const HRESULT glyph_hr = glyph_font.face->GetGlyphIndices(
+            codepoints.data(), static_cast<UINT32>(codepoints.size()), indices.data());
+        if (FAILED(glyph_hr)) {
+            diagnostic = HrMessage("GetGlyphIndices", glyph_hr);
+            return false;
+        }
+        std::vector<FLOAT> advances;
+        advances.reserve(run.advances.size());
+        for (double advance : run.advances) advances.push_back(static_cast<FLOAT>(advance));
+
+        DWRITE_GLYPH_RUN glyph_run{};
+        glyph_run.fontFace = glyph_font.face.get();
+        glyph_run.fontEmSize = static_cast<FLOAT>(run.font_size);
+        glyph_run.glyphCount = static_cast<UINT32>(indices.size());
+        glyph_run.glyphIndices = indices.data();
+        glyph_run.glyphAdvances = advances.data();
+
+        Surface candidate = surface;
+        GlyphRenderer renderer(*factory_.get(), candidate, ink, bounds);
+        const HRESULT draw_hr = renderer.DrawGlyphRun(
+            nullptr, static_cast<FLOAT>(run.bounds.x),
+            static_cast<FLOAT>(run.bounds.y + run.baseline),
+            DWRITE_MEASURING_MODE_NATURAL, &glyph_run, nullptr, nullptr);
+        if (renderer.touched_nonopaque()) {
+            diagnostic = "the DirectWrite ClearType run touches non-opaque pixels; "
+                         "grayscale fallback would change its documented coverage";
+            return false;
+        }
+        if (FAILED(draw_hr)) {
+            diagnostic = HrMessage("IDWriteGlyphRunAnalysis", draw_hr);
+            return false;
+        }
+        surface = std::move(candidate);
+        return true;
+    }
+
+    // Several lines. DirectWrite breaks them, so it also places them, and the
+    // only thing that keeps that honest is checking it agrees with every number
+    // the layout retained.
+    ResolvedFont line_font;
+    if (!Resolve(run.font_family, run.bold, line_font, diagnostic)) return false;
+    std::wstring locale;
+    if (!Widen(run.language, locale, diagnostic) || locale.empty()) {
+        if (diagnostic.empty()) diagnostic = "DirectWrite text requires an explicit language";
+        return false;
+    }
     RuntimeTextResult validation;
     if (!Layout(RuntimeTextRequest{run.font_family, run.text, run.font_size,
                                    run.bounds.width, run.wrap, run.bold, run.language},
                 validation, diagnostic)) {
-        return false;
-    }
-    if (run.advances.empty() && !run.text.empty()) {
-        diagnostic = "the retained text run has no shaped advances";
         return false;
     }
     if (validation.advances.size() != run.advances.size()) {
@@ -729,25 +838,30 @@ bool DirectWriteProvider::Draw(Surface& surface, const TextOp& run, Color ink,
     }
     for (std::size_t i = 0; i < run.advances.size(); ++i) {
         if (std::fabs(validation.advances[i] - run.advances[i]) > 0.0001) {
-            diagnostic = "the DirectWrite glyph positions differ from the retained advances";
+            // Which cluster and by how much. A bare "they differ" says nothing
+            // about whether the face is the wrong one, the size is, or a
+            // rounding rule moved by a thousandth, and those need different
+            // answers.
+            char message[224]{};
+            std::snprintf(message, sizeof(message),
+                          "the DirectWrite glyph positions differ from the retained "
+                          "advances: cluster %u is %.6f and the layout retained %.6f",
+                          static_cast<unsigned>(i), validation.advances[i],
+                          run.advances[i]);
+            diagnostic = message;
             return false;
         }
     }
     if (std::fabs(validation.baseline - run.baseline) > 0.0001) {
-        diagnostic = "the DirectWrite baseline differs from the retained line baseline";
+        char message[192]{};
+        std::snprintf(message, sizeof(message),
+                      "the DirectWrite baseline differs from the retained line baseline: "
+                      "%.6f against %.6f",
+                      validation.baseline, run.baseline);
+        diagnostic = message;
         return false;
     }
-    std::wstring text;
-    if (!Widen(run.text, text, diagnostic)) return false;
-    ResolvedFont line_font;
-    if (!Resolve(run.font_family, run.bold, line_font, diagnostic)) return false;
-    ResolvedFont glyph_font;
-    if (!Resolve(run.font_family, run.bold, glyph_font, diagnostic, &text)) return false;
-    std::wstring locale;
-    if (!Widen(run.language, locale, diagnostic) || locale.empty()) {
-        if (diagnostic.empty()) diagnostic = "DirectWrite text requires an explicit language";
-        return false;
-    }
+
     ComPtr<IDWriteTextFormat> format;
     HRESULT hr = factory_->CreateTextFormat(
         glyph_font.family_name.c_str(), glyph_font.collection,
@@ -807,29 +921,60 @@ bool DirectWriteProvider::Draw(Surface& surface, const TextOp& run, Color ink,
 
 }  // namespace
 
-bool InstallDirectWriteRuntimeTextProvider(std::string& diagnostic) {
+bool AddPrivateDirectWriteFontFile(const std::string& path, std::string& diagnostic) {
+    std::wstring wide;
+    if (!Widen(path, wide, diagnostic)) return false;
+    if (wide.empty()) {
+        diagnostic = "a private DirectWrite font file needs a path";
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_provider_mutex);
+    if (g_provider) {
+        diagnostic = "the DirectWrite provider is already installed; a private font "
+                     "file offered now would never reach its collection";
+        return false;
+    }
+    g_added_font_paths.push_back(std::move(wide));
+    return true;
+}
+
+namespace {
+
+// The provider itself, without handing layout over to it. Drawing needs a
+// DirectWrite factory; it does not need TextBlock to start measuring through
+// one, and those are two different decisions that used to be one.
+std::shared_ptr<DirectWriteProvider> EnsureProvider(std::string& diagnostic) {
     std::lock_guard<std::mutex> lock(g_provider_mutex);
     if (!g_provider) {
         auto provider = std::make_shared<DirectWriteProvider>();
-        if (!provider->Initialize(diagnostic)) return false;
+        if (!provider->Initialize(diagnostic)) return nullptr;
         g_provider = std::move(provider);
     }
-    SetRuntimeTextProvider(g_provider);
+    return g_provider;
+}
+
+}  // namespace
+
+bool InstallDirectWriteRuntimeTextProvider(std::string& diagnostic) {
+    const std::shared_ptr<DirectWriteProvider> provider = EnsureProvider(diagnostic);
+    if (!provider) return false;
+    SetRuntimeTextProvider(provider);
     return true;
 }
 
 bool DrawDirectWriteTextRun(Surface& surface, const TextOp& run, Color ink,
                             std::string& diagnostic) {
-    std::shared_ptr<DirectWriteProvider> provider;
-    {
-        std::lock_guard<std::mutex> lock(g_provider_mutex);
-        provider = g_provider;
-    }
-    if (!provider) {
-        if (!InstallDirectWriteRuntimeTextProvider(diagnostic)) return false;
-        std::lock_guard<std::mutex> lock(g_provider_mutex);
-        provider = g_provider;
-    }
+    // Deliberately EnsureProvider and not Install. Rasterizing one run must not
+    // make DirectWrite the authority on what every *later* element measures --
+    // which is what the lazy install did: the corpus harness lays out from the
+    // harvested metrics, the first case with a text run painted, and from that
+    // case onward every remaining case in the directory measured against
+    // whatever faces the machine happened to have. Same corpus, different
+    // numbers, decided by filename order and nothing saying so. A host that
+    // does want the platform to be the authority says so by name: see
+    // phase3/xamlcore/src/factory.cpp, which installs it explicitly.
+    const std::shared_ptr<DirectWriteProvider> provider = EnsureProvider(diagnostic);
+    if (!provider) return false;
     return provider->Draw(surface, run, ink, diagnostic);
 }
 
