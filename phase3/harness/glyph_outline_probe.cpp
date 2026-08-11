@@ -29,12 +29,15 @@
 // read, and lists no outline table -- does not authorise it.
 //
 // This file is the machinery, written so the decision can be made on the facts
-// rather than on a guess about what would be involved. It is wired to nothing
-// by default: no workflow step runs it for a font whose licence has not been
-// checked, and phase3/xaml-db/glyph-outlines/README.md records which families
-// are cleared. Cascadia Mono is cleared -- SIL OFL, and Terminal ships the file
-// -- and is what the pipeline is proven on. Segoe UI is not cleared and is not
-// harvested here until somebody with the authority to say so says so.
+// rather than on a guess about what would be involved. No workflow step runs
+// it for a font whose clearance has not been recorded, and
+// phase3/xaml-db/glyph-outlines/README.md records which families are cleared.
+// Cascadia Mono is cleared -- SIL OFL, and Terminal ships the file -- and is
+// what the pipeline was proven on. Segoe UI is cleared by the repository
+// owner's recorded decision (2026-08-11): a proprietary typeface, harvested
+// into short-lived CI artifacts only, never into the repository. The decision
+// gate in harvest_glyph_outlines.py still refuses every family without such a
+// record.
 //
 // WHAT COMES OUT
 // --------------
@@ -336,7 +339,23 @@ int Run(int argc, char** argv) {
                                                 DWRITE_FONT_STRETCH_NORMAL,
                                                 DWRITE_FONT_STYLE_NORMAL, font.Put()),
               "GetFirstMatchingFont");
+        // The file path above asks for DWRITE_FONT_SIMULATIONS_NONE outright;
+        // a collection lookup can hand back a face DirectWrite synthesises by
+        // slanting or emboldening a sibling. A simulated face's outlines are
+        // the simulation's, not the font's, so recording them would record
+        // shapes the font file does not contain. Refuse, by name.
+        if (font->GetSimulations() != DWRITE_FONT_SIMULATIONS_NONE)
+            throw std::runtime_error(
+                "the system collection resolved \"" + family_utf8 + "\" "
+                "(normal weight, stretch and style) to a simulated face; a "
+                "simulated face's outlines are not the font's, so nothing is "
+                "recorded");
         Check(font->CreateFontFace(face.Put()), "CreateFontFace");
+        if (face->GetSimulations() != DWRITE_FONT_SIMULATIONS_NONE)
+            throw std::runtime_error(
+                "CreateFontFace returned a simulated face for \"" + family_utf8 +
+                "\" although the font reported none; refusing to record a "
+                "simulation's shapes");
     }
 
     DWRITE_FONT_METRICS metrics{};
