@@ -184,6 +184,13 @@ struct Walker {
         node.type = element.TypeName();
         node.slot = slot;
         node.actual = actual;
+        node.origin = origin;
+        node.margin = element.margin();
+        node.horizontal_alignment = element.horizontal_alignment();
+        node.vertical_alignment = element.vertical_alignment();
+        node.layout_rounding = element.use_layout_rounding();
+        node.dpi_scale_x = element.dpi_scale_x;
+        node.dpi_scale_y = element.dpi_scale_y;
         node.abs_x = absolute_origin.x;
         node.abs_y = absolute_origin.y;
         node.transform_to_root = transform_to_root;

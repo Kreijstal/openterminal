@@ -13,9 +13,20 @@ So this checks the claim rather than the picture, three ways:
 
   1. **The geometry is the measurement path's.** The sidecar's per-node slot and
      render size are diffed against the tree `render_cases` writes in the shape
-     `measure_cases` writes it, node for node. And the absolute origin the render
-     pass accumulated is re-accumulated here from the slots, so a wrong sum is
-     caught rather than trusted.
+     `measure_cases` writes it, node for node. Then each node's *parent-local
+     visual origin* is re-derived here -- from the measured slot, the render
+     size and the declared margin and alignments -- rather than believed, and
+     the absolute origin the render pass accumulated is re-accumulated from the
+     re-derived chain, so a wrong sum is caught rather than trusted.
+
+     The local origin is not the slot origin. `FrameworkElement::ArrangeCore`
+     positions the arranged ink inside the margin-reduced slot according to the
+     alignments, so a 120-wide `Border` in a 400-wide `Stretch` slot sits at
+     x=140 with its slot origin still 0. A checker that accumulated slot origins
+     would be asking the render pass for a number the layout core stopped
+     producing; this one implements `AlignmentOffset` and `RoundLayoutValue`
+     from phase3/layout/src/layout.h against the sidecar's declared inputs
+     instead, which is an independent route to the same answer.
   2. **The pixels are re-derived independently.** Every expected rectangle is
      re-snapped here, in Python, from the geometry table -- not from the render
      pass's own rect list -- painted into a framebuffer with the same
@@ -46,6 +57,12 @@ See `TouchedRect` in phase3/render/src/surface.h.
 
 A dump written without a glyph backend (the native, Wine-free run) has no ink to
 check. That is reported by name as unchecked rather than counted as a pass.
+
+Sidecars carry a `schema_version`, and this refuses one older than
+`REQUIRED_SIDECAR_SCHEMA` by name instead of checking what it can. A dump set
+written before the visual-origin column existed cannot have its origins
+re-derived at all, and reporting the half that still works as a pass is how a
+stale dump root stayed green across two waves.
 """
 
 from __future__ import annotations
@@ -56,6 +73,17 @@ import math
 import sys
 from pathlib import Path
 from typing import Any, Iterable
+
+
+# The sidecar shape this checker knows how to read. Bumped when a column it
+# depends on is added, so that a dump root written by an older render pass is
+# refused by name instead of half-checked. Kept beside the writer in
+# phase3/render/src/case_runner.cpp.
+REQUIRED_SIDECAR_SCHEMA = 2
+
+# Not a case sidecar; see phase3/scripts/render_provenance.py. Spelled out here
+# rather than imported so this checker keeps running from a bare phase4.
+PROVENANCE_NAME = "provenance.json"
 
 
 class DumpError(Exception):
@@ -100,6 +128,44 @@ def parse_color(text: str) -> bytes:
     return bytes((int(text[3:5], 16), int(text[5:7], 16), int(text[7:9], 16)))
 
 
+def parse_argb(text: str) -> tuple[int, bytes]:
+    """#aarrggbb kept whole: (alpha, rgb). A brush's alpha is not decoration.
+
+    Terminal's own markup fills with translucent theme brushes -- a 6%-black
+    divider, for one -- so a checker that dropped the alpha byte would demand
+    solid black where the runtime blended, and be wrong by exactly the amount
+    the brush asked for.
+    """
+    return (int(text[1:3], 16), parse_color(text))
+
+
+def multiply_byte(value: int, scale: int) -> int:
+    """MultiplyByte, ported from phase3/render/src/surface.h."""
+    return (value * scale + 127) // 255
+
+
+def source_over_opaque(alpha: int, source: bytes, destination: bytes) -> bytes:
+    """Premultiplied source-over onto an opaque destination.
+
+    `Surface::BlendRect` composites `SourceOver(Pack(colour), destination)`, and
+    every dump starts from the opaque backdrop and never stops being opaque --
+    the alpha channel of an opaque destination comes back 255 for any source --
+    so a premultiplied destination with alpha 255 is its own straight colour and
+    the three channels below are the whole of it. Integer arithmetic throughout,
+    the same rounding, so this is equality and not a tolerance. See
+    phase3/render/src/surface.cpp.
+    """
+    if alpha == 0:
+        return destination
+    if alpha == 0xFF:
+        return source
+    inverse = 0xFF - alpha
+    return bytes(
+        min(multiply_byte(source[i], alpha) + multiply_byte(destination[i], inverse), 255)
+        for i in range(3)
+    )
+
+
 def round_half_up(value: float) -> int:
     """The layout core's own tie-break -- floor(v + 0.5); see layout.h."""
     return int(math.floor(value + 0.5))
@@ -109,20 +175,102 @@ def snap(x: float, y: float, w: float, h: float) -> tuple[int, int, int, int]:
     return (round_half_up(x), round_half_up(y), round_half_up(x + w), round_half_up(y + h))
 
 
+def are_close(a: float, b: float) -> bool:
+    """DoubleUtil::AreClose, ported from phase3/layout/src/layout.h."""
+    if a == b:
+        return True
+    epsilon = (abs(a) + abs(b) + 10.0) * 2.2204460492503131e-16
+    return -epsilon < a - b < epsilon
+
+
+def round_layout_value(value: float, dpi_scale: float) -> float:
+    """RoundLayoutValue, ported from phase3/layout/src/layout.h."""
+    if not are_close(dpi_scale, 1.0):
+        scaled = math.floor(value * dpi_scale + 0.5) / dpi_scale
+        if math.isnan(scaled) or math.isinf(scaled):
+            return value
+        return scaled
+    return math.floor(value + 0.5)
+
+
+def alignment_offset(alignment: str, client: float, ink: float) -> float:
+    """AlignmentOffset, ported from phase3/layout/src/layout.h.
+
+    One function for both axes: the two differ only in the names of the near
+    and far ends, and this is the arithmetic they share.
+    """
+    if alignment == "Stretch" and ink > client:
+        return 0.0  # degenerates to Left/Top rather than hiding both edges
+    if alignment in ("Center", "Stretch"):
+        return (client - ink) / 2.0
+    if alignment in ("Right", "Bottom"):
+        return client - ink
+    if alignment in ("Left", "Top"):
+        return 0.0
+    raise DumpError(f"unknown alignment {alignment!r} in the sidecar")
+
+
+def derived_local_origin(node: dict[str, Any]) -> tuple[float, float] | None:
+    """Re-derives one node's parent-local visual origin from the layout inputs.
+
+    This is `FrameworkElement::ArrangeCore`'s placement step, and nothing here
+    reads the origin the render pass wrote. Returns None for a node the rule
+    does not cover -- an element with no layout storage never went through
+    Arrange at all, and its visual comes from the Canvas exception in
+    `GeometryOf` (phase3/render/src/display_list.cpp) instead. Those are counted
+    and named in the report rather than quietly folded into the passes.
+    """
+    if not node.get("layout_storage", False):
+        return None
+    slot = node["slot"]
+    if not node.get("visible", True):
+        # A collapsed element records its slot and stops; no margin, no
+        # alignment. Element::Arrange returns there.
+        return (slot[0], slot[1])
+    actual = node["actual"]
+    margin = node["margin"]
+    dpi_x, dpi_y = node["dpi_scale"]
+    rounding = node["layout_rounding"]
+
+    margin_width = margin[0] + margin[2]
+    margin_height = margin[1] + margin[3]
+    if rounding:
+        margin_width = round_layout_value(margin_width, dpi_x)
+        margin_height = round_layout_value(margin_height, dpi_y)
+    client_width = max(0.0, slot[2] - margin_width)
+    client_height = max(0.0, slot[3] - margin_height)
+    if rounding:
+        client_width = round_layout_value(client_width, dpi_x)
+        client_height = round_layout_value(client_height, dpi_y)
+
+    x = slot[0] + margin[0] + alignment_offset(node["h_align"], client_width, actual[0])
+    y = slot[1] + margin[1] + alignment_offset(node["v_align"], client_height, actual[1])
+    if rounding:
+        x = round_layout_value(x, dpi_x)
+        y = round_layout_value(y, dpi_y)
+    return (x, y)
+
+
 def absolute_origins(geometry: list[dict[str, Any]]) -> dict[str, tuple[float, float]]:
-    """Re-accumulates every node's absolute origin from the recorded columns.
+    """Re-accumulates every node's absolute origin from the parent-local ones.
 
     The sidecar reports an absolute origin of its own; this ignores it and adds
-    the chain up again from `slot`, which is the column the corpus records as
-    `offset`. The two are compared afterwards, so a render pass that accumulated
-    wrongly is caught rather than believed.
+    the chain up again, so a render pass that accumulated wrongly is caught
+    rather than believed. The step added at each node is the local origin the
+    caller re-derived, not the one the sidecar carries -- see
+    `derived_local_origin` -- except where the rule does not cover the node, and
+    there the sidecar's own column is used and the node is reported as
+    not re-derived.
     """
     origins: dict[str, tuple[float, float]] = {}
     for node in geometry:
         path = node["path"]
         parent = path.rsplit("/", 1)[0]
         px, py = origins.get(parent, (0.0, 0.0))
-        origins[path] = (px + node["slot"][0], py + node["slot"][1])
+        local = derived_local_origin(node)
+        if local is None:
+            local = tuple(node["origin"])  # type: ignore[assignment]
+        origins[path] = (px + local[0], py + local[1])
     return origins
 
 
@@ -210,21 +358,43 @@ def paint_expected(
     width: int,
     height: int,
     backdrop: bytes,
-    rects: list[tuple[tuple[int, int, int, int], bytes]],
+    rects: list[tuple[tuple[int, int, int, int], tuple[int, bytes]]],
 ) -> bytearray:
-    """Re-rasterises the expected rectangles, in paint order, in Python."""
+    """Re-rasterises the expected rectangles, in paint order, in Python.
+
+    Opaque rects are a span store, exactly as `Surface::FillRect` is; a
+    translucent one composites per pixel, exactly as `Surface::BlendRect` does.
+    """
     frame = bytearray(backdrop * (width * height))
-    for (left, top, right, bottom), colour in rects:
+    for (left, top, right, bottom), (alpha, colour) in rects:
         left = max(left, 0)
         top = max(top, 0)
         right = min(right, width)
         bottom = min(bottom, height)
-        if right <= left or bottom <= top:
+        if right <= left or bottom <= top or alpha == 0:
             continue
-        span = colour * (right - left)
+        if alpha == 0xFF:
+            span = colour * (right - left)
+            for y in range(top, bottom):
+                base = (y * width + left) * 3
+                frame[base : base + (right - left) * 3] = span
+            continue
+        # Every pixel under the rect can be a different destination colour, so
+        # the blend is per pixel -- but a row of one colour blends to a row of
+        # one colour, so the common case still writes a span.
         for y in range(top, bottom):
             base = (y * width + left) * 3
-            frame[base : base + (right - left) * 3] = span
+            row = bytes(frame[base : base + (right - left) * 3])
+            blended = bytearray()
+            index = 0
+            while index < len(row):
+                destination = row[index : index + 3]
+                run = 3
+                while index + run < len(row) and row[index + run : index + run + 3] == destination:
+                    run += 3
+                blended += source_over_opaque(alpha, colour, destination) * (run // 3)
+                index += run
+            frame[base : base + len(row)] = blended
     return frame
 
 
@@ -253,12 +423,19 @@ def first_difference(a: bytes, b: bytes, width: int) -> tuple[int, int] | None:
 
 def check_case(
     sidecar: dict[str, Any], dump: Path, tree: dict[str, Any] | None
-) -> tuple[list[str], bool]:
-    """Returns (problems, ink_was_checked). No problems means the round trip is exact."""
+) -> tuple[list[str], bool, int]:
+    """Returns (problems, ink_was_checked, origins_not_re_derived).
+
+    No problems means the round trip is exact.
+    """
     problems: list[str] = []
     width, height, pixels = read_ppm(dump)
     if [width, height] != sidecar["surface"]:
-        return ([f"the dump is {width}x{height}, the sidecar says {sidecar['surface']}"], False)
+        return (
+            [f"the dump is {width}x{height}, the sidecar says {sidecar['surface']}"],
+            False,
+            0,
+        )
 
     backdrop = parse_color(sidecar["backdrop"])
     ink = parse_color(sidecar["probe_ink"])
@@ -291,7 +468,21 @@ def check_case(
                 f"walk saw {len(recorded)}"
             )
 
-    # 2. Every absolute origin follows from the recorded chain.
+    # 2. Every local origin is the alignment rule applied to the measured slot,
+    #    and every absolute origin follows from that chain.
+    not_re_derived = 0
+    for node in sidecar["geometry"]:
+        local = derived_local_origin(node)
+        if local is None:
+            not_re_derived += 1
+            continue
+        if [round(v, 4) for v in node["origin"]] != [round(v, 4) for v in local]:
+            problems.append(
+                f"{node['path']}: visual origin {node['origin']} is not the "
+                f"{node['h_align']}/{node['v_align']} placement of a "
+                f"{node['actual']} ink in slot {node['slot']} with margin "
+                f"{node['margin']}, which is {list(local)}"
+            )
     origins = absolute_origins(sidecar["geometry"])
     by_path = {node["path"]: node for node in sidecar["geometry"]}
     for node in sidecar["geometry"]:
@@ -303,7 +494,7 @@ def check_case(
             )
 
     # 3. What the layout says to paint, re-derived here rather than copied.
-    expected: list[tuple[tuple[int, int, int, int], bytes]] = []
+    expected: list[tuple[tuple[int, int, int, int], tuple[int, bytes]]] = []
     for op in sidecar["rects"]:
         node = by_path.get(op["path"])
         if node is None:
@@ -325,12 +516,13 @@ def check_case(
             )
             if not inside:
                 problems.append(f"{op['path']} {op['what']}: not inside the arranged element")
-        expected.append((box, parse_color(op["color"])))
+        expected.append((box, parse_argb(op["color"])))
 
     text_boxes = [tuple(op["pixels"]) for op in sidecar["texts"]]
 
     # 4. Re-rasterise and compare, byte for byte, outside the text boxes.
     frame = paint_expected(width, height, backdrop, expected)
+    composited = bytes(frame)
     actual = bytearray(pixels)
     if text_boxes:
         blank(frame, width, text_boxes)
@@ -343,21 +535,24 @@ def check_case(
         )
 
     # 5. Extract the rectangles back out of the pixels.
+    #
+    # The colour a recovered rectangle has to match is the one the
+    # re-rasterisation put there, not the brush's own: a translucent brush
+    # leaves the composite of itself and whatever it covered, and demanding the
+    # brush colour would reject the very pixels step 4 just proved correct.
     for left, top, right, bottom, colour in extract_rects(width, height, pixels, backdrop):
         box = (left, top, right, bottom)
         if any(
             left >= b[0] and top >= b[1] and right <= b[2] and bottom <= b[3] for b in text_boxes
         ):
             continue  # inside a run's box: ink, checked below rather than here
-        if any(box == other and colour == other_colour for other, other_colour in expected):
+        at = (top * width + left) * 3
+        derived = composited[at : at + 3]
+        if any(box == other for other, _ in expected) and colour == derived:
             continue
-        if any(
-            colour == other_colour
-            and left >= other[0]
-            and top >= other[1]
-            and right <= other[2]
-            and bottom <= other[3]
-            for other, other_colour in expected
+        if colour == derived and any(
+            left >= other[0] and top >= other[1] and right <= other[2] and bottom <= other[3]
+            for other, _ in expected
         ):
             continue  # a piece of an expected rect that a later one painted over
         problems.append(
@@ -385,7 +580,7 @@ def check_case(
                     )
             # Step 4 already proved no ink escaped a box: every pixel outside
             # every box matched the solid re-rasterisation exactly.
-    return (problems, ink_checked)
+    return (problems, ink_checked, not_re_derived)
 
 
 def _has_ink(pixels: bytes, ink: bytes) -> bool:
@@ -411,7 +606,10 @@ def _box_has_ink(pixels: bytes, width: int, box: tuple[int, int, int, int], ink:
 
 
 def iter_cases(dumps: Path) -> Iterable[Path]:
-    return sorted(p for p in dumps.glob("*.json"))
+    # The provenance record lives in the dump directory so that it cannot
+    # outlive the dumps it describes; it is not a case sidecar. See
+    # phase3/scripts/render_provenance.py.
+    return sorted(p for p in dumps.glob("*.json") if p.name != PROVENANCE_NAME)
 
 
 def main() -> int:
@@ -436,11 +634,21 @@ def main() -> int:
     not_laid_out = 0
     ink_checked = 0
     with_text = 0
+    origins_not_re_derived = 0
     failures: list[dict[str, Any]] = []
     refusal_features: dict[str, int] = {}
 
     for sidecar_path in iter_cases(args.dumps):
         sidecar = json.loads(sidecar_path.read_text())
+        version = sidecar.get("schema_version")
+        if version != REQUIRED_SIDECAR_SCHEMA:
+            print(
+                f"::error::{sidecar_path.name} is sidecar schema {version!r}, not "
+                f"{REQUIRED_SIDECAR_SCHEMA}. These dumps were written by a different "
+                f"render pass than the one in this checkout; regenerate them with "
+                f"phase3/scripts/build_render.py."
+            )
+            return 2
         case_id = sidecar["case_id"]
         if "load_error" in sidecar:
             not_laid_out += 1
@@ -461,9 +669,10 @@ def main() -> int:
         tree_path = trees / f"{case_id}.json"
         tree = json.loads(tree_path.read_text()) if tree_path.exists() else None
         try:
-            problems, checked = check_case(sidecar, dump, tree)
+            problems, checked, unre_derived = check_case(sidecar, dump, tree)
         except DumpError as error:
-            problems, checked = ([str(error)], False)
+            problems, checked, unre_derived = ([str(error)], False, 0)
+        origins_not_re_derived += unre_derived
         if sidecar["texts"]:
             with_text += 1
             if checked:
@@ -482,6 +691,14 @@ def main() -> int:
     print(f"| not laid out (no tree to paint) | {not_laid_out} |")
     print(f"| total | {total} |")
     print()
+    if origins_not_re_derived:
+        print(
+            f"visual origins: {origins_not_re_derived} node(s) have no layout storage, so "
+            "their origin comes from the Canvas render exception rather than from "
+            "ArrangeCore and is not re-derived here; their absolute origins are still "
+            "re-accumulated"
+        )
+        print()
     if with_text:
         unchecked = with_text - ink_checked
         print(
@@ -506,7 +723,8 @@ def main() -> int:
             print(f"  {problem}")
 
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "origins_not_re_derived": origins_not_re_derived,
         "painted_exact": painted_exact,
         "refused": refused,
         "failed": len(failures),
