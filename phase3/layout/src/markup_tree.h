@@ -130,6 +130,10 @@ struct MarkupNode {
     // Border, and the WinUI 2 panels that grew the same properties.
     Thickness border_thickness;
     Thickness padding;
+    // Retained rather than realised into anything layout reads: a corner radius
+    // moves nothing. It is here so the parse round-trips and so the render pass
+    // can name what it cannot draw -- see layout.h.
+    CornerRadius corner_radius;
     // The short name of whatever brush the Background was set to, or empty.
     // Recorded rather than realised: it decides nothing about layout, and
     // keeping it makes the parse round-trippable for a consumer that draws.

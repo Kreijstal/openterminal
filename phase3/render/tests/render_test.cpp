@@ -612,6 +612,60 @@ void BorderAndPanelChromePropertiesLoadAndPaintGenerically() {
     }
 }
 
+// A drawn rounded corner is a named no-draw, and an undrawn one is not.
+//
+// This is the half of the CornerRadius rule that no dump can show. A refused
+// case paints nothing, so its pixels cannot distinguish "the pass refused,
+// correctly" from "the pass quietly painted the square version" -- and the
+// square version is exactly what this pass would otherwise emit, four
+// rectangles with mitred corners that look right everywhere except the four
+// places the property is about.
+//
+// The refusal is conditional on something actually being drawn with the radius,
+// because a radius on chrome with no brush changes no pixel. Reporting that as
+// a gap would put a case in the refused column for a property that made no
+// difference to it.
+void ARoundedCornerIsANamedNoDrawOnlyWhereItWouldBeDrawn() {
+    const std::string ns =
+        "xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" ";
+    const auto compile = [&](const std::string& attributes) {
+        std::unique_ptr<Element> root =
+            LoadMarkup("<Border " + ns + "Width=\"40\" Height=\"20\" " + attributes + "/>",
+                       StringTable{});
+        root->Measure({40.0, 20.0});
+        root->Arrange({0.0, 0.0, 40.0, 20.0});
+        return Build(*root, Size{40.0, 20.0});
+    };
+
+    // Drawn: a border brush over a non-zero radius.
+    DisplayList list = compile("BorderBrush=\"#FF5B6672\" BorderThickness=\"1\" "
+                               "CornerRadius=\"4\"");
+    CHECK(HasRefusal(list, "CornerRadius"));
+    // Drawn: a background over a non-zero radius, with no border at all.
+    list = compile("Background=\"#FF303841\" CornerRadius=\"4\"");
+    CHECK(HasRefusal(list, "CornerRadius"));
+
+    // Not drawn: the radius is zero, so the rectangles this pass paints are the
+    // rectangles the runtime paints.
+    list = compile("BorderBrush=\"#FF5B6672\" BorderThickness=\"1\" CornerRadius=\"0\"");
+    CHECK(list.refusals.empty());
+    // Not drawn: a radius on chrome that has no brush covers no pixel.
+    list = compile("BorderThickness=\"1\" CornerRadius=\"4\"");
+    CHECK(list.refusals.empty());
+    // Not drawn: a fully transparent brush is a no-draw the pass already knows
+    // about, and a radius does not turn it into one.
+    list = compile("Background=\"#00303841\" CornerRadius=\"4\"");
+    CHECK(list.refusals.empty());
+
+    // The same rule reaches the panels, which grew the property in WinUI 2.6.
+    std::unique_ptr<Element> panel = LoadMarkup(
+        "<Grid " + ns + "Width=\"40\" Height=\"20\" Background=\"#FF303841\" "
+        "CornerRadius=\"4\"/>", StringTable{});
+    panel->Measure({40.0, 20.0});
+    panel->Arrange({0.0, 0.0, 40.0, 20.0});
+    CHECK(HasRefusal(Build(*panel, Size{40.0, 20.0}), "CornerRadius"));
+}
+
 void ForegroundRetainsItsSolidColorBrushWithoutMeasuringText() {
     std::unique_ptr<Element> text = LoadMarkup(
         "<TextBlock xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
@@ -942,6 +996,7 @@ int main() {
     CanvasZIndexOrdersSiblingsAndSurvivesTheSidecar();
     EqualZIndexPreservesSourceOrder();
     BorderAndPanelChromePropertiesLoadAndPaintGenerically();
+    ARoundedCornerIsANamedNoDrawOnlyWhereItWouldBeDrawn();
     ForegroundRetainsItsSolidColorBrushWithoutMeasuringText();
     R8StopsAtTheNamedFontMetricsBoundary();
     ACollapsedElementPaintsNothingAndRefusesNothing();

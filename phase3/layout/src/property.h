@@ -80,7 +80,7 @@ public:
 // declared that way, and storing a plausible zero for it instead would be a
 // wrong value rather than an absent one. Every typed read refuses it by name.
 using PropertyValue =
-    std::variant<double, int, bool, Thickness, std::string, std::monostate>;
+    std::variant<double, int, bool, Thickness, CornerRadius, std::string, std::monostate>;
 
 // Whether two values are the same as far as anything reading the store is
 // concerned. NaN needs the special case rather than `==`: it is how XAML
@@ -334,6 +334,7 @@ public:
     int GetInt(const DependencyProperty& property) const;
     bool GetBool(const DependencyProperty& property) const;
     const Thickness& GetThickness(const DependencyProperty& property) const;
+    const CornerRadius& GetCornerRadius(const DependencyProperty& property) const;
     const std::string& GetString(const DependencyProperty& property) const;
 
     // The object inherited properties read through. Set when a child is

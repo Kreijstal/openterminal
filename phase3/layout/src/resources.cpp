@@ -157,6 +157,19 @@ ValueKind ExpectedValueKind(const std::string& property) {
     return found == kProperties.end() ? ValueKind::Unknown : found->second;
 }
 
+// The count in the message is load-bearing, and reading it wrongly has cost a
+// wave before. `scope` ends with *one entry per loaded application layer*, so
+// "walked 1 dictionary(ies)" on markup that declares none of its own says that
+// only one of the two layers described in resources.h is loaded -- and the two
+// hold different keys. `winui-2.8.4.json` alone is the XamlControlsResources
+// layer; the framework's own generic.xaml arrives as `default-styles.json`
+// beside it, and keys that only generic.xaml defines --
+// `ControlContentThemeFontSize`, `ContentControlThemeFontFamily` -- are then
+// missing however correct everything here is. That is a missing half of the
+// theme-resources artifact, not a lookup this cannot do: both keys resolve as
+// soon as the second file is in the directory. See
+// `phase3/scripts/extract_default_styles.py` and the workflow step that runs
+// it.
 const ResourceValue& LookUpResource(const ResourceScope& scope, const std::string& key,
                                     const std::string& where) {
     for (const ResourceDictionary* dictionary : scope) {
@@ -167,6 +180,15 @@ const ResourceValue& LookUpResource(const ResourceScope& scope, const std::strin
                       " dictionary(ies) from the element to the root of the markup");
 }
 
+// Both spellings of this refusal are answers the oracle has since confirmed,
+// and both leave their case in the render report's "not laid out" column with
+// nothing wrong: L5-resources-gridlength-from-double (an x:Double on
+// ColumnDefinition.Width, whose type is GridLength) and
+// L5-xprimitives-int32-width (an <x:Int32> object element on a Double-typed
+// Width) are each recorded as a runtime refusal, hresult 0x802b000a. A
+// resource is assigned, not re-parsed, and the widening XAML is usually said to
+// perform on the way in does not happen. Making either of them lay out would
+// contradict a recorded answer.
 std::string ValueForProperty(const ResourceValue& value, const std::string& property) {
     const ValueKind wanted = ExpectedValueKind(property);
     if (!Assignable(value.kind, wanted)) {

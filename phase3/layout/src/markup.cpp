@@ -95,6 +95,32 @@ Thickness ParseThickness(const std::string& text, const std::string& where) {
     }
 }
 
+// `CCornerRadius::CornerRadiusFromString`
+// (dxaml/xcp/components/primitiveDependencyObjects/CornerRadius.cpp,
+// microsoft-ui-xaml, MIT, 188f602b), which tries four numbers and falls back to
+// one used all around. Deliberately *not* ParseThickness: the two-number form a
+// Thickness accepts is not a CornerRadius, and accepting it here would load
+// markup the runtime rejects. The negative check is
+// `CCornerRadius::Validate`, which returns E_INVALIDARG for one.
+CornerRadius ParseCornerRadius(const std::string& text, const std::string& where) {
+    const std::vector<std::string> parts = Split(text, ',');
+    CornerRadius radius;
+    if (parts.size() == 4) {
+        radius = {ParseDouble(parts[0], where), ParseDouble(parts[1], where),
+                  ParseDouble(parts[2], where), ParseDouble(parts[3], where)};
+    } else if (parts.size() == 1) {
+        const double all = ParseDouble(parts[0], where);
+        radius = {all, all, all, all};
+    } else {
+        throw MarkupError("a CornerRadius takes 1 or 4 numbers, got \"" + text + "\"");
+    }
+    if (radius.top_left < 0.0 || radius.top_right < 0.0 || radius.bottom_right < 0.0 ||
+        radius.bottom_left < 0.0) {
+        throw MarkupError("a CornerRadius cannot be negative, got \"" + text + "\"");
+    }
+    return radius;
+}
+
 Point ParsePoint(const std::string& text, const std::string& where) {
     const std::vector<std::string> parts = Split(text, ',');
     if (parts.size() != 2)
@@ -445,6 +471,8 @@ void ApplyProperty(MarkupNode& node, const DependencyProperty& property,
     if (name == "BorderThickness")
         return assign(node.border_thickness = ParseThickness(value, name));
     if (name == "Padding") return assign(node.padding = ParseThickness(value, name));
+    if (name == "CornerRadius")
+        return assign(node.corner_radius = ParseCornerRadius(value, name));
     // The attribute shorthand for a brush is always a colour, and a colour is
     // always a SolidColorBrush. The property store still receives the type
     // name and not the colour -- that is what the corpus and the twin checks
@@ -1651,10 +1679,14 @@ MarkupNode ParseMarkup(const std::string& markup, const StringTable& strings) {
     // An element's own dictionary is *not* in scope for its own attributes.
     // Attributes are read when the tag opens, and <X.Resources> is a child, so
     // it has not been seen yet -- whereas a <X.Property> element written after
-    // <X.Resources> does see it. Whether the real runtime defers far enough to
-    // erase that distinction is one of the questions the L5 probe cases exist
-    // to put to it; until it answers, this is the WPF behaviour, where
-    // StaticResource is resolved at parse time against what has been parsed.
+    // <X.Resources> does see it. This is the WPF behaviour, where
+    // StaticResource is resolved at parse time against what has been parsed,
+    // and the oracle has now answered that WinUI does the same: both
+    // L5-resources-forward-reference-self and -child are recorded as
+    // "Cannot find a Resource with the Name/Key BoxWidth", naming the key their
+    // own markup declares below the use. So the two cases stay in the render
+    // report's "not laid out" column *because they are right*, not because
+    // anything here is missing -- a refusal is what the recorded answer is.
     // The chain ends at the application dictionary, which is where WinUI's own
     // theme resources live. It is loaded from the extracted database if there
     // is one and is absent otherwise, so a bare checkout behaves exactly as it

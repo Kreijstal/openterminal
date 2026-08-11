@@ -33,6 +33,7 @@ inline constexpr const char* kChromePropertyOwner = "ChromeProperties";
 const DependencyProperty& ChromeBorderThicknessProperty();
 const DependencyProperty& ChromePaddingProperty();
 const DependencyProperty& ChromeBorderBrushProperty();
+const DependencyProperty& ChromeCornerRadiusProperty();
 
 // Rounded the way the runtime rounds it: the border is drawn, so its edges
 // land on device pixels.
@@ -60,6 +61,12 @@ public:
     }
     const Thickness& padding() const { return GetThickness(ChromePaddingProperty()); }
     void set_padding(Thickness value) { SetValue(ChromePaddingProperty(), value); }
+    const CornerRadius& corner_radius() const {
+        return GetCornerRadius(ChromeCornerRadiusProperty());
+    }
+    void set_corner_radius(CornerRadius value) {
+        SetValue(ChromeCornerRadiusProperty(), value);
+    }
 
 protected:
     Size CombinedThickness() const {

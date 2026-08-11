@@ -29,9 +29,16 @@ public:
     void set_border_thickness(Thickness value) { SetValue(BorderThicknessProperty(), value); }
     const Thickness& padding() const { return GetThickness(PaddingProperty()); }
     void set_padding(Thickness value) { SetValue(PaddingProperty(), value); }
+    // Read by the render pass and by nothing in layout: a corner radius decides
+    // which pixels the chrome covers, never how much room the child gets.
+    const CornerRadius& corner_radius() const {
+        return GetCornerRadius(CornerRadiusProperty());
+    }
+    void set_corner_radius(CornerRadius value) { SetValue(CornerRadiusProperty(), value); }
 
     static const DependencyProperty& BorderThicknessProperty();
     static const DependencyProperty& PaddingProperty();
+    static const DependencyProperty& CornerRadiusProperty();
     static const DependencyProperty& BackgroundProperty();
     static const DependencyProperty& BorderBrushProperty();
 

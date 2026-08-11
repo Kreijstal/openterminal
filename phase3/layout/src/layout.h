@@ -64,6 +64,49 @@ inline bool operator==(const Thickness& a, const Thickness& b) {
 }
 inline bool operator!=(const Thickness& a, const Thickness& b) { return !(a == b); }
 
+// The four radii a rounded corner is drawn with, in the order the runtime's own
+// converter reads them.
+//
+// Not a Thickness, though both are four doubles. The fields are corners rather
+// than edges, so the two have no meaning in common, and one type for both would
+// let a Margin be assigned to a CornerRadius with nothing to catch it -- which
+// is exactly the check `ValueForProperty` exists to make on the resource path.
+//
+// The spelling rules are the runtime's, from
+// `CCornerRadius::CornerRadiusFromString`
+// (dxaml/xcp/components/primitiveDependencyObjects/CornerRadius.cpp,
+// microsoft-ui-xaml, MIT, 188f602b): four numbers in this field order, or one
+// number "used all around". There is no two-number form -- a Thickness has one
+// and a CornerRadius does not -- and `CCornerRadius::Validate` refuses a
+// negative radius outright.
+//
+// Nothing in layout reads it. `Border::MeasureOverride` and `ArrangeOverride`
+// deflate by the border thickness and the padding and by nothing else, which is
+// the runtime's arrangement too: a corner radius changes which pixels the
+// chrome covers, never how much room the child is given. It is carried so that
+// markup naming it loads, and so the render pass can say by name that it cannot
+// draw one.
+struct CornerRadius {
+    double top_left = 0.0;
+    double top_right = 0.0;
+    double bottom_right = 0.0;
+    double bottom_left = 0.0;
+
+    // A zero radius is the absence of one: a Border with it draws the same
+    // rectangles as a Border that never named the property.
+    bool IsZero() const {
+        return top_left == 0.0 && top_right == 0.0 && bottom_right == 0.0 && bottom_left == 0.0;
+    }
+};
+
+// Exact, for the reason Thickness's is exact: the property store asks whether
+// the stored value is the same value, not whether it is close to it.
+inline bool operator==(const CornerRadius& a, const CornerRadius& b) {
+    return a.top_left == b.top_left && a.top_right == b.top_right &&
+           a.bottom_right == b.bottom_right && a.bottom_left == b.bottom_left;
+}
+inline bool operator!=(const CornerRadius& a, const CornerRadius& b) { return !(a == b); }
+
 enum class HorizontalAlignment { Left, Center, Right, Stretch };
 enum class VerticalAlignment { Top, Center, Bottom, Stretch };
 enum class Orientation { Horizontal, Vertical };
