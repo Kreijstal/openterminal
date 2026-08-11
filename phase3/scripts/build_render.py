@@ -42,6 +42,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import render_provenance  # noqa: E402
+from prepare_runtime_fonts import (  # noqa: E402
+    DEFAULT_SPEC as RUNTIME_FONT_SPEC,
+    prepare as prepare_runtime_fonts,
+    windows_path,
+)
 
 PHASE3_DIR = Path(__file__).resolve().parent.parent
 REPO_DIR = PHASE3_DIR.parent
@@ -102,6 +107,13 @@ def main() -> int:
                              "one font whose metrics and glyphs can both be had here")
     parser.add_argument("--ink-family", type=str, default="Cascadia Mono",
                         help="the family name inside --ink-font")
+    parser.add_argument("--runtime-fonts", type=Path, default=None,
+                        help="where to place the pinned open-source compatibility font "
+                             "(default: <root>/runtime-fonts); it is what the DirectWrite "
+                             "provider test resolves its alias case through")
+    parser.add_argument("--no-runtime-fonts", action="store_true",
+                        help="do not fetch the compatibility font; the provider test then "
+                             "skips its private-alias case by name")
     parser.add_argument("--skip-run", action="store_true",
                         help="build only")
     args = parser.parse_args()
@@ -181,6 +193,37 @@ def main() -> int:
     if not (prefix / "system.reg").is_file():
         run(["wineboot", "-u"], env=environment)
 
+    # The pinned open-source compatibility font, for the provider test and for
+    # the provider test only.
+    #
+    # It is deliberately *not* in the corpus harness's environment. The manifest
+    # aliases Segoe Fluent Icons and Segoe MDL2 Assets onto the Uno Fluent Icons
+    # file, and that alias is sound on the numbers -- both harvested Segoe icon
+    # families are 2048 units per em, ascent 2048, descent 0, line gap 0, and
+    # advance 2048 for every one of the 44 codepoints Terminal's markup names,
+    # and the Uno file matches all of it -- but it would buy the corpus nothing
+    # and cost it clarity. Nothing: the fifteen icon cases are every one of them
+    # a FontIcon, and display_list.cpp emits no glyph op for a FontIcon at all
+    # (it contributes a refusal or nothing), so no icon ink is drawn in any
+    # backend, native included. Clarity: handing the harness a manifest it has
+    # no use for would put a substitute face in the environment of a gate that
+    # does not need one.
+    #
+    # Segoe UI has no such stand-in in any case. Nothing open is metrically
+    # identical to it, so its text refuses by name; see phase3/render/README.md.
+    provider_test_environment = dict(environment)
+    if not args.no_runtime_fonts:
+        runtime_fonts = args.runtime_fonts or (root / "runtime-fonts")
+        try:
+            manifest = prepare_runtime_fonts(RUNTIME_FONT_SPEC, runtime_fonts.resolve(),
+                                             "wine")
+        except Exception as failure:  # noqa: BLE001 - reported, not swallowed
+            print(f"::notice::the pinned runtime fonts are unavailable ({failure}); "
+                  "the provider's private-alias path goes unchecked in this run")
+        else:
+            provider_test_environment["OPENXAML_FONT_ALIAS_MANIFEST"] = windows_path(manifest)
+            print(f"::notice::runtime fonts: {manifest}")
+
     # Most of this test needs no display -- memory DCs and DIB sections do not
     # -- and that used to be true of all of it. It stopped being true in wave 6:
     # LayeredChildCompositesOverItsParent creates a real popup parent and a
@@ -193,7 +236,12 @@ def main() -> int:
     else:
         print("::notice::no DISPLAY; the island frame-cache test creates real windows "
               "for its layered-child case, so it is skipped by name rather than passed")
-    run(["wine", str(dwrite_test)], env=environment)
+    # The ink font is handed to the provider test too, so the private-font path
+    # the ink samples depend on is checked by a test that says which assertion
+    # failed, rather than only by a tool that paints or does not.
+    dwrite_arguments = ([windows_path(args.ink_font.resolve()), args.ink_family]
+                        if args.ink_font else [])
+    run(["wine", str(dwrite_test)] + dwrite_arguments, env=provider_test_environment)
     run(["wine", str(dcomp_test)], env=environment)
 
     # Say out loud what the corpus is about to be measured against. A fonts
@@ -245,8 +293,11 @@ def main() -> int:
         ink_dumps = root / "ink-dumps"
         if ink_dumps.exists():
             shutil.rmtree(ink_dumps)
-        completed = run(["wine", str(ink), str(args.ink_font.resolve()), args.ink_family,
-                         str(args.fonts.resolve()), str(ink_dumps)],
+        # A DOS path, not the native one: CreateFontFileReference is a Windows
+        # API and takes a Windows path, and a run that passed the unix path got
+        # as far as GDI accepting the file and DirectWrite never seeing it.
+        completed = run(["wine", str(ink), windows_path(args.ink_font.resolve()),
+                         args.ink_family, str(args.fonts.resolve()), str(ink_dumps)],
                         env=environment, check=False)
         if completed.returncode != 0:
             print("::error::the ink samples did not paint")

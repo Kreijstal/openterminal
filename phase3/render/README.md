@@ -88,9 +88,12 @@ Over the corpus, natively:
 | failed | 0 |
 | not laid out (the measurement path does not load them either) | 11 |
 
-Under Wine the GDI backend applies the same geometry gate. On a host without
-Segoe UI, the additional 112 cases that carry text refuse by name instead of
-substituting a different font.
+Under Wine the GDI backend applies the same geometry gate: 1058 painted, 119
+refused by name, 0 failed, 10 not laid out. Of the refusals, 113 are cases
+whose text is in Segoe UI, which is on no host this builds on and has no
+metrically identical stand-in, so they refuse rather than substitute a
+different font; the other 6 are the unarranged elements the native run refuses
+too.
 
 **How much of that is a real rectangle: six cases, twelve rectangles, 608560
 pixels.** The rest of the corpus paints nothing at all, and for those the gate
@@ -157,6 +160,80 @@ every position is ours. What remains un-pinned in this backend is what a glyph
 looks like. The native render harvest now records that output together with the
 exact Segoe UI file identity; consuming those captures in the comparison gate is
 the next step.
+
+### 2026-08-11: the same argument, against DirectWrite
+
+The two paragraphs above describe the GDI text path, which the retained scene
+renderer replaced with DirectWrite. The replacement kept the *conclusion* --
+positions are ours -- as an assertion instead of as a mechanism, and lost it:
+it laid the run out through `IDWriteTextLayout`, drew it wherever DirectWrite
+put it, and refused the run unless DirectWrite's advances equalled the retained
+ones to a ten-thousandth. They cannot be equal. Rule 7 snaps an inline run's
+advances to 1/300 of a DIP and DirectWrite does not snap at all, so Cascadia
+Mono at size 14 is 8.203333 retained against 8.203125 shaped, and the run is
+refused by 0.000208. Ninety-one of the corpus's text cases are inline content.
+
+Three things were wrong at once, and all three are fixed:
+
+  * **The ink tool loaded the font into the wrong subsystem.** `ink_check.cpp`
+    called `AddFontResourceExW(..., FR_PRIVATE)`, which is GDI's private list;
+    DirectWrite's system collection does not read it. Measured under Wine: after
+    a successful `AddFontResourceExW`, `FindFamilyName(L"Cascadia Mono")` on the
+    updated system collection returns `exists=0`, while the same file through
+    `IDWriteFontSetBuilder1` yields a collection whose one family is
+    `Cascadia Mono`. So a real font file was in the process's hand and the only
+    subsystem that draws could not see it. `AddPrivateDirectWriteFontFile` now
+    hands the file to the collection that matters.
+  * **A private face was only reachable through an alias.** The provider looked
+    the requested family up in the system collection, then -- only if the
+    manifest declared an alias for that exact name -- in the private one. A font
+    loaded under the name written in it was therefore unresolvable. It is now
+    looked for in the private collection under its own name as well.
+  * **Positions were DirectWrite's.** A single-line run is now drawn as an
+    explicit `DWRITE_GLYPH_RUN`: glyph indices from the resolved face, one
+    advance per codepoint straight out of the display list, origin at the
+    retained baseline. This is the distance array of the GDI era, in the API
+    that replaced it. A run the layout broke into several lines still goes
+    through `IDWriteTextLayout`, because the display list carries advances and
+    not where the breaks went, and that path still refuses unless DirectWrite
+    reproduces every retained advance -- which is the honest boundary of what
+    can be checked from this data.
+
+The ink samples hold, on eight samples now rather than six: the two added ones
+set the text through the `Text` property, so the snapped and the unsnapped
+advance rules are both drawn and both contained.
+
+A fourth thing was wrong and is fixed with them, because it decided which of
+the above could even be seen: rasterizing one run used to *install* the provider
+as the layout text provider, so the first case in the directory that carried a
+text run handed every later case's measurement to whatever faces the machine
+happened to have. Same corpus, different numbers, decided by filename order.
+Drawing now takes a provider without installing one; a host that wants the
+platform to be the authority still says so by name, as `xamlcore` does.
+
+What still refuses over the corpus is Segoe UI, and it is not a defect. It is
+not redistributable, no copy exists on a machine this builds on, and nothing
+open is metrically identical to it, so its 113 text cases refuse by name. They
+refuse where the refusal belongs now, too: they lay out against the harvested
+Segoe UI metrics like every other case and it is the *draw* that has nothing to
+draw with, rather than the measurement being handed to a platform that has
+never heard of the family.
+
+The fifteen icon cases stopped refusing, and that is worth saying plainly
+because it is not a win: they were refusing because the install-on-draw bug
+above had handed their measurement to DirectWrite, which has no Segoe icon
+family. Measured against the harvested icon metrics they lay out, and they
+paint -- without their glyph, exactly as the native run paints them, because
+`display_list.cpp` emits no glyph op for a `FontIcon` at all. Drawing one needs
+somewhere to put it, and where a glyph sits inside a stretched icon slot is not
+in any recording here: real XAML centres it in the icon's template and this
+corpus records only the slot. So that gap is a missing recording, not a missing
+font -- and the pinned open Uno Fluent Icons file, whose metrics match both
+harvested Segoe icon families exactly (2048 units per em, ascent 2048, descent
+0, line gap 0, advance 2048 across all 44 codepoints Terminal names), would not
+close it. `build_render.py` prepares that font for the provider test, which is
+the one thing here that does use it, and keeps it out of the corpus harness's
+environment.
 
 One subtlety in the checking. A run's box becomes pixels twice, by two different
 rules, and they are not interchangeable: a *fill* snaps each edge to the nearest

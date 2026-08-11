@@ -146,10 +146,22 @@ class WineRenderGate(unittest.TestCase):
             + completed.stdout + completed.stderr)
         self.assertTrue(report.is_file(), completed.stdout + completed.stderr)
         numbers = json.loads(report.read_text())
+        # A sample that refused to paint has no ink, so it has no text, so the
+        # equality below holds at zero and the whole check evaporates. That is
+        # not hypothetical: through wave 7 this test reported green over a
+        # single dumped sample that had refused with `DirectWrite could not
+        # resolve any requested family in "Cascadia Mono"`. Refusals are named
+        # here, before anything is counted.
+        self.assertEqual(
+            numbers["refused"], 0,
+            "these ink samples refused to paint rather than being checked:\n"
+            + json.dumps(numbers["refusal_features"], indent=1))
+        self.assertGreater(numbers["cases_with_text"], 0,
+                           "no ink sample carried a text run; the check is vacuous")
         # Every sample must have had its ink looked at. Whether the ink fits is
-        # the open question -- GDI rounds a font's metrics to whole pixels and
-        # the recorded runtime does not -- so this asserts the check *ran*, and
-        # the failure count is reported rather than demanded to be zero. See
+        # the open question -- an antialiased glyph is allowed to spread past
+        # the advance that placed it -- so this asserts the check *ran*, and the
+        # failure count is reported rather than demanded to be zero. See
         # phase3/render/README.md; closing it needs a rendered-output probe.
         self.assertEqual(numbers["ink_checked"], numbers["cases_with_text"],
                          "an ink sample was dumped without its ink being checked")
