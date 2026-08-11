@@ -114,8 +114,9 @@ def licence_refusal(family: str) -> str | None:
             f"generally copyrightable and the outline data generally is -- and "
             f"phase3/xaml-db/fonts/README.md authorises no outline table. "
             f"The decision is a licensing question and belongs to a human: add "
-            f"the family to CLEARED in this script, with the licence that "
-            f"permits it, in a reviewable commit. Cleared today: "
+            f"the family to CLEARED in this script, in a reviewable commit, "
+            f"with the licence that permits the recording or the recorded "
+            f"decision to make it -- never an invented licence. Cleared today: "
             f"{', '.join(sorted(CLEARED))}.")
 
 
