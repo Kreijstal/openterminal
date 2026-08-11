@@ -86,13 +86,27 @@ def download(run_id: str, repo: str | None, into: Path) -> Path:
         args += ["-R", repo]
     gh(*args)
 
-    # The artifact is named for the build and holds one directory per oracle;
-    # find it by the file that identifies the oracle rather than by guessing
-    # at the layout.
-    oracles = sorted(into.rglob("oracle.json"))
+    return measurements_directory(into)
+
+
+def measurements_directory(into: Path) -> Path:
+    """The oracle directory inside the measurements artifact.
+
+    The measurements artifact is named for the build and holds one directory
+    per oracle; find that directory by the file that identifies the oracle
+    rather than by guessing at the layout. Scoped to the one artifact, not the
+    whole download: other artifacts of the same run carry an oracle.json as
+    their own identity stamp -- the render boundaries do -- and a download-wide
+    search would refuse the first run that produced them.
+    """
+    artifact = artifact_directory(into, "xaml-measurements-")
+    if artifact is None:
+        raise SystemExit("the run has no xaml-measurements-* artifact")
+    oracles = sorted(artifact.rglob("oracle.json"))
     if len(oracles) != 1:
         raise SystemExit(
-            f"expected exactly one oracle.json in the artifact, found {len(oracles)}"
+            f"expected exactly one oracle.json in {artifact.name}, "
+            f"found {len(oracles)}"
         )
     return oracles[0].parent
 

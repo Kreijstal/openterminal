@@ -32,6 +32,7 @@ sys.path.insert(0, str(SCRIPT_DIRECTORY))
 from fetch_measurements import (  # noqa: E402
     fonts_directory,
     glyph_outlines_directory,
+    measurements_directory,
     report_theme_resources,
     theme_resources_directory,
     verify_fonts,
@@ -167,6 +168,44 @@ class OtherArtifactsOfTheSameRunTest(unittest.TestCase):
     def test_a_run_without_glyph_outlines_is_not_an_error(self) -> None:
         # Which is every run there has ever been.
         self.assertIsNone(glyph_outlines_directory(self.root))
+
+
+class MeasurementsDirectoryTest(unittest.TestCase):
+    """The oracle is found inside the measurements artifact, not anywhere.
+
+    The first run whose measure job survived to the end uploaded a render
+    boundaries artifact stamped with its own oracle.json, and a download-wide
+    search that expected exactly one identity file refused the whole run.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def stamp(self, *parts: str) -> Path:
+        path = self.root.joinpath(*parts)
+        path.mkdir(parents=True)
+        (path / "oracle.json").write_text("{}", encoding="utf-8")
+        return path
+
+    def test_a_second_identity_stamp_elsewhere_does_not_refuse_the_run(self) -> None:
+        wanted = self.stamp("xaml-measurements-10.0.26100.33158",
+                            "10.0.26100.33158")
+        self.stamp("xaml-render-boundaries-10.0.26100.33158")
+        self.assertEqual(measurements_directory(self.root), wanted)
+
+    def test_a_run_without_the_measurements_artifact_is_refused(self) -> None:
+        self.stamp("xaml-render-boundaries-10.0.26100.33158")
+        with self.assertRaises(SystemExit):
+            measurements_directory(self.root)
+
+    def test_two_oracles_inside_the_artifact_are_refused(self) -> None:
+        # Picking one would be a guess about which build the caller meant.
+        self.stamp("xaml-measurements-10.0.26100.33158", "10.0.26100.33158")
+        self.stamp("xaml-measurements-10.0.26100.33158", "10.0.27000.1")
+        with self.assertRaises(SystemExit):
+            measurements_directory(self.root)
 
 
 class ThemeResourceReportTest(unittest.TestCase):
