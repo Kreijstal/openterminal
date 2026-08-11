@@ -524,7 +524,8 @@ void ApplyProperty(MarkupNode& node, const DependencyProperty& property,
         node.border_brush = BrushValue::SolidColor(ParseColor(value, name));
         return assign(std::string("SolidColorBrush"));
     }
-    if (name == "RadiusX" || name == "RadiusY") return assign(ParseDouble(value, name));
+    if (name == "RadiusX") return assign(node.radius_x = ParseDouble(value, name));
+    if (name == "RadiusY") return assign(node.radius_y = ParseDouble(value, name));
     if (name == "Orientation") {
         node.orientation = ParseEnum(value, kOrientations, name);
         return assign(static_cast<int>(node.orientation));
@@ -1140,6 +1141,18 @@ VisualTransform ReadTransformPropertyElement(Scanner& scanner, const std::string
     }
 
     VisualTransform result = VisualTransform::Unsupported(runtime_type);
+    // A CompositeTransform with nothing authored on it is the identity: every
+    // one of its properties is a no-op at its default (ScaleX and ScaleY 1,
+    // CenterX, CenterY, SkewX, SkewY, Rotation, TranslateX and TranslateY 0),
+    // so the matrix is exactly the identity and RenderTransformOrigin has no
+    // pivot to take it about. Set one of them and it is a general composite --
+    // a skew is not axis-aligned, and a rotation about a general centre
+    // composed with a scale is not either -- so it keeps its name here rather
+    // than being lowered approximately.
+    if (transform.name == "CompositeTransform" && semantically_empty &&
+        transform.attributes.empty()) {
+        result = VisualTransform::Identity(runtime_type);
+    }
     if (transform.name == "RotateTransform" && semantically_empty) {
         const auto angle = transform.attributes.find("Angle");
         if (transform.attributes.empty()) {
@@ -1506,6 +1519,10 @@ std::unique_ptr<Element> BuildElement(const MarkupNode& node, ObservableObject* 
         shape->set_stroke_dash_cap(node.stroke_dash_cap);
         shape->set_has_stroke_dash_array(node.has_stroke_dash_array);
         shape->set_shape_stretch(node.shape_stretch);
+    }
+    if (auto* rectangle = dynamic_cast<Rectangle*>(element.get())) {
+        rectangle->set_radius_x(node.radius_x);
+        rectangle->set_radius_y(node.radius_y);
     }
     element->set_visual_transform(node.visual_transform);
     element->set_render_transform_origin(node.render_transform_origin);

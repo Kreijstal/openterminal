@@ -216,9 +216,11 @@ def derived_local_origin(node: dict[str, Any]) -> tuple[float, float] | None:
     This is `FrameworkElement::ArrangeCore`'s placement step, and nothing here
     reads the origin the render pass wrote. Returns None for a node the rule
     does not cover -- an element with no layout storage never went through
-    Arrange at all, and its visual comes from the Canvas exception in
-    `GeometryOf` (phase3/render/src/display_list.cpp) instead. Those are counted
-    and named in the report rather than quietly folded into the passes.
+    Arrange at all, and its visual comes from one of the two exceptions in
+    `GeometryOf` (phase3/render/src/display_list.cpp) instead: the Canvas one,
+    and the measured root with an explicit extent, whose size the runtime
+    answers out of the specified size rather than out of Arrange. Those are
+    counted and named in the report rather than quietly folded into the passes.
     """
     if not node.get("layout_storage", False):
         return None

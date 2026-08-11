@@ -16,6 +16,7 @@
 #include "basic_controls.h"
 #include "fonts.h"
 #include "markup.h"
+#include "shape.h"
 #include "text.h"
 
 using namespace openxaml;
@@ -120,6 +121,86 @@ void ARenderTransformDoesNotReachLayout() {
     CHECK(refusal.find("<Border>") != std::string::npos);
 }
 
+// An attribute-free <CompositeTransform/> is the identity, and the identity is
+// exactly invertible.
+//
+// L7-terminal-65dec6afa8 writes one. Every CompositeTransform property is a
+// no-op at its default -- ScaleX and ScaleY 1, CenterX, CenterY, SkewX, SkewY,
+// Rotation, TranslateX and TranslateY 0 -- so the matrix the runtime hands the
+// compositor is exactly the identity matrix, whatever RenderTransformOrigin
+// says, because the identity has no pivot to be taken about. That is the same
+// rule ReadTransformPropertyElement already applies to an attribute-free
+// <RotateTransform/>, which it reads as Rotate(0). Reading it as Unsupported
+// instead does not decline to approximate anything: there is nothing here to
+// approximate.
+//
+// A CompositeTransform that actually sets one of those properties is a
+// different question -- skew is not axis-aligned and rotation about a general
+// centre composed with a scale is not either -- and stays refused by name.
+void AnEmptyCompositeTransformIsTheIdentity() {
+    const auto transform_of = [](const std::string& inner) {
+        return LoadMarkup(std::string("<Rectangle") + kXamlNamespaces +
+                          " Width=\"12\" Height=\"12\" RenderTransformOrigin=\"0.5, 0.5\">"
+                          "<Rectangle.RenderTransform>" + inner +
+                          "</Rectangle.RenderTransform></Rectangle>");
+    };
+
+    std::unique_ptr<Element> empty = transform_of("<CompositeTransform/>");
+    CHECK(empty->visual_transform().kind == VisualTransformKind::Identity);
+    CHECK(empty->visual_transform().type == "Windows.UI.Xaml.Media.CompositeTransform");
+    // The identity is still a declared RenderTransform: the property is not
+    // null, and anything reading "is there a transform" must keep saying yes.
+    CHECK(empty->has_render_transform());
+
+    // The expanded empty-element spelling is the same transform.
+    std::unique_ptr<Element> expanded =
+        transform_of("<CompositeTransform></CompositeTransform>");
+    CHECK(expanded->visual_transform().kind == VisualTransformKind::Identity);
+
+    // One authored property and it is no longer the identity. Nothing here
+    // lowers a skew or a general composite, so it keeps its name.
+    for (const char* authored : {"<CompositeTransform ScaleX=\"2\"/>",
+                                 "<CompositeTransform Rotation=\"17\"/>",
+                                 "<CompositeTransform SkewX=\"3\"/>",
+                                 "<CompositeTransform TranslateX=\"4\"/>"}) {
+        std::unique_ptr<Element> authored_transform = transform_of(authored);
+        CHECK(authored_transform->visual_transform().kind ==
+              VisualTransformKind::Unsupported);
+        CHECK(authored_transform->visual_transform().type ==
+              "Windows.UI.Xaml.Media.CompositeTransform");
+    }
+}
+
+// Rectangle.RadiusX and Rectangle.RadiusY are read, not merely accepted.
+//
+// Both are registered properties, so markup that sets them already parses --
+// but the value went into the property store and no accessor ever brought it
+// back out, which left the render pass unable to tell a rounded Rectangle from
+// a square-cornered one. L7-terminal-4302b18781 sets 10 on a 40 x 20 Rectangle
+// and L7-terminal-65dec6afa8 sets 7 on a 12 x 12 one; both are rounded, and a
+// renderer that cannot see the radius would paint them as sharp rectangles.
+void ARectangleCarriesItsCornerRadii() {
+    std::unique_ptr<Element> rounded = LoadMarkup(
+        std::string("<Rectangle") + kXamlNamespaces +
+        " Width=\"40\" Height=\"20\" RadiusX=\"10\" RadiusY=\"10\"/>");
+    const auto* shape = dynamic_cast<const Rectangle*>(rounded.get());
+    CHECK(shape != nullptr);
+    CHECK(shape->radius_x() == 10.0);
+    CHECK(shape->radius_y() == 10.0);
+
+    // Independently carried: a radius on one axis only is not two.
+    std::unique_ptr<Element> one_axis = LoadMarkup(
+        std::string("<Rectangle") + kXamlNamespaces + " Width=\"12\" RadiusY=\"7\"/>");
+    CHECK(dynamic_cast<const Rectangle*>(one_axis.get())->radius_x() == 0.0);
+    CHECK(dynamic_cast<const Rectangle*>(one_axis.get())->radius_y() == 7.0);
+
+    // Nothing written, nothing rounded. The default is a square corner.
+    std::unique_ptr<Element> square = LoadMarkup(
+        std::string("<Rectangle") + kXamlNamespaces + " Width=\"12\" Height=\"12\"/>");
+    CHECK(dynamic_cast<const Rectangle*>(square.get())->radius_x() == 0.0);
+    CHECK(dynamic_cast<const Rectangle*>(square.get())->radius_y() == 0.0);
+}
+
 // A font whose line box is exactly its em, so that a line height in this test
 // reads as the font size that produced it and nothing has to be un-rounded.
 FontMetrics EmTallFace() {
@@ -222,6 +303,8 @@ int main() {
     ATemplatedControlIsALeafInTheRecordedTree();
     AContentControlsElementContentIsRecorded();
     ARenderTransformDoesNotReachLayout();
+    AnEmptyCompositeTransformIsTheIdentity();
+    ARectangleCarriesItsCornerRadii();
     AToolTipCarriesTheRecordedDefaultStyle();
     AStringContentIsNeitherANodeNorASize();
     std::cout << "terminal subtree rules ok\n";

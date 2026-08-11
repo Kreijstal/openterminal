@@ -98,9 +98,24 @@ public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Shapes.Rectangle"; }
     static const std::vector<std::string>& Owners();
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
+
+    // The corner radii, on the element rather than only in the property store.
+    // Neither reaches layout -- a Rectangle's size is its Width and Height
+    // whether the corners are rounded or not -- but the render pass reads them
+    // to tell a rounded rectangle from a square-cornered one, which is the
+    // difference between a shape it can paint exactly and one it names.
+    double radius_x() const { return radius_x_; }
+    void set_radius_x(double value) { radius_x_ = value; }
+    double radius_y() const { return radius_y_; }
+    void set_radius_y(double value) { radius_y_ = value; }
+
 protected:
     Size MeasureOverride(Size) override { return {}; }
     Size ArrangeOverride(Size final_size) override { return final_size; }
+
+private:
+    double radius_x_ = 0.0;
+    double radius_y_ = 0.0;
 };
 
 }  // namespace openxaml

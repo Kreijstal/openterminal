@@ -385,6 +385,111 @@ void AnUnarrangedElementIsANamedNoDraw() {
     CHECK(HasRefusal(list, "unarranged element"));
 }
 
+// "No layout storage" is not the same as "no rect".
+//
+// A Shape at the root of a tree is not a layout element, so nothing ever
+// measures or arranges it and it never gets layout storage -- but the runtime
+// still answers ActualWidth and ActualHeight out of the specified size once the
+// element has been measured, and the corpus records exactly that. The recorded
+// tree for L7-terminal-65dec6afa8 is one Rectangle with desired [0, 0], actual
+// [12, 12] and offset [0, 0]: the oracle gives this element a rect. Refusing it
+// as unarranged contradicts the measurement it is supposed to be checked
+// against.
+//
+// Element::render_size already reproduces that number (see
+// terminal_subtree_test.cpp). Only the render compiler disagreed.
+void AMeasuredRootWithAnExplicitExtentHasTheRecordedRect() {
+    std::unique_ptr<Element> root = LoadMarkup(
+        "<Rectangle xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
+        "Width=\"12\" Height=\"12\" Fill=\"#ff0000\"/>",
+        StringTable{});
+    root->Measure(Size{400.0, 300.0});
+    root->Arrange({0.0, 0.0, 400.0, 300.0});
+    CHECK(!root->has_layout_storage());
+    CHECK(root->render_size().width == 12.0);
+
+    const DisplayList list = Build(*root, Size{400.0, 300.0});
+    CHECK(!HasRefusal(list, "unarranged element"));
+    const RectOp* fill = FindRect(list, "fill");
+    CHECK(fill != nullptr);
+    if (fill) {
+        CHECK(fill->bounds.x == 0.0);
+        CHECK(fill->bounds.y == 0.0);
+        CHECK(fill->bounds.width == 12.0);
+        CHECK(fill->bounds.height == 12.0);
+    }
+
+    // Measured is load-bearing. An element that never had Measure called on it
+    // is still measure-dirty, still answers zero from ActualWidth, and still
+    // has no rect any recorded measurement gives it.
+    std::unique_ptr<Element> unmeasured = LoadMarkup(
+        "<Rectangle xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
+        "Width=\"12\" Height=\"12\" Fill=\"#ff0000\"/>",
+        StringTable{});
+    const DisplayList never = Build(*unmeasured, Size{400.0, 300.0});
+    CHECK(never.rects.empty());
+    CHECK(HasRefusal(never, "unarranged element"));
+
+    // And so is the explicit extent: an Auto Rectangle has no size to take
+    // from the markup, so it keeps the refusal the Canvas case above gets.
+    std::unique_ptr<Element> automatic = LoadMarkup(
+        "<Rectangle xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
+        "Fill=\"#ff0000\"/>",
+        StringTable{});
+    automatic->Measure(Size{400.0, 300.0});
+    automatic->Arrange({0.0, 0.0, 400.0, 300.0});
+    const DisplayList auto_list = Build(*automatic, Size{400.0, 300.0});
+    CHECK(auto_list.rects.empty());
+    CHECK(HasRefusal(auto_list, "unarranged element"));
+}
+
+// A rounded Rectangle is named, for the reason a rounded Border is.
+//
+// RadiusX and RadiusY round a Rectangle's corners with the same antialiased
+// arc a Border's CornerRadius draws, and phase4/scripts/check_render.py
+// recovers axis-aligned rectangles out of the pixels and nothing else. Painting
+// the fill as a sharp rectangle would put pixels in the four corners that the
+// runtime leaves empty, and the round trip would confirm the rectangle this
+// project drew rather than the shape the markup asked for.
+//
+// Both corpus cases that reach here are rounded: L7-terminal-4302b18781 is a
+// 40 x 20 Rectangle with RadiusX and RadiusY 10, and L7-terminal-65dec6afa8 a
+// 12 x 12 one with 7.
+void ARoundedRectangleIsANamedNoDraw() {
+    const auto rounded = [](const char* radii) {
+        std::unique_ptr<Element> root = LoadMarkup(
+            std::string("<Rectangle xmlns=\"http://schemas.microsoft.com/winfx/2006/"
+                        "xaml/presentation\" Width=\"40\" Height=\"20\" Fill=\"#ff0000\" ") +
+                radii + "/>",
+            StringTable{});
+        root->Measure(Size{400.0, 300.0});
+        root->Arrange({0.0, 0.0, 400.0, 300.0});
+        return Build(*root, Size{400.0, 300.0});
+    };
+
+    CHECK(HasRefusal(rounded("RadiusX=\"10\" RadiusY=\"10\""), "RadiusX"));
+    // One axis is enough to round the corners.
+    CHECK(HasRefusal(rounded("RadiusX=\"10\""), "RadiusX"));
+    // Named for the property that is actually set: a Rectangle with only a
+    // RadiusY is not refused for a RadiusX its markup never wrote.
+    CHECK(HasRefusal(rounded("RadiusY=\"10\""), "RadiusY"));
+    CHECK(!HasRefusal(rounded("RadiusY=\"10\""), "RadiusX"));
+    // Zero is a square corner and paints as one.
+    CHECK(!HasRefusal(rounded("RadiusX=\"0\" RadiusY=\"0\""), "RadiusX"));
+    CHECK(!HasRefusal(rounded(""), "RadiusX"));
+
+    // A radius that draws nothing is not a gap. Refusing a Rectangle whose
+    // Fill and Stroke both paint nothing would report a no-draw as a feature
+    // this project cannot do -- the same rule the CornerRadius refusal keeps.
+    std::unique_ptr<Element> unpainted = LoadMarkup(
+        "<Rectangle xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
+        "Width=\"40\" Height=\"20\" RadiusX=\"10\" RadiusY=\"10\"/>",
+        StringTable{});
+    unpainted->Measure(Size{400.0, 300.0});
+    unpainted->Arrange({0.0, 0.0, 400.0, 300.0});
+    CHECK(!HasRefusal(Build(*unpainted, Size{400.0, 300.0}), "RadiusX"));
+}
+
 void ShapeStrokeStateIsRetainedAsANamedRendererBoundary() {
     auto root = std::make_unique<Grid>();
     auto rectangle = std::make_unique<Rectangle>();
@@ -467,10 +572,45 @@ void CanvasGeometryCompilesRotateTransformAndRetainsUnsupportedTransforms() {
               1e-9);
     }
 
+    // An attribute-free <CompositeTransform/> is the identity matrix -- every
+    // one of its properties is a no-op at its default -- so there is nothing
+    // here to decline to lower. It compiles, it paints the untransformed
+    // rectangle, and the scene carries no unsupported transform for the
+    // backend to issue on. (Previously refused as "RenderTransform"; the
+    // refusal named a transform that does not move a pixel.)
     root = LoadMarkup(
         "<Canvas xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
         "Width=\"40\" Height=\"30\"><Rectangle Width=\"20\" Height=\"10\" "
-        "Fill=\"#ff0000\"><Rectangle.RenderTransform><CompositeTransform/>"
+        "Canvas.Left=\"6\" Canvas.Top=\"4\" "
+        "Fill=\"#ff0000\" RenderTransformOrigin=\"0.5,0.5\">"
+        "<Rectangle.RenderTransform><CompositeTransform/>"
+        "</Rectangle.RenderTransform></Rectangle></Canvas>",
+        StringTable{});
+    root->Measure({40.0, 30.0});
+    root->Arrange({0.0, 0.0, 40.0, 30.0});
+    const DisplayList identity = Build(*root, Size{40.0, 30.0});
+    CHECK(!HasRefusal(identity, "RenderTransform"));
+    const RectOp* placed = FindRect(identity, "fill");
+    CHECK(placed != nullptr);
+    if (placed) {
+        CHECK(placed->bounds.x == 6.0);
+        CHECK(placed->bounds.y == 4.0);
+        CHECK(placed->bounds.width == 20.0);
+        CHECK(placed->bounds.height == 10.0);
+    }
+    CHECK(identity.scene != nullptr);
+    if (identity.scene) {
+        for (const VisualNode& node : identity.scene->nodes())
+            CHECK(node.unsupported_transform.empty());
+    }
+
+    // A CompositeTransform that authors any of its properties is a general
+    // composite and keeps its name.
+    root = LoadMarkup(
+        "<Canvas xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
+        "Width=\"40\" Height=\"30\"><Rectangle Width=\"20\" Height=\"10\" "
+        "Fill=\"#ff0000\"><Rectangle.RenderTransform>"
+        "<CompositeTransform SkewX=\"12\"/>"
         "</Rectangle.RenderTransform></Rectangle></Canvas>",
         StringTable{});
     root->Measure({40.0, 30.0});
@@ -988,6 +1128,8 @@ int main() {
     OpacityCompositesACompleteNodeLayer();
     AlignedOriginsComposeThroughTheRetainedScene();
     AnUnarrangedElementIsANamedNoDraw();
+    AMeasuredRootWithAnExplicitExtentHasTheRecordedRect();
+    ARoundedRectangleIsANamedNoDraw();
     ShapeStrokeStateIsRetainedAsANamedRendererBoundary();
     CanvasRectanglesUseExplicitVisualGeometryWithoutPublicLayoutStorage();
     CanvasGeometryCompilesRotateTransformAndRetainsUnsupportedTransforms();

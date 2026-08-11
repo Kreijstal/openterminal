@@ -22,7 +22,14 @@ namespace openxaml {
 
 enum class VisualClipKind { None, Rectangle, Unsupported };
 
-enum class VisualTransformKind { None, Rotate, Scale, Unsupported };
+// How a declared RenderTransform lowers.
+//
+// `None` is the absence of the property; `Identity` is a transform object that
+// is present but contributes the identity matrix, which is not the same thing
+// -- RenderTransform reads back non-null for one and null for the other, and
+// the render pass has to keep saying so. `Unsupported` is a transform this
+// project declines to lower rather than one it lowers badly.
+enum class VisualTransformKind { None, Identity, Rotate, Scale, Unsupported };
 
 struct VisualTransform {
     VisualTransformKind kind = VisualTransformKind::None;
@@ -33,6 +40,15 @@ struct VisualTransform {
     double center_y = 0.0;
     std::string type;
 
+    // A transform object whose authored value is the identity matrix. The
+    // runtime type is kept because the property still reads back as that type;
+    // only the matrix it contributes is nothing.
+    static VisualTransform Identity(std::string runtime_type) {
+        VisualTransform result;
+        result.kind = VisualTransformKind::Identity;
+        result.type = std::move(runtime_type);
+        return result;
+    }
     static VisualTransform Rotate(double angle) {
         VisualTransform result;
         result.kind = VisualTransformKind::Rotate;
