@@ -36,7 +36,9 @@ and requires a clean, non-empty committed UI frame before a bounded timeout is
 success. It also fetches the pinned Apache-2.0 WinUI-compatible icon font from
 `phase3/xamlcore/runtime_fonts.json`, verifies its SHA-256 under `/tmp`, and
 passes a private family-alias manifest to DirectWrite. No font binary is
-written to the repository:
+written to the repository. The launcher opens `cmd.exe /k` explicitly because
+Wine does not ship the Windows PowerShell executable selected by Terminal's
+generated default profile. Repeat `--terminal-argument` to test another command:
 
 ```bash
 python3 -B phase4/scripts/run_terminal_integration.py \

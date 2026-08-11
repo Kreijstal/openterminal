@@ -11,6 +11,9 @@ SPEC.loader.exec_module(integration)
 
 
 class TerminalIntegrationResult(unittest.TestCase):
+    def test_cli_default_uses_a_shell_present_in_wine(self):
+        self.assertEqual(("cmd.exe", "/k"), integration.DEFAULT_TERMINAL_ARGUMENTS)
+
     def test_clean_bounded_timeout_is_success(self):
         log = (
             "OpenXaml frame event=commit reason=layout-invalidation "

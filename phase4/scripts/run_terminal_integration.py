@@ -46,6 +46,7 @@ ACCESS_VIOLATION = re.compile(
 NO_WINDOW_DRIVER = "nodrv_CreateWindow"
 FRAME_EVENT = re.compile(r"OpenXaml frame event=(commit|present) ([^\"\r\n]*)")
 SCENE_STATS = re.compile(r"OpenXaml frame event=scene-stats ([^\"\r\n]*)")
+DEFAULT_TERMINAL_ARGUMENTS = ("cmd.exe", "/k")
 
 
 def _integer_field(record: str, name: str) -> int | None:
@@ -250,7 +251,8 @@ def run(arguments: list[str], environment: dict[str, str], cwd: Path | None = No
 
 def integrate(dll: Path, executable: Path, xbf_root: Path, prefix: Path,
               timeout_seconds: int, log_path: Path, wine: str,
-              runtime_font_spec: Path, runtime_font_cache: Path) -> dict:
+              runtime_font_spec: Path, runtime_font_cache: Path,
+              terminal_arguments: list[str]) -> dict:
     require_tool("timeout")
     runtime = find_mingw_runtime()
 
@@ -292,7 +294,7 @@ def integrate(dll: Path, executable: Path, xbf_root: Path, prefix: Path,
                          f"to the requested DLL: {expected_dll}\n{query.stdout}{query.stderr}")
 
     command = ["timeout", "--signal=TERM", "--kill-after=5", str(timeout_seconds),
-               wine, "./" + executable.name]
+               wine, "./" + executable.name, *terminal_arguments]
     completed = run(command, environment, cwd=executable.parent, capture=True)
     log = completed.stderr + completed.stdout
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -311,6 +313,7 @@ def integrate(dll: Path, executable: Path, xbf_root: Path, prefix: Path,
         "runtime_font_spec_sha256": sha256(runtime_font_spec),
         "wine_loader": wine,
         "xbf_root": str(xbf_root),
+        "terminal_arguments": terminal_arguments,
     })
     return result
 
@@ -324,6 +327,10 @@ def main() -> int:
     parser.add_argument("--prefix", type=Path,
                         help="fresh prefix below /tmp (default: temporary prefix)")
     parser.add_argument("--timeout", type=int, default=30)
+    parser.add_argument(
+        "--terminal-argument", action="append", dest="terminal_arguments",
+        help=("argument passed to WindowsTerminal.exe; repeat for multiple "
+              "arguments (default: cmd.exe /k, a shell Wine provides)"))
     parser.add_argument("--wine-loader", type=Path,
                         help="exact Wine loader (default: wine from PATH)")
     parser.add_argument("--wineserver", type=Path,
@@ -380,9 +387,12 @@ def main() -> int:
     log_path = (arguments.log.resolve() if arguments.log
                 else prefix / "terminal-integration.log")
     try:
+        terminal_arguments = (arguments.terminal_arguments
+                              if arguments.terminal_arguments is not None
+                              else list(DEFAULT_TERMINAL_ARGUMENTS))
         result = integrate(dll, executable, xbf_root, prefix, arguments.timeout,
                            log_path, wine, runtime_font_spec,
-                           runtime_font_cache)
+                           runtime_font_cache, terminal_arguments)
         print(json.dumps(result, indent=2, sort_keys=True))
         if not result["success"]:
             print(f"integration log: {log_path}", file=sys.stderr)
