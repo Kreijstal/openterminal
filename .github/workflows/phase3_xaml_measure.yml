@@ -388,23 +388,25 @@ jobs:
              phase3\harness\dwrite_glyph_probe.cpp ^
              /link dwrite.lib ole32.lib || exit /b 1
 
-      # The ink, as outlines, for the one family whose outlines may be
-      # recorded. 113 render cases refuse with "DirectWrite could not resolve
-      # any requested family in \"Segoe UI\"": they lay out against harvested
+      # The ink, as outlines, for the families whose outlines may be recorded.
+      # 113 render cases refuse with "DirectWrite could not resolve any
+      # requested family in \"Segoe UI\"": they lay out against harvested
       # metrics and then reach the draw with nothing to draw, because a widths
       # table cannot be painted. Recording shapes the way widths are already
       # recorded is the only route to those pixels that does not install a font
       # we do not have or invent one.
       #
-      # Cascadia Mono, and only Cascadia Mono. Outlines are a different
-      # licensing claim from metrics -- the design is generally not
-      # copyrightable, the outline data generally is -- and
+      # Outlines are a different licensing claim from metrics -- the design is
+      # generally not copyrightable, the outline data generally is -- and
       # harvest_glyph_outlines.py refuses any family not in its committed
       # CLEARED list. Cascadia Mono is on it because it is SIL OFL and Terminal
-      # ships the file; Segoe UI is not, and putting it there is a human
-      # decision made in a reviewable commit, not something this workflow can
-      # do. What this step establishes is that the pipeline works end to end on
-      # a family where the question does not arise.
+      # ships the file, and it is what the pipeline was proven on. Segoe UI is
+      # on it by the repository owner's recorded decision (2026-08-11): a
+      # proprietary typeface, harvested on the recorded terms that the outlines
+      # live only in this run's artifact, read fresh each run from the font
+      # file Microsoft installs on the runner, and never enter the repository.
+      # Putting a family there is a human decision made in a reviewable commit,
+      # not something this workflow can do.
       - name: Build the glyph outline probe
         shell: cmd
         run: |
@@ -433,22 +435,46 @@ jobs:
             --output phase3/xaml-db/glyph-outlines/cascadia-mono.json
           test -s phase3/xaml-db/glyph-outlines/cascadia-mono.json
 
+      # No --font-file: Segoe UI exists here only as an installed face, so the
+      # probe resolves it through the system collection -- the normal weight,
+      # stretch and style, with a simulated face refused by name, because a
+      # simulation's outlines are not the font's. The identity still pins the
+      # same way the Cascadia harvest's does: the driver re-hashes the file the
+      # probe resolved and compares it against the SHA-256 the metrics harvest
+      # recorded off C:/Windows/Fonts/segoeui.ttf, which is the same hash this
+      # run already published as its oracle identity (font_segoeui). Every
+      # design advance is cross-checked against the metrics reading, so the
+      # shapes and the widths provably came off the same glyphs of the same
+      # file. The recording rides in this run's artifact and nowhere else.
+      - name: Harvest the glyph outlines of Segoe UI
+        shell: bash
+        run: |
+          python3 -B phase3/scripts/harvest_glyph_outlines.py \
+            --family "Segoe UI" \
+            --metrics phase3/xaml-db/fonts/segoe-ui.json \
+            --probe phase3/harness/glyph_outline_probe.exe \
+            --output phase3/xaml-db/glyph-outlines/segoe-ui.json
+          test -s phase3/xaml-db/glyph-outlines/segoe-ui.json
+
       # An uncleared family must be refused by the script and not by the
       # absence of a step asking for it. Asserting the refusal here means the
-      # licence gate is exercised on every run rather than trusted.
+      # licence gate is exercised on every run rather than trusted. Segoe MDL2
+      # Assets is the target because it is genuinely still uncleared -- also
+      # Microsoft's, also on the runner, and nobody has made the call for it --
+      # so the assertion stays a real refusal now that Segoe UI passes.
       - name: The licence gate refuses an uncleared family
         shell: bash
         run: |
           if python3 -B phase3/scripts/harvest_glyph_outlines.py \
-               --family "Segoe UI" \
-               --metrics phase3/xaml-db/fonts/segoe-ui.json \
+               --family "Segoe MDL2 Assets" \
+               --metrics phase3/xaml-db/fonts/segoe-mdl2-assets.json \
                --probe phase3/harness/glyph_outline_probe.exe \
-               --output "$RUNNER_TEMP/segoe-ui-outlines.json"; then
-            echo "::error::Segoe UI outlines were harvested; the licence gate did not hold"
+               --output "$RUNNER_TEMP/segoe-mdl2-assets-outlines.json"; then
+            echo "::error::Segoe MDL2 Assets outlines were harvested; the licence gate did not hold"
             exit 1
           fi
-          test ! -f "$RUNNER_TEMP/segoe-ui-outlines.json"
-          echo "the licence gate refused Segoe UI, as it must"
+          test ! -f "$RUNNER_TEMP/segoe-mdl2-assets-outlines.json"
+          echo "the licence gate refused Segoe MDL2 Assets, as it must"
 
       # RenderTargetBitmap is the stable XAML output boundary. Raw BGRA stays
       # in the workflow artifact (never the repository); reviewable JSON holds
