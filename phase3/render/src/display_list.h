@@ -108,16 +108,33 @@ struct Refusal {
 // `slot` and `actual` are the layout measurements. `abs` is the accumulated
 // retained render origin and is checked against the native transform-to-root
 // basis points rather than inferred from the slot.
+//
+// `origin` is the step between the two: the parent-local visual origin the
+// retained scene translates this node by. It is *not* the slot origin, because
+// FrameworkElement::ArrangeCore positions the arranged ink inside the
+// margin-reduced slot according to the alignments -- a 120-wide Border in a
+// 400-wide Stretch slot sits at x=140 while its slot origin stays 0. The
+// alignment inputs travel beside it (`margin`, `horizontal_alignment`,
+// `vertical_alignment`, `layout_rounding`, `dpi_scale_*`) so that a checker can
+// re-derive `origin` from the declared markup and the measured slot instead of
+// believing the number the render pass wrote.
 struct NodeGeometry {
     std::string path;
     std::string type;
     Rect slot;        // in the parent's coordinates
     Size actual;      // the render size
+    Point origin;     // the parent-local visual origin the scene translates by
     double abs_x = 0.0;
     double abs_y = 0.0;
     Matrix3x2 transform_to_root = Matrix3x2::Identity();
     double opacity = 1.0;
     Clip clip = Clip::None();
+    Thickness margin;
+    HorizontalAlignment horizontal_alignment = HorizontalAlignment::Stretch;
+    VerticalAlignment vertical_alignment = VerticalAlignment::Stretch;
+    bool layout_rounding = false;
+    double dpi_scale_x = 1.0;
+    double dpi_scale_y = 1.0;
     std::int32_t z_index = 0;
     bool has_layout_storage = false;
     bool visible = true;

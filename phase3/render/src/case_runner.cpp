@@ -76,6 +76,36 @@ std::string RectJson(const Rect& rect) {
     return out.str();
 }
 
+std::string ThicknessJson(const Thickness& t) {
+    std::ostringstream out;
+    out << "[" << Number(t.left) << ", " << Number(t.top) << ", " << Number(t.right) << ", "
+        << Number(t.bottom) << "]";
+    return out.str();
+}
+
+// Spelled out rather than emitted as an integer, because the checker that reads
+// this re-derives the alignment offset from it and an off-by-one in an enum
+// would silently become a different rule there.
+const char* AlignmentName(HorizontalAlignment value) {
+    switch (value) {
+        case HorizontalAlignment::Left: return "Left";
+        case HorizontalAlignment::Center: return "Center";
+        case HorizontalAlignment::Right: return "Right";
+        case HorizontalAlignment::Stretch: return "Stretch";
+    }
+    return "Stretch";
+}
+
+const char* AlignmentName(VerticalAlignment value) {
+    switch (value) {
+        case VerticalAlignment::Top: return "Top";
+        case VerticalAlignment::Center: return "Center";
+        case VerticalAlignment::Bottom: return "Bottom";
+        case VerticalAlignment::Stretch: return "Stretch";
+    }
+    return "Stretch";
+}
+
 std::string PixelRectJson(const PixelRect& box) {
     std::ostringstream out;
     out << "[" << box.left << ", " << box.top << ", " << box.right << ", " << box.bottom << "]";
@@ -177,6 +207,9 @@ CaseResult LayOutCase(const std::string& case_json) {
     std::vector<std::string> tree;
     WalkTree(*root, "/" + root->TypeName(), tree);
     std::ostringstream out;
+    // The measured tree, not a sidecar: its shape is measure_cases's and has
+    // not changed, so it keeps its own version rather than following
+    // kSidecarSchemaVersion.
     out << "{\n \"schema_version\": 1,\n \"case_id\": \"" << JsonEscape(result.id) << "\",\n";
     out << " \"tree\": [\n";
     for (size_t i = 0; i < tree.size(); ++i) out << tree[i] << (i + 1 < tree.size() ? ",\n" : "\n");
@@ -223,7 +256,7 @@ std::string SidecarJson(const CaseResult& result, const Surface& surface,
                         const std::string& backend_name, Color clear) {
     std::ostringstream out;
     out << "{\n";
-    out << " \"schema_version\": 1,\n";
+    out << " \"schema_version\": " << kSidecarSchemaVersion << ",\n";
     out << " \"case_id\": \"" << JsonEscape(result.id) << "\",\n";
     out << " \"backend\": \"" << JsonEscape(backend_name) << "\",\n";
     out << " \"surface\": [" << surface.width() << ", " << surface.height() << "],\n";
@@ -236,9 +269,16 @@ std::string SidecarJson(const CaseResult& result, const Surface& surface,
         out << "  {\"path\": \"" << JsonEscape(node.path) << "\", \"type\": \""
             << JsonEscape(node.type) << "\", \"slot\": " << RectJson(node.slot)
             << ", \"actual\": [" << Number(node.actual.width) << ", "
-            << Number(node.actual.height) << "], \"abs\": [" << Number(node.abs_x) << ", "
+            << Number(node.actual.height) << "], \"origin\": [" << Number(node.origin.x)
+            << ", " << Number(node.origin.y) << "], \"abs\": [" << Number(node.abs_x) << ", "
             << Number(node.abs_y) << "], \"layout_storage\": "
             << (node.has_layout_storage ? "true" : "false")
+            << ", \"margin\": " << ThicknessJson(node.margin)
+            << ", \"h_align\": \"" << AlignmentName(node.horizontal_alignment)
+            << "\", \"v_align\": \"" << AlignmentName(node.vertical_alignment)
+            << "\", \"layout_rounding\": " << (node.layout_rounding ? "true" : "false")
+            << ", \"dpi_scale\": [" << Number(node.dpi_scale_x) << ", "
+            << Number(node.dpi_scale_y) << "]"
             << ", \"opacity\": " << Number(node.opacity)
             << ", \"transform_to_root\": {\"origin\": [" << Number(node.abs_x) << ", "
             << Number(node.abs_y) << "], \"unit_x\": ["

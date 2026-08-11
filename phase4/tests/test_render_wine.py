@@ -8,9 +8,19 @@ test_boot_frontier.py beside it, and it *skips by name* rather than passing
 vacuously when the dumps are not there.
 
     python3 phase3/scripts/build_render.py --cases phase3/xaml-db/cases \\
-        --fonts <a fonts directory> --window-case L7-terminal-0e66f8e18d-s0
+        --fonts "$(python3 phase3/scripts/fetch_measurements.py --fonts)" \\
+        --theme-resources <the extracted WinUI dictionary> \\
+        --window-case L7-terminal-0e66f8e18d-s0
 
 produces everything this reads.
+
+Nothing here regenerates the dumps, and that is the hazard this file has to
+answer for: through waves 5 and 6 it reported green over a dump root written
+before either wave, because "the dumps are there" was the only question it knew
+how to ask. It now asks a second one first -- were these dumps written by *this*
+checkout, from *this* corpus -- and fails when the answer is no. An absent dump
+root is still a skip by name; a present one that cannot be shown to be current
+is a failure, because that is the state that produced two waves of false green.
 """
 
 import json
@@ -25,12 +35,57 @@ CHECKER = REPOSITORY / "phase4" / "scripts" / "check_render.py"
 ROOT = Path(os.environ.get("OPENTERMINAL_RENDER_ROOT", "/tmp/openterminal-render"))
 DUMPS = ROOT / "gdi-dumps"
 
+sys.path.insert(0, str(REPOSITORY / "phase3" / "scripts"))
+
+import render_provenance  # noqa: E402
+
+PHASE3 = REPOSITORY / "phase3"
+SIDECAR_SCHEMA = 2
+
+
+def provenance_problems() -> list[str]:
+    """Every reason these dumps do not correspond to this checkout's inputs."""
+    recorded = render_provenance.read(DUMPS)
+    if recorded is None:
+        return [
+            f"{DUMPS} has no {render_provenance.PROVENANCE_NAME}: it was written by a "
+            "build_render.py that did not record one, so nothing can say which sources "
+            "or cases it came from"
+        ]
+    current = render_provenance.record(
+        repository=REPOSITORY,
+        sources=render_provenance.source_roots(PHASE3),
+        cases=Path(recorded.get("cases_path") or (PHASE3 / "xaml-db" / "cases")),
+        fonts=None,
+        theme_resources=None,
+        sidecar_schema=SIDECAR_SCHEMA,
+    )
+    return render_provenance.disagreements(recorded, current)
+
 
 class WineRenderGate(unittest.TestCase):
+    def test_the_gdi_dumps_were_written_by_this_checkout(self):
+        if not DUMPS.is_dir():
+            raise unittest.SkipTest(
+                f"no GDI dumps: {DUMPS} does not exist; run phase3/scripts/build_render.py")
+        problems = provenance_problems()
+        self.assertEqual(
+            problems, [],
+            "these dumps are stale and the round-trip result over them means nothing:\n  "
+            + "\n  ".join(problems)
+            + "\nregenerate with phase3/scripts/build_render.py",
+        )
+
     def test_the_gdi_dumps_round_trip_exactly(self):
         if not DUMPS.is_dir():
             raise unittest.SkipTest(
                 f"no GDI dumps: {DUMPS} does not exist; run phase3/scripts/build_render.py")
+        # Not a skip: a dump root that exists but cannot be shown to be this
+        # checkout's is precisely the false green this gate is here to stop.
+        problems = provenance_problems()
+        self.assertEqual(
+            problems, [],
+            "refusing to round-trip stale dumps:\n  " + "\n  ".join(problems))
         report = ROOT / "gdi-render-report.json"
         completed = subprocess.run(
             [sys.executable, "-B", str(CHECKER), "--dumps", str(DUMPS),
@@ -44,6 +99,17 @@ class WineRenderGate(unittest.TestCase):
             + json.dumps(numbers["failures"][:3], indent=1))
         # A run that painted nothing at all would report zero failures too.
         self.assertGreater(numbers["painted_exact"], 0, "no case painted; the gate is vacuous")
+        # And a run that stopped halfway would report zero failures over the
+        # part it reached. The corpus size is recorded beside the dumps, so the
+        # count is checkable rather than assumed.
+        recorded = render_provenance.read(DUMPS)
+        self.assertEqual(
+            numbers["total"], recorded["cases_count"],
+            f"the dumps account for {numbers['total']} of the corpus's "
+            f"{recorded['cases_count']} cases; the harness did not finish")
+        print(f"\nGDI dumps: {numbers['painted_exact']} exact, {numbers['refused']} refused by "
+              f"name, {numbers['not_laid_out']} not laid out, "
+              f"{numbers['origins_not_re_derived']} visual origins not re-derived")
 
     def test_a_case_painted_in_a_window_is_the_case_painted_offscreen(self):
         windows = sorted(ROOT.glob("*.window.ppm"))
@@ -66,11 +132,19 @@ class WineRenderGate(unittest.TestCase):
             raise unittest.SkipTest(
                 f"no ink samples under {ink}; run build_render.py --ink-font")
         report = ROOT / "ink-report.json"
-        subprocess.run(
+        # Removed first: a report left behind by an earlier run would otherwise
+        # answer for a checker invocation that refused to run at all, which is
+        # the same trick a stale dump root plays on the gate above.
+        report.unlink(missing_ok=True)
+        completed = subprocess.run(
             [sys.executable, "-B", str(CHECKER), "--dumps", str(ink),
              "--trees", str(ink / "no-trees-here"), "--output", str(report)],
             capture_output=True, text=True, check=False)
-        self.assertTrue(report.is_file())
+        self.assertIn(
+            completed.returncode, (0, 1),
+            "the checker refused these ink samples rather than checking them:\n"
+            + completed.stdout + completed.stderr)
+        self.assertTrue(report.is_file(), completed.stdout + completed.stderr)
         numbers = json.loads(report.read_text())
         # Every sample must have had its ink looked at. Whether the ink fits is
         # the open question -- GDI rounds a font's metrics to whole pixels and

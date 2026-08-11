@@ -85,8 +85,8 @@ int main(int argc, char** argv) {
             if (!result.load_error.empty()) {
                 ++load_errors;
                 std::ostringstream output;
-                output << "{\n \"schema_version\": 1,\n \"case_id\": \""
-                       << JsonEscape(result.id) << "\",\n \"load_error\": \""
+                output << "{\n \"schema_version\": " << kSidecarSchemaVersion
+                       << ",\n \"case_id\": \"" << JsonEscape(result.id) << "\",\n \"load_error\": \""
                        << JsonEscape(result.load_error) << "\"\n}\n";
                 Write(out_dir / (result.id + ".json"), output.str());
                 continue;

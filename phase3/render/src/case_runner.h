@@ -74,6 +74,19 @@ Surface RasterizeDisplayList(const DisplayList& list, TextBackend* backend, Colo
 Surface PaintCase(CaseResult& result, TextBackend* backend,
                   Color clear = BackdropColor());
 
+// The shape of every sidecar this project writes, including the short one a
+// case that did not load gets. One constant, because a checker refuses a
+// version it does not know and a load-error sidecar left behind at 1 would
+// refuse a dump root that is in fact current.
+//
+//   1  the original: slot, actual, abs, clip, z-index.
+//   2  adds the parent-local visual origin and the margin, alignments and
+//      rounding a checker re-derives it from.
+//
+// Kept in step with check_render.REQUIRED_SIDECAR_SCHEMA and with
+// build_render.SIDECAR_SCHEMA, which records it in the dump root's provenance.
+inline constexpr int kSidecarSchemaVersion = 2;
+
 // The sidecar a checker reads: the verified geometry, the rectangles that were
 // painted, the text runs, and every named no-draw.
 std::string SidecarJson(const CaseResult& result, const Surface& surface,

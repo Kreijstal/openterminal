@@ -217,12 +217,51 @@ arrays.
 ## Running the Wine half
 
     python3 phase3/scripts/build_render.py \
-        --cases phase3/xaml-db/cases --fonts <a fonts directory> \
+        --cases phase3/xaml-db/cases \
+        --fonts "$(python3 phase3/scripts/fetch_measurements.py --fonts)" \
+        --theme-resources phase3/xaml-db/theme-resources \
         --ink-font <a .ttf> --window-case L7-terminal-0e66f8e18d-s0
 
-Needs `x86_64-w64-mingw32-g++` and `wine`; the window step also needs a display.
-Everything lands under `/tmp/openterminal-render` and nothing is committed —
-dumps least of all, at a quarter of a gigabyte for one corpus pass.
+Needs `x86_64-w64-mingw32-g++` and `wine`. Two steps need a display and say so
+by name without one: the live window, and the island frame-cache test, whose
+layered-child case creates real windows. Everything lands under
+`/tmp/openterminal-render` and nothing is committed — dumps least of all, at a
+quarter of a gigabyte for one corpus pass.
+
+**Three of those inputs are generated and none of them is optional.** The cases
+are `generate_cases.py` output, the fonts are the harvested per-family metrics
+from the measurement artifact, and the theme resources are
+`extract_winui_theme_resources.py` output. Pointing `--fonts` at
+`phase3/xaml-db/fonts` — which holds only the two numbers the corpus solved for
+itself, under `derived/` — does not fail: it loads 241 text and icon cases with
+`no harvested metrics for the font family "Segoe UI"` and they land in the
+checker's *not laid out* column, where a run can report zero failures having
+measured nothing. Omitting `--theme-resources` does the same to another 41.
+
+### Why the dump root carries a provenance record
+
+Nothing regenerates the dumps on the gate's behalf: `build_render.py` writes
+them and `phase4/tests/test_render_wine.py` reads whatever is in the scratch
+directory. Through waves 5 and 6 that gate was green against a dump root
+predating both, and the drift it could not see was a real one — wave 5 gave
+`FrameworkElement::ArrangeCore` its alignment placement (`render_origin_` in
+`phase3/layout/src/element.cpp`), so an element with an explicit size in a
+`Stretch` slot moved to the middle of it while its layout slot stayed where it
+was. Regenerating on that code failed 628 of 1187 cases with
+
+    /Windows.UI.Xaml.Controls.Border: absolute origin [140.0, 0.0] is not the
+    accumulated [0.0, 0.0]
+
+because `check_render.py` was still re-accumulating absolute origins out of slot
+origins. It now re-derives each node's parent-local visual origin from the
+measured slot, the render size and the declared margin and alignments, which is
+the rule the layout core applies and an independent route to the same number.
+
+So the sidecars carry a schema version the checker refuses to read across, and
+`build_render.py` writes `provenance.json` into the dump directory it just
+recreated: a digest of every source the harness is compiled from, and a digest
+of the case corpus. The Wine gate verifies both before it believes a round trip.
+See `phase3/scripts/render_provenance.py`.
 
 ## Native XAML render-boundary harvest
 

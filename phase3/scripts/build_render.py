@@ -11,10 +11,22 @@ build_xamlcore.py, and deliberately given a different default root so the two
 never share a directory.
 
     python3 phase3/scripts/build_render.py --cases phase3/xaml-db/cases \\
-        --fonts <a fonts directory>
+        --fonts "$(python3 phase3/scripts/fetch_measurements.py --fonts)" \\
+        --theme-resources <the extracted WinUI dictionary>
 
-Needs `x86_64-w64-mingw32-g++` and `wine`. The live-window step also needs an X
-display; with none it is skipped by name rather than passed.
+Needs `x86_64-w64-mingw32-g++` and `wine`. Two steps also need an X display and
+say so by name rather than passing without one: the live window, and the island
+frame cache test, whose layered-child case creates real windows.
+
+`--fonts` is not optional in practice. `phase3/xaml-db/fonts` holds only the two
+numbers the corpus solved for itself (`derived/`); the harvested per-family
+metrics are a CI artifact, and without them every text and icon case loads with
+`no harvested metrics for the font family ...` and lands in the checker's "not
+laid out" column instead of being measured. The same is true of
+`--theme-resources`: it is `extract_winui_theme_resources.py` output and is not
+committed, and without it the level 5 and level 7 cases that name a WinUI
+resource key fail to load. Both directories' identities are recorded in the
+dump root's provenance record -- see render_provenance.py.
 """
 
 from __future__ import annotations
@@ -27,8 +39,18 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import render_provenance  # noqa: E402
+
 PHASE3_DIR = Path(__file__).resolve().parent.parent
 REPO_DIR = PHASE3_DIR.parent
+
+# The sidecar shape render_cases writes; kept in step with the constant of the
+# same meaning in phase3/render/src/case_runner.cpp and with
+# check_render.REQUIRED_SIDECAR_SCHEMA. It travels in the provenance record so
+# that a dump root written by an older harness is refused rather than read.
+SIDECAR_SCHEMA = 2
 
 # The same list phase3/layout/CMakeLists.txt and build_xamlcore.py carry, and
 # for the same reason build_xamlcore.py states: a source missing from here is a
@@ -159,18 +181,65 @@ def main() -> int:
     if not (prefix / "system.reg").is_file():
         run(["wineboot", "-u"], env=environment)
 
-    # Memory DCs and DIB sections require no display server, so this retained
-    # presentation test runs on every Wine path, including headless CI.
-    run(["wine", str(frame_cache_test)], env=environment)
+    # Most of this test needs no display -- memory DCs and DIB sections do not
+    # -- and that used to be true of all of it. It stopped being true in wave 6:
+    # LayeredChildCompositesOverItsParent creates a real popup parent and a
+    # WS_EX_LAYERED child (island_frame_cache_test.cpp), and without a display
+    # those CreateWindowExW calls return null and the CHECKs fail. So the
+    # display is a requirement of running it, and a run without one says so by
+    # name instead of reporting a window-server failure as a renderer bug.
+    if environment.get("DISPLAY"):
+        run(["wine", str(frame_cache_test)], env=environment)
+    else:
+        print("::notice::no DISPLAY; the island frame-cache test creates real windows "
+              "for its layered-child case, so it is skipped by name rather than passed")
     run(["wine", str(dwrite_test)], env=environment)
     run(["wine", str(dcomp_test)], env=environment)
+
+    # Say out loud what the corpus is about to be measured against. A fonts
+    # directory holding no per-family metrics does not fail the run: every text
+    # and icon case loads with "no harvested metrics for the font family ..."
+    # and lands in the checker's "not laid out" column, where a pass over the
+    # remainder looks the same as a pass over the corpus. Same for the theme
+    # dictionary and the level 5 and 7 cases that name a resource key.
+    families = sorted(p.stem for p in args.fonts.glob("*.json"))
+    print(f"::notice::fonts: {len(families)} harvested famil(ies) in {args.fonts}"
+          + (f" -- {', '.join(families)}" if families else
+             " -- none; every text and icon case will refuse to lay out"))
+    dictionaries = sorted(p.name for p in args.theme_resources.glob("*.json")) \
+        if args.theme_resources.is_dir() else []
+    print(f"::notice::theme resources: {len(dictionaries)} dictionar(ies) in "
+          f"{args.theme_resources}"
+          + ("" if dictionaries else
+             " -- none; every case naming a WinUI resource key will refuse to lay out"))
+
+    # A window read-back from a previous run would otherwise survive into this
+    # one and be compared, pixel for pixel, against dumps it has nothing to do
+    # with. The dumps directory is already recreated below for that reason; the
+    # read-backs live beside it and need saying so explicitly.
+    for stale in root.glob("*.window.ppm"):
+        stale.unlink()
 
     results = root / "gdi-dumps"
     if results.exists():
         shutil.rmtree(results)
     run(["wine", str(harness), str(args.cases.resolve()), str(results),
          str(args.fonts.resolve()), str(args.theme_resources.resolve())], env=environment)
-    print(f"dumps in {results}")
+
+    # Written after the dumps, into the directory that was just recreated, so a
+    # record can never outlive or precede the dumps it speaks for. The Wine gate
+    # refuses a dump root whose record does not match this checkout; without it
+    # the gate cannot tell fresh dumps from two-wave-old ones. See
+    # render_provenance.py.
+    provenance = render_provenance.write(
+        results,
+        render_provenance.record(
+            repository=REPO_DIR,
+            sources=render_provenance.source_roots(PHASE3_DIR),
+            cases=args.cases,
+            fonts=args.fonts, theme_resources=args.theme_resources,
+            sidecar_schema=SIDECAR_SCHEMA))
+    print(f"dumps in {results}; provenance in {provenance}")
 
     if args.ink_font:
         ink_dumps = root / "ink-dumps"
