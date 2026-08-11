@@ -16,9 +16,11 @@
 #include <vector>
 
 #include "case_runner.h"
+#include "default_styles.h"
 #include "fonts.h"
 #include "gdi_target.h"
 #include "json.h"
+#include "markup.h"
 #include "resources.h"
 #include "text.h"
 
@@ -81,6 +83,22 @@ int main(int argc, char** argv) {
         std::cerr << "theme resources loaded: " << keys << " key(s)\n";
     } catch (const std::exception& e) {
         std::cerr << "cannot load theme resources: " << e.what() << "\n";
+        return 4;
+    }
+
+    // The framework's own default styles, out of the same directory the theme
+    // dictionary came from. The measurement path loads both halves of that
+    // reconstruction, and this pass is held to arranging the very tree that
+    // path measures -- a run with the dictionary but not the styles stretches
+    // an element the measurement path had aligned.
+    try {
+        DefaultStyleReport style_report;
+        const int default_styles = LoadDefaultStyles(
+            DefaultStyleRegistry::Default(), theme_resources.string(), &style_report);
+        std::cerr << "default styles loaded: " << default_styles << " built-in style(s)\n";
+    } catch (const std::exception& e) {
+        std::cerr << "cannot load default styles from " << theme_resources.string() << ": "
+                  << e.what() << "\n";
         return 4;
     }
 
