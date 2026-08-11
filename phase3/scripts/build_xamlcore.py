@@ -440,6 +440,14 @@ def main() -> None:
                   str(layout_src / "json.cpp")]
         + includes + libraries)
 
+    # Binds to the SDK's vtable slots by hand rather than to this runtime's
+    # own headers: a test that shares its subject's mistakes cannot find them.
+    core_window_test = root / "core_window_test.exe"
+    run(common + ["-o", str(core_window_test),
+                  str(PHASE3_DIR / "xamlcore" / "tests" /
+                      "core_window_test.cpp")]
+        + includes + libraries)
+
     mux_bitmap_icon_test = root / "mux_bitmap_icon_source_factory_test.exe"
     run(common + ["-o", str(mux_bitmap_icon_test),
                   str(PHASE3_DIR / "xamlcore" / "tests" /
@@ -496,6 +504,7 @@ def main() -> None:
     tap_routing_command = ["wine", str(tap_routing_test)]
     dispatcher_command = ["wine", str(core_dispatcher_test)]
     resource_catalog_command = ["wine", str(resource_catalog_test)]
+    core_window_command = ["wine", str(core_window_test)]
     mux_bitmap_icon_command = ["wine", str(mux_bitmap_icon_test)]
     tab_view_selection_command = ["wine", str(tab_view_selection_smoke)]
     external_surface_command = ["wine", str(external_surface_test)]
@@ -512,6 +521,7 @@ def main() -> None:
         tap_routing_command = ["xvfb-run", "-a"] + tap_routing_command
         dispatcher_command = ["xvfb-run", "-a"] + dispatcher_command
         resource_catalog_command = ["xvfb-run", "-a"] + resource_catalog_command
+        core_window_command = ["xvfb-run", "-a"] + core_window_command
         mux_bitmap_icon_command = ["xvfb-run", "-a"] + mux_bitmap_icon_command
         tab_view_selection_command = ["xvfb-run", "-a"] + tab_view_selection_command
         focus_command = ["xvfb-run", "-a"] + focus_command
@@ -524,6 +534,10 @@ def main() -> None:
     run(tap_routing_command, env=environment)
     run(dispatcher_command, env=environment)
     run(resource_catalog_command, env=environment)
+    # Also after registration: it asks RoGetActivationFactory for
+    # Windows.UI.Core.CoreWindow, and an unregistered prefix answers with
+    # whatever else claims that class.
+    run(core_window_command, env=environment)
     # This probe asks RoGetActivationFactory for the MUX factory and therefore
     # must run only after openxaml.dll has been registered in this prefix.
     run(mux_bitmap_icon_command, env=environment)
