@@ -37,6 +37,41 @@ receiving no key or character message at all.
 
 The same condition makes ``check_xbf_ui_render.py``'s ``probe-observed-window``
 check fail on the same loader, so it is not a property of this gate.
+
+Addendum, 2026-08-11: that window is now shown, the keystrokes now arrive, and
+this file therefore asserts them. Two defects stood between the two states, and
+both were found by bisecting the one difference between this gate and the pane
+gate -- the settings document -- one field at a time:
+
+  * the tab closed about a second after startup for *every* profile without
+    ``closeOnExit: never``, including the pane gate's own. The shell really did
+    start (its readiness file was written) and really did exit at once, because
+    the console host serving its pseudoconsole had already gone: Windows
+    Terminal's ``winconpty`` starts ``conhost.exe`` with
+    ``--textMeasurement graphemes``, and Wine's console host answered an option
+    it did not recognise by returning from ``wmain`` before its main loop
+    (``programs/conhost/conhost.c``). A shell attached to a console nobody
+    serves reads end of file from its own input and exits, the connection
+    closes, the last tab closes, and the process exits 0 -- which is what
+    ``closeOnExit: never`` had been hiding. Fixed in Wine by naming the
+    unimplemented options and serving the console anyway;
+
+  * with the shell alive the window is shown and the keystrokes are delivered,
+    and the first one faulted the process on a null read inside
+    ``TermControl::_GetPressedModifierKeys`` (symbolised from the faulting
+    address). That method reads seven modifier keys from
+    ``CoreWindow::GetForCurrentThread()`` and is ``noexcept``, so it neither
+    checks for null nor could survive an exception: on Windows a XAML island
+    thread always has a CoreWindow. This runtime did not implement the class at
+    all, so it resolved to a stub that answered "success, here is nothing".
+    ``Windows.UI.Core.CoreWindow`` is now the runtime's own, answering the
+    thread's real key and pointer state.
+
+With both fixed, on the canonical loader and a fresh prefix, the shell executes
+the typed command and the pane paints it: 44 keystrokes injected, 88 key and 44
+character messages received by the island with a focused sink, the sentinel file
+reading ``INPUT_GATE_1138``, and 42 of 63 sampled points inside the window
+different after typing.
 """
 
 import json
@@ -68,17 +103,6 @@ PREFIX_ROOT = Path(os.environ.get("OPENTERMINAL_INPUT_PREFIX_ROOT",
                                   str(Path(tempfile.gettempdir()) /
                                       "openterminal-input-roundtrip")))
 TIMEOUT = int(os.environ.get("OPENTERMINAL_INPUT_TIMEOUT", "90"))
-
-# The checks that cannot be answered while the hosting window is never shown,
-# and only those. If anything outside this set fails, the run is telling us
-# about something other than the missing window and must not be skipped.
-BLOCKED_BY_INVISIBLE_WINDOW = frozenset({
-    "hosting-window-visible",
-    "keystrokes-reached-the-island",
-    "keystrokes-routed-to-an-element",
-    "sentinel-file-written",
-    "sentinel-content-matches",
-})
 
 
 class InputReachesTheShell(unittest.TestCase):
@@ -130,25 +154,18 @@ class InputReachesTheShell(unittest.TestCase):
         self.assertTrue(checks["keystrokes-injected"]["status"] == "pass",
                         json.dumps(checks["keystrokes-injected"]))
 
-        # The one measured condition under which no keystroke can arrive, and
-        # under which this gate therefore has nothing to say about the input
-        # path: the hosting window is never shown, so the desktop has nowhere
-        # to deliver to and the process is not pumping the messages that were
-        # posted to it. This is a *skip by name* only while that exact
-        # signature holds -- the window missing and nothing downstream of it
-        # having been reached. The moment the window is shown, every check
-        # below is enforced again, without editing this file.
-        if set(measured["failed"]) <= BLOCKED_BY_INVISIBLE_WINDOW and \
-                "hosting-window-visible" in measured["failed"]:
-            raise unittest.SkipTest(
-                "the hosting window is never shown, so no keystroke can be "
-                "delivered to it: " + checks["hosting-window-visible"]["detail"]
-                + " -- ShowWindow is only ever called from a CoreDispatcher "
-                "work item (AppHost::_WindowInitializedHandler) and that queue "
-                "is starved by a UI thread blocked in "
-                "Renderer::TriggerTeardown; see this file's module docstring. "
-                "Failed checks: " + json.dumps(measured["failed"]))
-
+        # The window is shown and the keystrokes arrive; there is nothing left
+        # to excuse. What used to stand here was a skip for the one measured
+        # condition under which no keystroke could be delivered at all -- the
+        # hosting window never gaining WS_VISIBLE. That condition is gone, so
+        # the checks it covered are asserted below like every other.
+        self.assertEqual(
+            checks["hosting-window-visible"]["status"], "pass",
+            json.dumps(checks["hosting-window-visible"]))
+        self.assertEqual(
+            checks["keystrokes-reached-the-island"]["status"], "pass",
+            "the keystrokes never reached the island:\n"
+            + json.dumps(checks["keystrokes-reached-the-island"], indent=1))
         self.assertEqual(
             checks["sentinel-content-matches"]["status"], "pass",
             "the shell did not run the command that was typed into the "
