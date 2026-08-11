@@ -20,8 +20,22 @@ void Check(bool condition, const char* message) {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     std::string diagnostic;
+
+    // Optional: a font file and the family inside it, the way build_render.py
+    // passes the ink font. A face handed to this process privately has to be
+    // resolvable by the name that is written in it -- that is the whole of what
+    // "the font is loaded" can mean for a family nothing installed.
+    const char* private_font_file = argc > 2 ? argv[1] : nullptr;
+    const std::string private_font_family = argc > 2 ? argv[2] : std::string();
+    if (private_font_file) {
+        diagnostic.clear();
+        Check(openxaml::render::AddPrivateDirectWriteFontFile(private_font_file, diagnostic),
+              diagnostic.empty() ? "add a private DirectWrite font file"
+                                 : diagnostic.c_str());
+    }
+
     Check(openxaml::render::InstallDirectWriteRuntimeTextProvider(diagnostic),
           diagnostic.empty() ? "install DirectWrite provider" : diagnostic.c_str());
     const std::shared_ptr<openxaml::RuntimeTextProvider> provider =
@@ -44,6 +58,66 @@ int main() {
             Check(aliased_icon.advances.size() == 1,
                   "private compatibility font shapes one icon scalar");
         }
+
+        // The alias is a second name for the face, not the only name it has.
+        // A private font that answers only to the name some other product uses
+        // is unusable by anything that knows what it actually loaded.
+        openxaml::RuntimeTextResult own_name;
+        diagnostic.clear();
+        const bool own_name_layout = provider->Layout(
+            {"Symbols", u8"\uea18", 20.0, 100.0, false, false}, own_name, diagnostic);
+        Check(own_name_layout,
+              diagnostic.empty() ? "private font resolves under its own family name"
+                                 : diagnostic.c_str());
+        if (own_name_layout) {
+            Check(own_name.resolved_family == "Symbols",
+                  "private font reports the family name written in the file");
+            Check(own_name.advances == aliased_icon.advances,
+                  "the alias and the file's own name reach the same face");
+        }
+    }
+
+    if (private_font_file) {
+        // The point of a privately added file: this family is on no machine
+        // this repository builds on, and the process was handed the glyphs.
+        openxaml::RuntimeTextResult private_measured;
+        diagnostic.clear();
+        const bool private_layout = provider->Layout(
+            {private_font_family, "Terminal", 14.0, 200.0, false, false},
+            private_measured, diagnostic);
+        Check(private_layout,
+              diagnostic.empty() ? "privately added font file lays out"
+                                 : diagnostic.c_str());
+        if (private_layout) {
+            Check(private_measured.resolved_family == private_font_family,
+                  "privately added font file resolves the requested family");
+            Check(private_measured.advances.size() == 8,
+                  "privately added font file shapes one advance per scalar");
+            openxaml::render::Surface painted(200, 40, {255, 255, 255, 255});
+            const std::vector<std::uint32_t> untouched = painted.pixels();
+            openxaml::render::TextOp private_run;
+            private_run.bounds = {0.0, 0.0, 200.0, 40.0};
+            private_run.text = "Terminal";
+            private_run.font_family = private_font_family;
+            private_run.font_size = 14.0;
+            private_run.baseline = private_measured.baseline;
+            private_run.advances = private_measured.advances;
+            diagnostic.clear();
+            Check(openxaml::render::DrawDirectWriteTextRun(
+                      painted, private_run, {255, 0, 0, 0}, diagnostic),
+                  diagnostic.empty() ? "rasterize a privately added font file"
+                                     : diagnostic.c_str());
+            Check(painted.pixels() != untouched,
+                  "privately added font file puts glyphs on the surface");
+        }
+
+        // The collection is built once. A file offered after that would never
+        // arrive, so saying so is the only honest answer.
+        diagnostic.clear();
+        Check(!openxaml::render::AddPrivateDirectWriteFontFile(private_font_file,
+                                                               diagnostic) &&
+                  diagnostic.find("installed") != std::string::npos,
+              "a private font offered after installation is a named refusal");
     }
 
     openxaml::RuntimeTextResult measured;
