@@ -188,3 +188,11 @@ ABI::Windows::UI::Xaml::Input::IFocusManagerStatics7
 ABI::Windows::UI::Xaml::Input::IFocusMovementResult
 ABI::Windows::UI::Xaml::IXamlRoot
 ABI::Windows::UI::Xaml::Media::Animation::ITimelineStatics
+
+# The thread's CoreWindow. A XAML island thread has one on Windows -- the
+# hosting manager creates it -- and Windows Terminal reads the modifier keys
+# through it on every keystroke, in a `noexcept` method that does not check
+# for null. A runtime that leaves this class to someone else's stub hands
+# Terminal a null CoreWindow and the keystroke path faults.
+ABI::Windows::UI::Core::ICoreWindow
+ABI::Windows::UI::Core::ICoreWindowStatic

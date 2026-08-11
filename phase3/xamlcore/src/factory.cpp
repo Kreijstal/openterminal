@@ -5868,6 +5868,131 @@ private:
         handlers_;
 };
 
+namespace wuc = ABI::Windows::UI::Core;
+
+// The CoreWindow a XAML island thread has.
+//
+// On Windows an island thread is given one by the hosting manager, and callers
+// read the keyboard through it: Windows Terminal's
+// ``TermControl::_GetPressedModifierKeys`` asks
+// ``CoreWindow::GetForCurrentThread()`` for the state of seven modifier keys on
+// every keystroke, in a ``noexcept`` method with no null check -- because on
+// Windows there is always a window to ask. A runtime that does not implement
+// this class leaves the question to whatever else claims it, and a static that
+// answers "success, here is nothing" faults the caller on the first keystroke.
+//
+// What is answered here is the thread's real keyboard and pointer state, read
+// from the same input queue the island's messages arrive on -- not a remembered
+// one. Everything else an ICoreWindow can be asked stays E_NOTIMPL: this window
+// is not a visual, has no bounds of its own and raises no events, and saying so
+// is more useful than an invented rectangle.
+class CoreWindowObject final : public ComObject,
+                               public openxaml::abi::NotImpl_ICoreWindow {
+public:
+    using PrimaryInterface = wuc::ICoreWindow;
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Core.CoreWindow";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Core_ICoreWindow,
+                        wuc::ICoreWindow)
+        OPENXAML_QI_ARM(IID_IUnknown, wuc::ICoreWindow)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wuc::ICoreWindow)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    // GetKeyState is the synchronous state the message being handled was
+    // delivered with, which is exactly what Win32's GetKeyState reports on the
+    // thread handling it. Down is the sign bit and Locked the toggle bit, and
+    // both can be set at once -- a caller testing for equality with Down would
+    // be wrong, which is why Terminal tests the flag.
+    HRESULT STDMETHODCALLTYPE GetKeyState(ws::VirtualKey key,
+                                          wuc::CoreVirtualKeyStates* state) override {
+        if (!state) return E_POINTER;
+        *state = KeyStates(::GetKeyState(static_cast<int>(key)));
+        return S_OK;
+    }
+    // The asynchronous half: the state of the physical key now, rather than as
+    // of the message being handled.
+    HRESULT STDMETHODCALLTYPE GetAsyncKeyState(ws::VirtualKey key,
+                                               wuc::CoreVirtualKeyStates* state) override {
+        if (!state) return E_POINTER;
+        *state = KeyStates(::GetAsyncKeyState(static_cast<int>(key)));
+        return S_OK;
+    }
+    // Where the pointer is, in the coordinates a CoreWindow reports: the
+    // desktop's, in device-independent pixels.
+    HRESULT STDMETHODCALLTYPE get_PointerPosition(
+        ABI::Windows::Foundation::Point* value) override {
+        if (!value) return E_POINTER;
+        POINT cursor{};
+        if (!::GetCursorPos(&cursor)) return HRESULT_FROM_WIN32(::GetLastError());
+        const float scale = DipScale();
+        value->X = static_cast<float>(cursor.x) / scale;
+        value->Y = static_cast<float>(cursor.y) / scale;
+        return S_OK;
+    }
+
+private:
+    static wuc::CoreVirtualKeyStates KeyStates(SHORT win32_state) {
+        unsigned states = wuc::CoreVirtualKeyStates_None;
+        if (win32_state & 0x8000) states |= wuc::CoreVirtualKeyStates_Down;
+        if (win32_state & 0x0001) states |= wuc::CoreVirtualKeyStates_Locked;
+        return static_cast<wuc::CoreVirtualKeyStates>(states);
+    }
+    static float DipScale() {
+        const HDC screen = ::GetDC(nullptr);
+        if (!screen) return 1.0f;
+        const int dpi = ::GetDeviceCaps(screen, LOGPIXELSX);
+        ::ReleaseDC(nullptr, screen);
+        return dpi > 0 ? static_cast<float>(dpi) / 96.0f : 1.0f;
+    }
+};
+
+// One CoreWindow per thread, handed back for the life of that thread: two
+// calls from the same thread are the same window on Windows, and a caller that
+// compares them has to see that.
+class CoreWindowFactory final : public ComObject,
+                                public IActivationFactory,
+                                public openxaml::abi::NotImpl_ICoreWindowStatic {
+public:
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Core.CoreWindow";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Core_ICoreWindowStatic,
+                        wuc::ICoreWindowStatic)
+        OPENXAML_QI_ARM(::openxaml::iid::IActivationFactory, IActivationFactory)
+        OPENXAML_QI_ARM(IID_IUnknown, IActivationFactory)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, IActivationFactory)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    // A CoreWindow is not activatable: it belongs to a thread, and the way to
+    // reach it is GetForCurrentThread.
+    HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable**) override {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE GetForCurrentThread(wuc::ICoreWindow** window) override {
+        if (!window) return E_POINTER;
+        *window = nullptr;
+        static thread_local CoreWindowObject* thread_window = nullptr;
+        if (!thread_window) {
+            thread_window = new (std::nothrow) CoreWindowObject();
+            if (!thread_window) return E_OUTOFMEMORY;
+        }
+        auto* projected = static_cast<wuc::ICoreWindow*>(thread_window);
+        projected->AddRef();
+        *window = projected;
+        return S_OK;
+    }
+};
+
 class DispatcherTimerObject final
     : public ComObject,
       public openxaml::abi::NotImpl_IDispatcherTimer {
@@ -6018,6 +6143,10 @@ Factory<ValueSetObject>& ValueSetFactory() {
 Factory<AccessibilitySettingsObject>& AccessibilitySettingsFactory() {
     static Factory<AccessibilitySettingsObject> factory(
         L"Windows.UI.ViewManagement.AccessibilitySettings");
+    return factory;
+}
+CoreWindowFactory& TheCoreWindowFactory() {
+    static CoreWindowFactory factory;
     return factory;
 }
 DispatcherTimerFactory& TheDispatcherTimerFactory() {
@@ -6415,6 +6544,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &AccessibilitySettingsFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.DispatcherTimer") == 0)
         return &TheDispatcherTimerFactory();
+    if (wcscmp(name, L"Windows.UI.Core.CoreWindow") == 0)
+        return &TheCoreWindowFactory();
     if (wcscmp(name, L"Windows.UI.Colors") == 0) {
         if (GetEnvironmentVariableW(L"OPENXAML_TRACE_QI", nullptr, 0))
             OutputDebugStringA("OpenXaml: activating Windows.UI.Colors\n");

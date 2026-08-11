@@ -177,6 +177,12 @@ def main() -> None:
     text_idl = args.idl_dir / "windows.ui.text.idl"
     if text_idl.is_file():
         idl_files.append(text_idl)
+    # The thread's CoreWindow. A XAML island thread has one, and callers read
+    # the keyboard through it, so its statics are part of the surface this DLL
+    # has to answer for.
+    core_idl = args.idl_dir / "windows.ui.core.idl"
+    if core_idl.is_file():
+        idl_files.append(core_idl)
     idl_files += sorted(args.idl_dir.glob("windows.foundation*.idl"))
     # The desktop-XAML bootstrap also probes DispatcherQueue before it creates
     # WindowsXamlManager. Keep that adjacent platform contract pinned to the

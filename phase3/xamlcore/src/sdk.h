@@ -36,6 +36,9 @@
 #include <windows.ui.xaml.automation.h>
 #include <windows.ui.text.h>
 #include <windows.ui.viewmanagement.h>
+// The thread's CoreWindow: what a XAML island gives its thread on Windows, and
+// what Windows Terminal reads modifier keys from.
+#include <windows.ui.core.h>
 #include <windows.ui.xaml.markup.h>
 #include <windows.ui.xaml.hosting.h>
 #include <windows.system.h>
