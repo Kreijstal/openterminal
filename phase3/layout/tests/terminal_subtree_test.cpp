@@ -121,6 +121,56 @@ void ARenderTransformDoesNotReachLayout() {
     CHECK(refusal.find("<Border>") != std::string::npos);
 }
 
+// An attribute-free <CompositeTransform/> is the identity, and the identity is
+// exactly invertible.
+//
+// L7-terminal-65dec6afa8 writes one. Every CompositeTransform property is a
+// no-op at its default -- ScaleX and ScaleY 1, CenterX, CenterY, SkewX, SkewY,
+// Rotation, TranslateX and TranslateY 0 -- so the matrix the runtime hands the
+// compositor is exactly the identity matrix, whatever RenderTransformOrigin
+// says, because the identity has no pivot to be taken about. That is the same
+// rule ReadTransformPropertyElement already applies to an attribute-free
+// <RotateTransform/>, which it reads as Rotate(0). Reading it as Unsupported
+// instead does not decline to approximate anything: there is nothing here to
+// approximate.
+//
+// A CompositeTransform that actually sets one of those properties is a
+// different question -- skew is not axis-aligned and rotation about a general
+// centre composed with a scale is not either -- and stays refused by name.
+void AnEmptyCompositeTransformIsTheIdentity() {
+    const auto transform_of = [](const std::string& inner) {
+        return LoadMarkup(std::string("<Rectangle") + kXamlNamespaces +
+                          " Width=\"12\" Height=\"12\" RenderTransformOrigin=\"0.5, 0.5\">"
+                          "<Rectangle.RenderTransform>" + inner +
+                          "</Rectangle.RenderTransform></Rectangle>");
+    };
+
+    std::unique_ptr<Element> empty = transform_of("<CompositeTransform/>");
+    CHECK(empty->visual_transform().kind == VisualTransformKind::Identity);
+    CHECK(empty->visual_transform().type == "Windows.UI.Xaml.Media.CompositeTransform");
+    // The identity is still a declared RenderTransform: the property is not
+    // null, and anything reading "is there a transform" must keep saying yes.
+    CHECK(empty->has_render_transform());
+
+    // The expanded empty-element spelling is the same transform.
+    std::unique_ptr<Element> expanded =
+        transform_of("<CompositeTransform></CompositeTransform>");
+    CHECK(expanded->visual_transform().kind == VisualTransformKind::Identity);
+
+    // One authored property and it is no longer the identity. Nothing here
+    // lowers a skew or a general composite, so it keeps its name.
+    for (const char* authored : {"<CompositeTransform ScaleX=\"2\"/>",
+                                 "<CompositeTransform Rotation=\"17\"/>",
+                                 "<CompositeTransform SkewX=\"3\"/>",
+                                 "<CompositeTransform TranslateX=\"4\"/>"}) {
+        std::unique_ptr<Element> authored_transform = transform_of(authored);
+        CHECK(authored_transform->visual_transform().kind ==
+              VisualTransformKind::Unsupported);
+        CHECK(authored_transform->visual_transform().type ==
+              "Windows.UI.Xaml.Media.CompositeTransform");
+    }
+}
+
 // Rectangle.RadiusX and Rectangle.RadiusY are read, not merely accepted.
 //
 // Both are registered properties, so markup that sets them already parses --
@@ -253,6 +303,7 @@ int main() {
     ATemplatedControlIsALeafInTheRecordedTree();
     AContentControlsElementContentIsRecorded();
     ARenderTransformDoesNotReachLayout();
+    AnEmptyCompositeTransformIsTheIdentity();
     ARectangleCarriesItsCornerRadii();
     AToolTipCarriesTheRecordedDefaultStyle();
     AStringContentIsNeitherANodeNorASize();

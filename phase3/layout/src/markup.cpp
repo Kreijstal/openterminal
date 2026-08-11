@@ -1141,6 +1141,18 @@ VisualTransform ReadTransformPropertyElement(Scanner& scanner, const std::string
     }
 
     VisualTransform result = VisualTransform::Unsupported(runtime_type);
+    // A CompositeTransform with nothing authored on it is the identity: every
+    // one of its properties is a no-op at its default (ScaleX and ScaleY 1,
+    // CenterX, CenterY, SkewX, SkewY, Rotation, TranslateX and TranslateY 0),
+    // so the matrix is exactly the identity and RenderTransformOrigin has no
+    // pivot to take it about. Set one of them and it is a general composite --
+    // a skew is not axis-aligned, and a rotation about a general centre
+    // composed with a scale is not either -- so it keeps its name here rather
+    // than being lowered approximately.
+    if (transform.name == "CompositeTransform" && semantically_empty &&
+        transform.attributes.empty()) {
+        result = VisualTransform::Identity(runtime_type);
+    }
     if (transform.name == "RotateTransform" && semantically_empty) {
         const auto angle = transform.attributes.find("Angle");
         if (transform.attributes.empty()) {

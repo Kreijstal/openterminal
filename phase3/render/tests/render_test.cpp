@@ -572,10 +572,45 @@ void CanvasGeometryCompilesRotateTransformAndRetainsUnsupportedTransforms() {
               1e-9);
     }
 
+    // An attribute-free <CompositeTransform/> is the identity matrix -- every
+    // one of its properties is a no-op at its default -- so there is nothing
+    // here to decline to lower. It compiles, it paints the untransformed
+    // rectangle, and the scene carries no unsupported transform for the
+    // backend to issue on. (Previously refused as "RenderTransform"; the
+    // refusal named a transform that does not move a pixel.)
     root = LoadMarkup(
         "<Canvas xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
         "Width=\"40\" Height=\"30\"><Rectangle Width=\"20\" Height=\"10\" "
-        "Fill=\"#ff0000\"><Rectangle.RenderTransform><CompositeTransform/>"
+        "Canvas.Left=\"6\" Canvas.Top=\"4\" "
+        "Fill=\"#ff0000\" RenderTransformOrigin=\"0.5,0.5\">"
+        "<Rectangle.RenderTransform><CompositeTransform/>"
+        "</Rectangle.RenderTransform></Rectangle></Canvas>",
+        StringTable{});
+    root->Measure({40.0, 30.0});
+    root->Arrange({0.0, 0.0, 40.0, 30.0});
+    const DisplayList identity = Build(*root, Size{40.0, 30.0});
+    CHECK(!HasRefusal(identity, "RenderTransform"));
+    const RectOp* placed = FindRect(identity, "fill");
+    CHECK(placed != nullptr);
+    if (placed) {
+        CHECK(placed->bounds.x == 6.0);
+        CHECK(placed->bounds.y == 4.0);
+        CHECK(placed->bounds.width == 20.0);
+        CHECK(placed->bounds.height == 10.0);
+    }
+    CHECK(identity.scene != nullptr);
+    if (identity.scene) {
+        for (const VisualNode& node : identity.scene->nodes())
+            CHECK(node.unsupported_transform.empty());
+    }
+
+    // A CompositeTransform that authors any of its properties is a general
+    // composite and keeps its name.
+    root = LoadMarkup(
+        "<Canvas xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
+        "Width=\"40\" Height=\"30\"><Rectangle Width=\"20\" Height=\"10\" "
+        "Fill=\"#ff0000\"><Rectangle.RenderTransform>"
+        "<CompositeTransform SkewX=\"12\"/>"
         "</Rectangle.RenderTransform></Rectangle></Canvas>",
         StringTable{});
     root->Measure({40.0, 30.0});
