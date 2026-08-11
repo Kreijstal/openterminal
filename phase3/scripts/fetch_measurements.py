@@ -97,17 +97,70 @@ def download(run_id: str, repo: str | None, into: Path) -> Path:
     return oracles[0].parent
 
 
+def artifact_directory(into: Path, prefix: str) -> Path | None:
+    """The one downloaded artifact directory whose name starts with `prefix`.
+
+    `gh run download` with no `--name` fetches every artifact of the run, each
+    into a directory named after it, so all of them are already on disk and
+    this is only a matter of saying which one was asked for. A run that has
+    none is reported rather than fatal -- runs predate the steps that build
+    these -- and a run with two is refused, because picking one would be a
+    guess about which build the caller meant.
+    """
+    found = sorted(path for path in into.iterdir()
+                   if path.is_dir() and path.name.startswith(prefix))
+    if len(found) > 1:
+        raise SystemExit(f"expected one {prefix}* artifact, found {len(found)}")
+    return found[0] if found else None
+
+
 def fonts_directory(into: Path) -> Path | None:
     """The harvested font metrics, which ride in their own artifact.
 
     Absent from runs made before text measurement existed, so a missing one is
     reported rather than fatal: everything below L4 works without it.
     """
-    found = sorted(path for path in into.iterdir()
-                   if path.is_dir() and path.name.startswith("xaml-fonts-"))
-    if len(found) > 1:
-        raise SystemExit(f"expected one font artifact, found {len(found)}")
-    return found[0] if found else None
+    return artifact_directory(into, "xaml-fonts-")
+
+
+def theme_resources_directory(into: Path) -> Path | None:
+    """The dictionaries the corpus was measured against."""
+    return artifact_directory(into, "xaml-theme-resources-")
+
+
+def glyph_outlines_directory(into: Path) -> Path | None:
+    """The recorded glyph outlines, if any run has ever produced them."""
+    return artifact_directory(into, "xaml-glyph-outlines-")
+
+
+#: The dictionaries `build_render.py --theme-resources` wants, and what is lost
+#: without each. Named individually because "1 dictionar(ies)" is what a
+#: missing half looks like today, and that reads like a working directory.
+THEME_DICTIONARIES = {
+    "winui-2.8.4.json":
+        "the XamlControlsResources layer; without it every case naming a WinUI "
+        "resource key refuses to lay out",
+    "default-styles.json":
+        "the GlobalThemeResources layer, the framework's own generic.xaml; "
+        "without it L5-defaults-framework-only-key and "
+        "L5-defaults-autofontfamily refuse to lay out. Regenerate it from "
+        "pinned MIT source with phase3/scripts/regenerate_theme_resources.py",
+}
+
+
+def report_theme_resources(directory: Path) -> list[str]:
+    """One line per dictionary: present, or absent and what that costs."""
+    lines: list[str] = []
+    for name, consequence in THEME_DICTIONARIES.items():
+        if (directory / name).is_file():
+            lines.append(f"{name}: present")
+        else:
+            lines.append(f"{name}: ABSENT -- {consequence}")
+    unexpected = sorted(path.name for path in directory.glob("*.json")
+                        if path.name not in THEME_DICTIONARIES)
+    lines += [f"{name}: present, and not one this script knows about"
+              for name in unexpected]
+    return lines
 
 
 class FontCheck(NamedTuple):
@@ -204,11 +257,23 @@ def main(argv: list[str] | None = None) -> int:
                         help="write the digest for an oracle that has none yet")
     parser.add_argument("--fonts", action="store_true",
                         help="print the harvested font metrics directory instead")
+    parser.add_argument("--theme-resources", action="store_true",
+                        help="print the theme-resource directory instead, and "
+                             "report which dictionaries it actually carries")
+    parser.add_argument("--glyph-outlines", action="store_true",
+                        help="print the recorded glyph-outline directory instead; "
+                             "no run has produced one yet")
     parser.add_argument("--require-derived-coverage", action="store_true",
                         help="refuse a harvest carrying a family that "
                              "xaml-db/fonts/derived does not cover, instead of "
                              "naming it and continuing")
     args = parser.parse_args(argv)
+    chosen = [name for name, on in (("--fonts", args.fonts),
+                                    ("--theme-resources", args.theme_resources),
+                                    ("--glyph-outlines", args.glyph_outlines)) if on]
+    if len(chosen) > 1:
+        parser.error(f"{' and '.join(chosen)} each print a different directory; "
+                     f"ask for one")
 
     run_id = args.run_id or latest_successful_run(args.repo, args.branch)
     measurements = download(run_id, args.repo, args.dest)
@@ -254,6 +319,34 @@ def main(argv: list[str] | None = None) -> int:
             print("nothing in this harvest was checked against "
                   "xaml-db/fonts/derived", file=sys.stderr)
     wanted = fonts if args.fonts else measurements
+
+    if args.theme_resources:
+        theme = theme_resources_directory(args.dest)
+        if theme is None:
+            raise SystemExit(
+                f"run {run_id} has no theme-resource artifact.\n"
+                f"regenerate the database from pinned MIT source instead:\n"
+                f"  python3 phase3/scripts/regenerate_theme_resources.py --out DIR")
+        # The half-empty directory is the failure mode here, not the missing
+        # one: "1 dictionar(ies)" is what a missing GlobalThemeResources layer
+        # looks like, and it reads exactly like a working directory.
+        for line in report_theme_resources(theme):
+            print(f"  {line}", file=sys.stderr)
+        wanted = theme
+
+    if args.glyph_outlines:
+        recorded = glyph_outlines_directory(args.dest)
+        if recorded is None:
+            raise SystemExit(
+                f"run {run_id} has no glyph-outline artifact. No run has ever "
+                f"produced one: the workflow step that builds "
+                f"phase3/harness/glyph_outline_probe.cpp and runs "
+                f"phase3/scripts/harvest_glyph_outlines.py is committed but has "
+                f"not been pushed and run yet.\n"
+                f"Until it has, the 113 cases refusing "
+                f"'DirectWrite could not resolve any requested family in "
+                f"\"Segoe UI\"' stay refused, and that is the honest state.")
+        wanted = recorded
 
     ORACLES.mkdir(parents=True, exist_ok=True)
     stored_path = ORACLES / f"{fresh['os_build']}.json"

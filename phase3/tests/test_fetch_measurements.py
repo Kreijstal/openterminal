@@ -29,7 +29,13 @@ from pathlib import Path
 SCRIPT_DIRECTORY = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIRECTORY))
 
-from fetch_measurements import fonts_directory, verify_fonts  # noqa: E402
+from fetch_measurements import (  # noqa: E402
+    fonts_directory,
+    glyph_outlines_directory,
+    report_theme_resources,
+    theme_resources_directory,
+    verify_fonts,
+)
 
 DERIVED = (Path(__file__).resolve().parents[1]
            / "xaml-db" / "fonts" / "derived" / "segoe-ui.json")
@@ -142,6 +148,50 @@ class VerifyFontsTest(unittest.TestCase):
         problems = verify_fonts(self.fonts, DERIVED.parent).problems
         self.assertEqual(len(problems), 1)
         self.assertIn("segoe-ui.json", problems[0])
+
+
+class OtherArtifactsOfTheSameRunTest(unittest.TestCase):
+    """`gh run download` fetches all of them; saying which is the whole job."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "xaml-measurements-10.0.26100.33158").mkdir()
+
+    def test_the_theme_resource_artifact_is_found(self) -> None:
+        wanted = self.root / "xaml-theme-resources-10.0.26100.33158"
+        wanted.mkdir()
+        self.assertEqual(theme_resources_directory(self.root), wanted)
+
+    def test_a_run_without_glyph_outlines_is_not_an_error(self) -> None:
+        # Which is every run there has ever been.
+        self.assertIsNone(glyph_outlines_directory(self.root))
+
+
+class ThemeResourceReportTest(unittest.TestCase):
+    """A half-empty dictionary directory reads exactly like a working one."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.theme = Path(self.tmp.name)
+
+    def test_the_missing_half_is_named_and_so_is_its_cost(self) -> None:
+        # Exactly the artifact of the latest green run, 31234396062.
+        (self.theme / "winui-2.8.4.json").write_text("{}", encoding="utf-8")
+        lines = report_theme_resources(self.theme)
+        self.assertIn("winui-2.8.4.json: present", lines)
+        absent = next(line for line in lines if line.startswith("default-styles"))
+        self.assertIn("ABSENT", absent)
+        self.assertIn("L5-defaults-framework-only-key", absent)
+        self.assertIn("regenerate_theme_resources.py", absent)
+
+    def test_a_complete_directory_says_so(self) -> None:
+        for name in ("winui-2.8.4.json", "default-styles.json"):
+            (self.theme / name).write_text("{}", encoding="utf-8")
+        self.assertTrue(all(line.endswith("present")
+                            for line in report_theme_resources(self.theme)))
 
 
 class UncheckedFamiliesBlockOnlyWhenAskedTest(unittest.TestCase):
