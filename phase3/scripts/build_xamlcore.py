@@ -79,6 +79,10 @@ RUNTIME_CLASSES = [
     "Windows.UI.Xaml.VisualStateManager",
     "Windows.UI.Xaml.Input.FocusManager",
     "Windows.UI.Xaml.DispatcherTimer",
+    # The island thread's own window. Windows Terminal reads the modifier
+    # keys through it on every keystroke; without this line the class resolves
+    # to whatever else the prefix registers for it.
+    "Windows.UI.Core.CoreWindow",
     "Windows.UI.Xaml.Media.Animation.Timeline",
     "Windows.UI.Xaml.Controls.Border",
     "Windows.UI.Xaml.Controls.Panel",

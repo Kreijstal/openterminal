@@ -152,7 +152,9 @@ def main() -> None:
         headers.append(text_header)
     for adjacent in ("windows.foundation.h", "windows.system.h",
                      "windows.applicationmodel.resources.core.h",
-                     "windows.ui.viewmanagement.h"):
+                     "windows.ui.viewmanagement.h",
+                     # The thread's CoreWindow, which a XAML island owns.
+                     "windows.ui.core.h"):
         header = args.include_dir / adjacent
         if header.is_file():
             headers.append(header)

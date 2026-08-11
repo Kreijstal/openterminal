@@ -229,3 +229,6 @@ Windows.UI.Xaml.ISizeChangedEventArgs
 # DEFINE_GUID, so neither compiler nor import library supplies them here.
 IInspectable
 IActivationFactory
+
+Windows.UI.Core.ICoreWindow
+Windows.UI.Core.ICoreWindowStatic
