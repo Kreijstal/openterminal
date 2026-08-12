@@ -189,13 +189,26 @@ int main() {
     HWND parent = CreateWindowExW(0, kParentClass, L"", WS_POPUP | WS_VISIBLE,
                                   10, 10, 80, 60, nullptr, nullptr,
                                   GetModuleHandleW(nullptr), &parent_state);
+    const DWORD parent_error = GetLastError();
     HWND other = CreateWindowExW(0, L"STATIC", L"", WS_POPUP | WS_VISIBLE,
                                  100, 10, 40, 40, nullptr, nullptr,
                                  GetModuleHandleW(nullptr), nullptr);
+    const DWORD other_error = GetLastError();
     HWND child = parent ? CreateWindowExW(
         0, kChildClass, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
         0, 0, 80, 60, parent, nullptr, GetModuleHandleW(nullptr), &manager) : nullptr;
+    const DWORD child_error = GetLastError();
     parent_state.child = child;
+    // A null handle with no error code behind it says nothing about why, and
+    // the reason is usually the environment rather than this test: a session
+    // whose display driver failed to load refuses every window, registered
+    // class or built-in alike.
+    if (!parent || !other || !child) {
+        std::cerr << "CreateWindowExW: parent=" << parent
+                  << " (error " << parent_error << "), other=" << other
+                  << " (error " << other_error << "), child=" << child
+                  << " (error " << child_error << ")\n";
+    }
     CHECK(parent != nullptr);
     CHECK(other != nullptr);
     CHECK(child != nullptr);

@@ -69,6 +69,10 @@ jobs:
             cmake g++-mingw-w64-x86-64-posix \
             xvfb xauth fonts-liberation \
             winehq-stable=11.0.0.0~noble-1
+          # On the record, because "which wine did this job actually get" is
+          # the first question every failure below raises and a pin that
+          # silently resolved elsewhere would answer it wrongly.
+          wine --version
 
       - name: Cross-compile the retained DComp boundary
         run: |
