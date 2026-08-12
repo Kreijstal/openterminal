@@ -162,6 +162,19 @@ RUNTIME_CLASSES = [
 ]
 
 
+# Nobody is at this keyboard. Wine's addon installer asks for Wine Mono while
+# it creates a prefix whenever the build ships without it -- WineHQ's packages
+# do, Debian's patch the prompt out -- and with a display present that ask is a
+# modal window: wineboot then waits five minutes for a click, is torn down, and
+# reports "could not load kernel32.dll, status c0000135" with exit 53, naming
+# nothing that happened. Declining mscoree and mshtml costs this runtime
+# nothing, since it implements a XAML ABI and touches neither .NET nor MSHTML,
+# and it is what the headless boots were silently getting all along. winedbg
+# goes off for the reason phase4's scripts give: a crashed probe must report
+# rather than sit in a debugger.
+WINE_DLL_OVERRIDES = "winedbg.exe=d;mscoree,mshtml="
+
+
 def run(arguments: list[str], env: dict[str, str] | None = None) -> None:
     print("+ " + " ".join(arguments), flush=True)
     subprocess.run(arguments, check=True, env=env)
@@ -297,6 +310,8 @@ def main() -> None:
         environment = os.environ.copy()
         environment["WINEPREFIX"] = str(prefix)
         environment["WINEDEBUG"] = environment.get("WINEDEBUG", "-all,+winediag")
+        environment["WINEDLLOVERRIDES"] = environment.get(
+            "WINEDLLOVERRIDES", WINE_DLL_OVERRIDES)
         registry_file = root / "openxaml.reg"
         registry_file.write_text(registration(dll), encoding="utf-8")
         run(["wine", "regedit", str(registry_file)], env=environment)
@@ -523,6 +538,8 @@ def main() -> None:
     # nothing but null window handles to show for it -- the channel Wine
     # reserves for environment faults is exactly the one worth keeping.
     environment["WINEDEBUG"] = environment.get("WINEDEBUG", "-all,+winediag")
+    environment["WINEDLLOVERRIDES"] = environment.get(
+        "WINEDLLOVERRIDES", WINE_DLL_OVERRIDES)
     # A DLL has no corpus to find font metrics beside, so it is told where they
     # are. Absent metrics are not fatal: only the text cases need them, and
     # they say so individually when they measure.
