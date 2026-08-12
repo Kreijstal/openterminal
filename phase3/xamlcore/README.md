@@ -180,6 +180,14 @@ registers into a Wine prefix and measures — all under
 
 Needs `x86_64-w64-mingw32-g++` and `wine`. No Windows.
 
+Without a `DISPLAY` it re-execs itself once inside `xvfb-run`, so it also needs
+`xvfb-run` when headless. One X server has to cover the whole run: Wine fixes a
+session's display driver when the first process in it creates the desktop
+window, so a prefix booted or registered without a display gives every later
+process in that session the null driver, and the window probes then get NULL
+back from `CreateWindowEx` no matter what display they are handed. Pass
+`--no-xvfb` to keep the current environment as it is.
+
 ## How the ABI is bound
 
 Two things have to be exactly right, and neither is written by hand.
