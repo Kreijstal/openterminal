@@ -187,12 +187,29 @@ def fetch_sdk(root: Path) -> Path:
     destination = sdk_root / "extracted"
     include = destination / "c" / "Include" / pin["platform_version"]
     prefix = f"c/Include/{pin['platform_version']}/winrt/"
-    if not (include / "winrt" / "windows.ui.xaml.controls.h").is_file():
+    # One hosting header sdk.h consumes lives under um/ rather than winrt/.
+    # Dev machines never notice because current mingw-w64 ships its own copy,
+    # but the mingw-w64 11 on ubuntu-24.04 does not, so it comes from the
+    # pinned package like every other generated header -- with its IDL, the
+    # same way the winrt subset carries them.
+    um_members = tuple(
+        f"c/Include/{pin['platform_version']}/um/"
+        f"windows.ui.xaml.hosting.desktopwindowxamlsource{suffix}"
+        for suffix in (".h", ".idl"))
+    already_extracted = (
+        (include / "winrt" / "windows.ui.xaml.controls.h").is_file()
+        and all((destination / member).is_file() for member in um_members))
+    if not already_extracted:
         with zipfile.ZipFile(package) as archive:
             members = [name for name in archive.namelist()
-                       if name.startswith(prefix) and not name.endswith("/")]
+                       if ((name.startswith(prefix) or name in um_members)
+                           and not name.endswith("/"))]
             if not members:
                 raise SystemExit(f"the SDK package has no {prefix}")
+            missing_um = [name for name in um_members if name not in members]
+            if missing_um:
+                raise SystemExit(
+                    "the SDK package is missing " + ", ".join(missing_um))
             for member in sorted(members):
                 target = destination / member
                 # The archive is pinned by hash, but a path check costs
@@ -300,7 +317,10 @@ def main() -> None:
     render_gdi = PHASE3_DIR / "render" / "gdi"
     render_dcomp = PHASE3_DIR / "render" / "dcomp"
     core_src = PHASE3_DIR / "xamlcore" / "src"
-    includes = ["-I" + str(shadow / "winrt"), "-I" + str(layout_src),
+    # shadow/um holds only the hosting header fetch_sdk singles out, so it
+    # cannot shadow mingw-w64's own um headers the way a full um/ tree would.
+    includes = ["-I" + str(shadow / "winrt"), "-I" + str(shadow / "um"),
+                "-I" + str(layout_src),
                 "-I" + str(render_src), "-I" + str(render_gdi),
                 "-I" + str(render_dcomp),
                 "-I" + str(core_src), "-I" + str(generated)]
