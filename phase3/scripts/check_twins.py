@@ -99,8 +99,22 @@ def refuted_by(expected: dict[str, dict[str, Any]], case_id: str, twin_id: str,
     subject, twin = expected.get(case_id), expected.get(twin_id)
     if subject is None or twin is None:
         return []
-    if subject.get("error") or twin.get("error"):
+    subject_error, twin_error = subject.get("error"), twin.get("error")
+    if subject_error and twin_error:
+        # Two recorded failures agree about nothing, including about the
+        # pairing, so the pair stays an ordinary twin check.
         return []
+    if subject_error or twin_error:
+        # One half loaded and the other did not: in the recorded environment
+        # one of the halves is not a layout at all, which denies the pairing
+        # more loudly than any differing number could. The L5-theme pairs are
+        # the live case -- the probe host has no WinUI 2 dictionary, so the
+        # resolved half fails by name while the inline half measures.
+        # Demanding self-consistency here would demand resolving a key the
+        # recorded runtime could not.
+        which = "the resolved case" if subject_error else "the twin"
+        return [f"{which} did not load in the recorded environment: "
+                f"{subject_error or twin_error}"]
     return compare(subject, twin, tolerance)
 
 
