@@ -1,5 +1,8 @@
 import importlib.util
+import subprocess
+import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -96,6 +99,107 @@ class TerminalIntegrationResult(unittest.TestCase):
     def test_wine_paths_are_absolute_and_stable(self):
         self.assertEqual(integration.wine_path(Path("/tmp/a b/openxaml.dll")),
                          r"Z:\tmp\a b\openxaml.dll")
+
+
+REQUIRED_RUNTIME_DLLS = (
+    "libstdc++-6.dll", "libgcc_s_seh-1.dll", "libwinpthread-1.dll")
+
+
+class MinGWRuntimeFinder(unittest.TestCase):
+    """The finder must survive Debian's split posix-threads layout.
+
+    On ubuntu-24.04 with g++-mingw-w64-x86-64-posix no single directory
+    holds all three runtime DLLs: libstdc++-6.dll and libgcc_s_seh-1.dll
+    live in the GCC library directory while libwinpthread-1.dll ships with
+    the mingw-w64 sysroot. These tests run against fake trees with the
+    compiler mocked, so they need no MinGW installation.
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="mingw-finder-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.root))
+        self.triple = "x86_64-w64-mingw32"
+        self.compiler = self.root / "usr" / "bin" / f"{self.triple}-g++"
+        self.compiler.parent.mkdir(parents=True)
+        self.compiler.write_text("", encoding="utf-8")
+
+    def place(self, directory: Path, *names: str) -> Path:
+        directory.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (directory / name).write_bytes(b"MZ")
+        return directory
+
+    def locate(self, print_file_name_answers: dict[str, Path] | None = None):
+        answers = print_file_name_answers or {}
+
+        def fake_run(command, capture_output, text, check):
+            self.assertEqual(command[0], str(self.compiler))
+            argument = command[1]
+            if argument == "-dumpmachine":
+                output = self.triple
+            elif argument.startswith("-print-file-name="):
+                name = argument.split("=", 1)[1]
+                output = str(answers.get(name, name))
+            else:
+                self.fail(f"unexpected compiler invocation: {command}")
+            return subprocess.CompletedProcess(command, 0, f"{output}\n", "")
+
+        with unittest.mock.patch.object(
+                integration, "require_tool", return_value=str(self.compiler)), \
+                unittest.mock.patch.object(
+                    integration.subprocess, "run", side_effect=fake_run):
+            return integration.find_mingw_runtime()
+
+    def test_one_directory_with_all_dlls_stays_a_single_answer(self):
+        bindir = self.place(self.root / "usr" / self.triple / "bin",
+                            *REQUIRED_RUNTIME_DLLS)
+        runtime = self.locate()
+        self.assertEqual(runtime, [bindir.resolve()])
+
+    def test_split_layout_returns_every_covering_directory_in_order(self):
+        gcc_libdir = self.place(
+            self.root / "usr" / "lib" / "gcc" / self.triple / "13-posix",
+            "libstdc++-6.dll", "libgcc_s_seh-1.dll")
+        sysroot_lib = self.place(self.root / "usr" / self.triple / "lib",
+                                 "libwinpthread-1.dll")
+        runtime = self.locate({
+            "libstdc++-6.dll": gcc_libdir / "libstdc++-6.dll",
+            "libgcc_s_seh-1.dll": gcc_libdir / "libgcc_s_seh-1.dll",
+            "libwinpthread-1.dll": sysroot_lib / "libwinpthread-1.dll",
+        })
+        self.assertEqual(runtime, [gcc_libdir.resolve(), sysroot_lib.resolve()])
+
+    def test_split_layout_is_found_without_compiler_answers(self):
+        # A compiler whose -print-file-name only resolves what sits in its
+        # own library directory: the sysroot fallback must still cover
+        # libwinpthread-1.dll.
+        gcc_libdir = self.place(
+            self.root / "usr" / "lib" / "gcc" / self.triple / "13-posix",
+            "libstdc++-6.dll", "libgcc_s_seh-1.dll")
+        sysroot_lib = self.place(self.root / "usr" / self.triple / "lib",
+                                 "libwinpthread-1.dll")
+        runtime = self.locate({
+            "libstdc++-6.dll": gcc_libdir / "libstdc++-6.dll",
+            "libgcc_s_seh-1.dll": gcc_libdir / "libgcc_s_seh-1.dll",
+        })
+        self.assertEqual(runtime, [gcc_libdir.resolve(), sysroot_lib.resolve()])
+
+    def test_missing_dll_is_refused_by_name(self):
+        self.place(self.root / "usr" / self.triple / "bin",
+                   "libstdc++-6.dll", "libgcc_s_seh-1.dll")
+        with self.assertRaises(SystemExit) as refusal:
+            self.locate()
+        self.assertIn("libwinpthread-1.dll", str(refusal.exception))
+        self.assertNotIn("libstdc++-6.dll", str(refusal.exception))
+
+    def test_wine_search_path_joins_directories_with_semicolons(self):
+        joined = integration.wine_search_path(
+            [Path("/tmp/gcc libdir"), Path("/tmp/sysroot/lib")])
+        self.assertEqual(joined, r"Z:\tmp\gcc libdir;Z:\tmp\sysroot\lib")
+
+    def test_wine_search_path_of_one_directory_has_no_separator(self):
+        self.assertEqual(integration.wine_search_path([Path("/tmp/runtime")]),
+                         r"Z:\tmp\runtime")
 
 
 if __name__ == "__main__":

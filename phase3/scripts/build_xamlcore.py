@@ -163,6 +163,19 @@ RUNTIME_CLASSES = [
 ]
 
 
+# Nobody is at this keyboard. Wine's addon installer asks for Wine Mono while
+# it creates a prefix whenever the build ships without it -- WineHQ's packages
+# do, Debian's patch the prompt out -- and with a display present that ask is a
+# modal window: wineboot then waits five minutes for a click, is torn down, and
+# reports "could not load kernel32.dll, status c0000135" with exit 53, naming
+# nothing that happened. Declining mscoree and mshtml costs this runtime
+# nothing, since it implements a XAML ABI and touches neither .NET nor MSHTML,
+# and it is what the headless boots were silently getting all along. winedbg
+# goes off for the reason phase4's scripts give: a crashed probe must report
+# rather than sit in a debugger.
+WINE_DLL_OVERRIDES = "winedbg.exe=d;mscoree,mshtml="
+
+
 def run(arguments: list[str], env: dict[str, str] | None = None) -> None:
     print("+ " + " ".join(arguments), flush=True)
     subprocess.run(arguments, check=True, env=env)
@@ -188,12 +201,29 @@ def fetch_sdk(root: Path) -> Path:
     destination = sdk_root / "extracted"
     include = destination / "c" / "Include" / pin["platform_version"]
     prefix = f"c/Include/{pin['platform_version']}/winrt/"
-    if not (include / "winrt" / "windows.ui.xaml.controls.h").is_file():
+    # One hosting header sdk.h consumes lives under um/ rather than winrt/.
+    # Dev machines never notice because current mingw-w64 ships its own copy,
+    # but the mingw-w64 11 on ubuntu-24.04 does not, so it comes from the
+    # pinned package like every other generated header -- with its IDL, the
+    # same way the winrt subset carries them.
+    um_members = tuple(
+        f"c/Include/{pin['platform_version']}/um/"
+        f"windows.ui.xaml.hosting.desktopwindowxamlsource{suffix}"
+        for suffix in (".h", ".idl"))
+    already_extracted = (
+        (include / "winrt" / "windows.ui.xaml.controls.h").is_file()
+        and all((destination / member).is_file() for member in um_members))
+    if not already_extracted:
         with zipfile.ZipFile(package) as archive:
             members = [name for name in archive.namelist()
-                       if name.startswith(prefix) and not name.endswith("/")]
+                       if ((name.startswith(prefix) or name in um_members)
+                           and not name.endswith("/"))]
             if not members:
                 raise SystemExit(f"the SDK package has no {prefix}")
+            missing_um = [name for name in um_members if name not in members]
+            if missing_um:
+                raise SystemExit(
+                    "the SDK package is missing " + ", ".join(missing_um))
             for member in sorted(members):
                 target = destination / member
                 # The archive is pinned by hash, but a path check costs
@@ -248,7 +278,24 @@ def main() -> None:
                         help="register an already-built openxaml.dll")
     parser.add_argument("--fonts", type=Path, default=PHASE3_DIR / "xaml-db" / "fonts",
                         help="harvested font metrics; the DLL reads them from here")
+    parser.add_argument("--no-xvfb", action="store_true",
+                        help="do not re-exec inside Xvfb even without a DISPLAY")
     args = parser.parse_args()
+
+    # One X server must cover prefix initialization, registration and every
+    # probe, the way run_terminal_integration.py already does it. Wine decides
+    # a session's display driver once, when the first process in it creates the
+    # desktop window, and every later process in that same wineserver session
+    # inherits that decision: a prefix booted and registered without a DISPLAY
+    # gets the null driver, and then CreateWindowEx returns NULL in the window
+    # probes even though xvfb-run handed them a display of their own. Re-exec
+    # the whole command once inside Xvfb instead of wrapping single probes.
+    if not args.no_xvfb and not os.environ.get("DISPLAY"):
+        require_tool("xvfb-run")
+        raise SystemExit(subprocess.run(
+            ["xvfb-run", "--auto-servernum", sys.executable, "-B",
+             str(Path(__file__).resolve()), *sys.argv[1:], "--no-xvfb"],
+            check=False).returncode)
 
     for tool in ("x86_64-w64-mingw32-g++", "wine"):
         require_tool(tool)
@@ -263,7 +310,9 @@ def main() -> None:
             raise SystemExit(f"no DLL to register at {dll}")
         environment = os.environ.copy()
         environment["WINEPREFIX"] = str(prefix)
-        environment["WINEDEBUG"] = environment.get("WINEDEBUG", "-all")
+        environment["WINEDEBUG"] = environment.get("WINEDEBUG", "-all,+winediag")
+        environment["WINEDLLOVERRIDES"] = environment.get(
+            "WINEDLLOVERRIDES", WINE_DLL_OVERRIDES)
         registry_file = root / "openxaml.reg"
         registry_file.write_text(registration(dll), encoding="utf-8")
         run(["wine", "regedit", str(registry_file)], env=environment)
@@ -301,7 +350,10 @@ def main() -> None:
     render_gdi = PHASE3_DIR / "render" / "gdi"
     render_dcomp = PHASE3_DIR / "render" / "dcomp"
     core_src = PHASE3_DIR / "xamlcore" / "src"
-    includes = ["-I" + str(shadow / "winrt"), "-I" + str(layout_src),
+    # shadow/um holds only the hosting header fetch_sdk singles out, so it
+    # cannot shadow mingw-w64's own um headers the way a full um/ tree would.
+    includes = ["-I" + str(shadow / "winrt"), "-I" + str(shadow / "um"),
+                "-I" + str(layout_src),
                 "-I" + str(render_src), "-I" + str(render_gdi),
                 "-I" + str(render_dcomp),
                 "-I" + str(core_src), "-I" + str(generated)]
@@ -482,7 +534,13 @@ def main() -> None:
 
     environment = os.environ.copy()
     environment["WINEPREFIX"] = str(prefix)
-    environment["WINEDEBUG"] = environment.get("WINEDEBUG", "-all")
+    # winediag stays on. A plain -all silenced "Application tried to create a
+    # window, but no driver could be loaded", and the probes then failed with
+    # nothing but null window handles to show for it -- the channel Wine
+    # reserves for environment faults is exactly the one worth keeping.
+    environment["WINEDEBUG"] = environment.get("WINEDEBUG", "-all,+winediag")
+    environment["WINEDLLOVERRIDES"] = environment.get(
+        "WINEDLLOVERRIDES", WINE_DLL_OVERRIDES)
     # A DLL has no corpus to find font metrics beside, so it is told where they
     # are. Absent metrics are not fatal: only the text cases need them, and
     # they say so individually when they measure.
@@ -497,56 +555,29 @@ def main() -> None:
     registry_file.write_text(registration(dll), encoding="utf-8")
     run(["wine", "regedit", str(registry_file)], env=environment)
     run(["wine", str(wave34_smoke)], env=environment)
-    input_command = ["wine", str(island_input_smoke)]
-    keyboard_command = ["wine", str(keyboard_input_smoke)]
-    pointer_command = ["wine", str(pointer_input_smoke)]
-    pointer_routing_command = ["wine", str(pointer_routing_test)]
-    tap_command = ["wine", str(tap_input_smoke)]
-    tap_routing_command = ["wine", str(tap_routing_test)]
-    dispatcher_command = ["wine", str(core_dispatcher_test)]
-    resource_catalog_command = ["wine", str(resource_catalog_test)]
-    core_window_command = ["wine", str(core_window_test)]
-    mux_bitmap_icon_command = ["wine", str(mux_bitmap_icon_test)]
-    tab_view_selection_command = ["wine", str(tab_view_selection_smoke)]
-    external_surface_command = ["wine", str(external_surface_test)]
-    focus_command = ["wine", str(focus_smoke)]
-    scrollbar_range_command = ["wine", str(scrollbar_range_smoke)]
-    island_command = ["wine", str(island_render_smoke)]
-    if not environment.get("DISPLAY"):
-        require_tool("xvfb-run")
-        input_command = ["xvfb-run", "-a"] + input_command
-        keyboard_command = ["xvfb-run", "-a"] + keyboard_command
-        pointer_command = ["xvfb-run", "-a"] + pointer_command
-        pointer_routing_command = ["xvfb-run", "-a"] + pointer_routing_command
-        tap_command = ["xvfb-run", "-a"] + tap_command
-        tap_routing_command = ["xvfb-run", "-a"] + tap_routing_command
-        dispatcher_command = ["xvfb-run", "-a"] + dispatcher_command
-        resource_catalog_command = ["xvfb-run", "-a"] + resource_catalog_command
-        core_window_command = ["xvfb-run", "-a"] + core_window_command
-        mux_bitmap_icon_command = ["xvfb-run", "-a"] + mux_bitmap_icon_command
-        tab_view_selection_command = ["xvfb-run", "-a"] + tab_view_selection_command
-        focus_command = ["xvfb-run", "-a"] + focus_command
-        island_command = ["xvfb-run", "-a"] + island_command
-    run(input_command, env=environment)
-    run(keyboard_command, env=environment)
-    run(pointer_command, env=environment)
-    run(pointer_routing_command, env=environment)
-    run(tap_command, env=environment)
-    run(tap_routing_command, env=environment)
-    run(dispatcher_command, env=environment)
-    run(resource_catalog_command, env=environment)
+    # The window probes need a display; they get it from the one Xvfb this
+    # command re-execed itself into, which the prefix was also booted and
+    # registered under, so they share the session's x11 driver.
+    run(["wine", str(island_input_smoke)], env=environment)
+    run(["wine", str(keyboard_input_smoke)], env=environment)
+    run(["wine", str(pointer_input_smoke)], env=environment)
+    run(["wine", str(pointer_routing_test)], env=environment)
+    run(["wine", str(tap_input_smoke)], env=environment)
+    run(["wine", str(tap_routing_test)], env=environment)
+    run(["wine", str(core_dispatcher_test)], env=environment)
+    run(["wine", str(resource_catalog_test)], env=environment)
     # Also after registration: it asks RoGetActivationFactory for
     # Windows.UI.Core.CoreWindow, and an unregistered prefix answers with
     # whatever else claims that class.
-    run(core_window_command, env=environment)
+    run(["wine", str(core_window_test)], env=environment)
     # This probe asks RoGetActivationFactory for the MUX factory and therefore
     # must run only after openxaml.dll has been registered in this prefix.
-    run(mux_bitmap_icon_command, env=environment)
-    run(tab_view_selection_command, env=environment)
-    run(external_surface_command, env=environment)
-    run(focus_command, env=environment)
-    run(scrollbar_range_command, env=environment)
-    run(island_command, env=environment)
+    run(["wine", str(mux_bitmap_icon_test)], env=environment)
+    run(["wine", str(tab_view_selection_smoke)], env=environment)
+    run(["wine", str(external_surface_test)], env=environment)
+    run(["wine", str(focus_smoke)], env=environment)
+    run(["wine", str(scrollbar_range_smoke)], env=environment)
+    run(["wine", str(island_render_smoke)], env=environment)
 
     if args.skip_run:
         print(f"built and registered {dll}")

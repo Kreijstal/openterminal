@@ -22,13 +22,16 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from install_deployment_fonts import install as install_deployment_fonts  # noqa: E402
+from run_terminal_integration import (  # noqa: E402
+    find_mingw_runtime,
+    wine_search_path,
+)
 
 MISSING_CLASS = re.compile(
     r"RoGetActivationFactory Failed to find library for L\"([^\"]+)\"")
@@ -42,24 +45,6 @@ ACCESS_VIOLATION = re.compile(r"(?:Unhandled exception|Exception)\s+0xc0000005",
 NO_DRIVER = "nodrv_CreateWindow"
 
 
-def find_mingw_runtime() -> Path:
-    for candidate in (
-        Path("/usr/x86_64-w64-mingw32/bin"),
-        Path("/usr/lib/gcc/x86_64-w64-mingw32"),
-    ):
-        if (candidate / "libstdc++-6.dll").exists():
-            return candidate
-    located = shutil.which("x86_64-w64-mingw32-g++")
-    if located:
-        probe = subprocess.run(
-            ["x86_64-w64-mingw32-g++", "-print-file-name=libstdc++-6.dll"],
-            capture_output=True, text=True, check=False)
-        path = Path(probe.stdout.strip())
-        if path.is_file():
-            return path.parent
-    raise SystemExit("no mingw-w64 runtime DLLs found; install the toolchain")
-
-
 def run(executable: Path, prefix: Path, timeout: int, use_xvfb: bool) -> dict:
     environment = dict(os.environ)
     environment["WINEPREFIX"] = str(prefix)
@@ -67,7 +52,7 @@ def run(executable: Path, prefix: Path, timeout: int, use_xvfb: bool) -> dict:
     environment["OPENXAML_TRACE_QI"] = "1"
     environment["WINEDLLOVERRIDES"] = "winedbg.exe=d"
     runtime = find_mingw_runtime()
-    environment["WINEPATH"] = "Z:" + str(runtime).replace("/", "\\")
+    environment["WINEPATH"] = wine_search_path(runtime)
 
     install_deployment_fonts(executable.parent, prefix, environment)
 

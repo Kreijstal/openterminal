@@ -44,12 +44,35 @@ jobs:
           python-version: '3.12'
 
       - name: Install MinGW and Wine
+        # WineHQ's build, not Ubuntu's, for two reasons this job proved the
+        # hard way. Ubuntu ships wine 9.0, whose wintypes.dll has no
+        # Windows.Foundation.PropertyValue -- the platform boxing seam
+        # properties.h delegates to by design -- so the ABI smokes cannot
+        # pass on it. And the Ubuntu repack links wine's PE user32 against
+        # an external zlib1.dll from /usr/x86_64-w64-mingw32/lib, the very
+        # directory the runtime finder has to put on WINEPATH for
+        # libwinpthread: the prefix's 32-bit side then resolved that import
+        # to the 64-bit file (c000007b) and wineboot died as "could not
+        # load kernel32.dll, status c0000135", exit 53. WineHQ bundles its
+        # PE dependencies and self-registers PropertyValue. Pinned like the
+        # other upstreams; the metapackage pins wine-stable-* to the same
+        # version by exact dependency.
         run: |
           sudo dpkg --add-architecture i386
+          sudo mkdir -pm755 /etc/apt/keyrings
+          sudo wget -O /etc/apt/keyrings/winehq-archive.key \
+            https://dl.winehq.org/wine-builds/winehq.key
+          sudo wget -NP /etc/apt/sources.list.d/ \
+            https://dl.winehq.org/wine-builds/ubuntu/dists/noble/winehq-noble.sources
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake g++-mingw-w64-x86-64-posix wine wine64 wine32:i386 \
-            xvfb xauth fonts-liberation
+            cmake g++-mingw-w64-x86-64-posix \
+            xvfb xauth fonts-liberation \
+            winehq-stable=11.0.0.0~noble-1
+          # On the record, because "which wine did this job actually get" is
+          # the first question every failure below raises and a pin that
+          # silently resolved elsewhere would answer it wrongly.
+          wine --version
 
       - name: Cross-compile the retained DComp boundary
         run: |
@@ -65,18 +88,27 @@ jobs:
           WINEARCH: win64
           WINEDEBUG: -all
         run: |
-          export WINEPATH="$(python3 -B -c \
+          # The assignment is its own command so a finder refusal stops the
+          # step here, named, instead of letting wine fail later with an
+          # empty WINEPATH pointing away from the cause.
+          WINEPATH="$(python3 -B -c \
             "import sys; sys.path.insert(0, 'phase4/scripts'); \
-             import run_terminal_integration as i; print(i.find_mingw_runtime())")"
+             import run_terminal_integration as i; \
+             print(i.wine_search_path(i.find_mingw_runtime()))")"
+          export WINEPATH
           wineboot -u
           wine "$RUNNER_TEMP/render-mingw/dcomp_scene_backend_tests.exe"
 
       - name: Build and run the OpenXaml ABI smokes
+        # build_xamlcore's ensure_tmp_root refuses any build root outside
+        # /tmp -- that refusal is the binaries-stay-in-temp rule, so the
+        # workflow moves rather than the gate. RUNNER_TEMP is
+        # /home/runner/work/_temp on this runner, which is not /tmp.
         run: |
           python3 -B phase3/scripts/prepare_runtime_fonts.py \
             --output-root "$RUNNER_TEMP/runtime-fonts" --path-style wine
           python3 -B phase3/scripts/build_xamlcore.py \
-            --root "$RUNNER_TEMP/xamlcore" --skip-run
+            --root /tmp/xamlcore --skip-run
 
       - name: Check the artifact-coupled launch contract
         run: python3 -B -m unittest phase4.tests.test_terminal_integration -v
