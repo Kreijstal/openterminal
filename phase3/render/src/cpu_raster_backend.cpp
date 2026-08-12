@@ -462,6 +462,16 @@ private:
                   "text was present but no text rasterizer was supplied");
             return;
         }
+        if (!text_rasterizer_->Covers(text)) {
+            // The same issue a frame with no rasterizer reports, because for
+            // this family that is the truth: the installed glyph source
+            // recorded other families, and this one is exactly as unpaintable
+            // as it always was.
+            Issue(RenderIssueCode::MissingTextRasterizer, node, index,
+                  "text was present but the supplied rasterizer has no glyph source "
+                  "for font family \"" + text.font_family + "\"");
+            return;
+        }
 
         const Rect bounds =
             Translate(text.bounds, transform_to_root.dx, transform_to_root.dy);

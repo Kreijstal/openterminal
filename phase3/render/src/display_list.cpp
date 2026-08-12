@@ -461,6 +461,7 @@ struct Walker {
                     local.wrap = op.wrap;
                     local.bold = op.bold;
                     local.language = op.language;
+                    local.path = op.path;
                     content->commands.push_back(std::move(local));
                 }
             }

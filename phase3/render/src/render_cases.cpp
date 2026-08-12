@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -28,6 +29,8 @@
 #include "case_runner.h"
 #include "default_styles.h"
 #include "fonts.h"
+#include "glyph_outline_rasterizer.h"
+#include "glyph_outlines.h"
 #include "json.h"
 #include "markup.h"
 #include "resources.h"
@@ -53,15 +56,32 @@ void Write(const fs::path& path, const std::string& content) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::cerr << "usage: render_cases <cases-dir> <out-dir> [fonts-dir] [theme-resources]\n";
+    std::vector<std::string> positional;
+    std::string glyph_outlines;
+    for (int index = 1; index < argc; ++index) {
+        const std::string argument = argv[index];
+        if (argument == "--glyph-outlines") {
+            if (index + 1 >= argc) {
+                std::cerr << "--glyph-outlines needs a directory\n";
+                return 2;
+            }
+            glyph_outlines = argv[++index];
+            continue;
+        }
+        positional.push_back(argument);
+    }
+    if (positional.size() < 2) {
+        std::cerr << "usage: render_cases <cases-dir> <out-dir> [fonts-dir]"
+                     " [theme-resources] [--glyph-outlines <dir>]\n";
         return 2;
     }
-    const fs::path cases = argv[1];
-    const fs::path out_dir = argv[2];
-    const fs::path fonts = argc >= 4 ? fs::path(argv[3]) : cases.parent_path() / "fonts";
+    const fs::path cases = positional[0];
+    const fs::path out_dir = positional[1];
+    const fs::path fonts =
+        positional.size() >= 3 ? fs::path(positional[2]) : cases.parent_path() / "fonts";
     const fs::path theme_resources =
-        argc >= 5 ? fs::path(argv[4]) : cases.parent_path() / "theme-resources";
+        positional.size() >= 4 ? fs::path(positional[3])
+                               : cases.parent_path() / "theme-resources";
 
     if (!fs::exists(cases)) {
         std::cerr << "no such directory: " << cases.string() << "\n";
@@ -112,6 +132,29 @@ int main(int argc, char** argv) {
         return 4;
     }
 
+    // Recorded glyph outlines, when a run produced them. This is what lets the
+    // native, Wine-free pass paint text at all: the shapes were recorded off
+    // the platform once, and the positions were always the layout's. Families
+    // the recording does not carry keep their honest missing-text-rasterizer
+    // refusal -- the backend covers exactly what was recorded.
+    std::unique_ptr<RecordedOutlineTextBackend> outline_backend;
+    if (!glyph_outlines.empty()) {
+        try {
+            const int outline_families = LoadGlyphOutlineDirectory(
+                GlyphOutlineLibrary::Default(), glyph_outlines);
+            std::cerr << "glyph outlines loaded: " << outline_families
+                      << " famil(ies) from " << glyph_outlines << "\n";
+            if (outline_families > 0) {
+                outline_backend = std::make_unique<RecordedOutlineTextBackend>(
+                    GlyphOutlineLibrary::Default());
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "cannot load glyph outlines from " << glyph_outlines << ": "
+                      << e.what() << "\n";
+            return 4;
+        }
+    }
+
     fs::create_directories(out_dir);
     fs::create_directories(out_dir / "trees");
 
@@ -131,11 +174,12 @@ int main(int argc, char** argv) {
             Write(out_dir / (result.id + ".json"), out.str());
             continue;
         }
-        Surface surface = PaintCase(result, nullptr);
+        Surface surface = PaintCase(result, outline_backend.get());
         Write(out_dir / (result.id + ".ppm"), ToPpm(surface));
         Write(out_dir / (result.id + ".json"), SidecarJson(result, surface, "software"));
         Write(out_dir / "trees" / (result.id + ".json"), result.tree_json);
-        if (result.list.refusals.empty())
+        if (result.list.refusals.empty() && result.text_failures.empty() &&
+            result.render_issues.empty())
             ++painted;
         else
             ++refused;

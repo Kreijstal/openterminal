@@ -141,8 +141,13 @@ const char* RenderIssueName(RenderIssueCode code) {
 
 class TextBackendAdapter final : public TextRasterizer {
 public:
-    TextBackendAdapter(TextBackend& backend, std::vector<std::string>& failures)
-        : backend_(backend), failures_(failures) {}
+    TextBackendAdapter(TextBackend& backend, std::vector<std::string>& failures,
+                       std::map<std::string, std::string>* run_painters = nullptr)
+        : backend_(backend), failures_(failures), run_painters_(run_painters) {}
+
+    bool Covers(const LocalText& text) const override {
+        return backend_.CoversFamily(text.font_family);
+    }
 
     bool DrawText(const TextRasterRequest& request, Surface& surface,
                   std::string& message) override {
@@ -158,14 +163,23 @@ public:
         run.wrap = request.text.wrap;
         run.bold = request.text.bold;
         run.language = request.text.language;
+        run.path = request.text.path;
+        const std::string path = run.path;
 
         const std::size_t failure_count = failures_.size();
         // A retained LocalText owns its authored Foreground. The legacy probe
         // marker is already made explicit when Build creates that command for
         // an undeclared Foreground; it must not replace an authored color here.
+        std::vector<std::string> painters;
         backend_.DrawRuns(surface, std::vector<TextOp>{std::move(run)},
-                          request.text.color, failures_);
-        if (failures_.size() == failure_count) return true;
+                          request.text.color, failures_, &painters);
+        if (failures_.size() == failure_count) {
+            if (run_painters_ && !painters.empty() && !painters.front().empty() &&
+                !path.empty()) {
+                (*run_painters_)[path] = painters.front();
+            }
+            return true;
+        }
         message = failures_.back();
         return false;
     }
@@ -173,6 +187,7 @@ public:
 private:
     TextBackend& backend_;
     std::vector<std::string>& failures_;
+    std::map<std::string, std::string>* run_painters_;
 };
 
 }  // namespace
@@ -224,9 +239,11 @@ CaseResult LayOutCase(const std::string& case_json) {
 Surface RasterizeDisplayList(const DisplayList& list, TextBackend* backend, Color clear,
                              Color /*legacy_text_ink*/, std::vector<std::string>& text_failures,
                              std::vector<RenderIssue>& render_issues,
-                             ExternalSurfaceReader* external_reader) {
+                             ExternalSurfaceReader* external_reader,
+                             std::map<std::string, std::string>* run_painters) {
     text_failures.clear();
     render_issues.clear();
+    if (run_painters) run_painters->clear();
     if (!list.scene) {
         const PixelRect box =
             SnapRect(Rect{0.0, 0.0, list.surface.width, list.surface.height});
@@ -239,7 +256,8 @@ Surface RasterizeDisplayList(const DisplayList& list, TextBackend* backend, Colo
     CpuRasterBackend rasterizer;
     std::unique_ptr<TextBackendAdapter> text_adapter;
     if (backend) {
-        text_adapter = std::make_unique<TextBackendAdapter>(*backend, text_failures);
+        text_adapter = std::make_unique<TextBackendAdapter>(*backend, text_failures,
+                                                            run_painters);
     }
     RasterResult rendered =
         rasterizer.Render(*list.scene, clear, text_adapter.get(), external_reader);
@@ -249,7 +267,8 @@ Surface RasterizeDisplayList(const DisplayList& list, TextBackend* backend, Colo
 
 Surface PaintCase(CaseResult& result, TextBackend* backend, Color clear) {
     return RasterizeDisplayList(result.list, backend, clear, ProbeInkColor(),
-                                result.text_failures, result.render_issues);
+                                result.text_failures, result.render_issues,
+                                nullptr, &result.run_painters);
 }
 
 std::string SidecarJson(const CaseResult& result, const Surface& surface,
@@ -327,7 +346,16 @@ std::string SidecarJson(const CaseResult& result, const Surface& surface,
             if (j) out << ", ";
             out << TextNumber(op.advances[j]);
         }
-        out << "]}" << (i + 1 < result.list.texts.size() ? ",\n" : "\n");
+        out << "], \"painter\": ";
+        // Which painter drew this run's ink, or null when nothing did. The
+        // distinction is load-bearing for any comparison against native
+        // pixels: recorded-outline coverage is grayscale, not ClearType.
+        const auto painter = result.run_painters.find(op.path);
+        if (painter == result.run_painters.end())
+            out << "null";
+        else
+            out << "\"" << JsonEscape(painter->second) << "\"";
+        out << "}" << (i + 1 < result.list.texts.size() ? ",\n" : "\n");
     }
     out << " ],\n";
 

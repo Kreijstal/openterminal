@@ -83,12 +83,16 @@ void PaintInto(DibTarget& target, const DisplayList& list, Color ink,
 void Paint(HDC destination, int x, int y, const DisplayList& list, Color ink,
            std::vector<std::string>& failures);
 
-// The text backend the shared harness drives.
+// The text backend the shared harness drives. Per run, the painter is chosen
+// in the order the glyph-outline plan fixes: recorded outlines first when the
+// run's family has them in GlyphOutlineLibrary::Default(), DirectWrite when it
+// does not, and a named refusal when neither can paint.
 class GdiTextBackend : public TextBackend {
 public:
     explicit GdiTextBackend(DibTarget& target) : target_(target) {}
     void DrawRuns(Surface& surface, const std::vector<TextOp>& runs, Color ink,
-                  std::vector<std::string>& failures) override;
+                  std::vector<std::string>& failures,
+                  std::vector<std::string>* painters = nullptr) override;
     std::string name() const override { return "directwrite"; }
 
 private:

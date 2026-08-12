@@ -10,6 +10,7 @@
 #ifndef OPENXAML_RENDER_CASE_RUNNER_H
 #define OPENXAML_RENDER_CASE_RUNNER_H
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -29,8 +30,23 @@ public:
     // could not be drawn -- a font the backend has not got, most likely -- so
     // that the case can be refused by name instead of silently missing its
     // text.
+    //
+    // `painters`, when supplied, receives one entry per run naming which
+    // painter drew it ("recorded-outlines", "directwrite-cleartype"), or the
+    // empty string for a run that failed. The name travels into the sidecar so
+    // that ink whose provenance matters -- grayscale outline coverage is not
+    // ClearType -- is never compared against native pixels silently.
     virtual void DrawRuns(Surface& surface, const std::vector<TextOp>& runs, Color ink,
-                          std::vector<std::string>& failures) = 0;
+                          std::vector<std::string>& failures,
+                          std::vector<std::string>* painters = nullptr) = 0;
+    // Whether this backend has a glyph source for the family at all. False is
+    // how the CPU traversal keeps the honest missing-text-rasterizer refusal
+    // for a family nothing recorded, instead of reporting a draw failure from
+    // a backend that never had a chance.
+    virtual bool CoversFamily(const std::string& family) const {
+        (void)family;
+        return true;
+    }
     virtual std::string name() const = 0;
 };
 
@@ -49,6 +65,10 @@ struct CaseResult {
     // Backend failures are structured and never inferred from absent pixels.
     // Refusals above describe scene construction; these describe replay.
     std::vector<RenderIssue> render_issues;
+    // Which painter drew each run, keyed by the run's element path. A run that
+    // was refused, or never reached a backend at all, has no entry; the
+    // sidecar spells that as null.
+    std::map<std::string, std::string> run_painters;
     bool has_surface = false;
 };
 
@@ -62,10 +82,13 @@ CaseResult LayOutCase(const std::string& case_json);
 // `external_reader` imports producer-owned content -- a SwapChainPanel's swap
 // chain or composition surface. The corpus harnesses pass none, because a
 // corpus case has no producer; a live island passes the one its host bound.
+// `run_painters`, when supplied, collects which painter drew each successful
+// run, keyed by the run's element path; see TextBackend::DrawRuns.
 Surface RasterizeDisplayList(const DisplayList& list, TextBackend* backend, Color clear,
                              Color text_ink, std::vector<std::string>& text_failures,
                              std::vector<RenderIssue>& render_issues,
-                             ExternalSurfaceReader* external_reader = nullptr);
+                             ExternalSurfaceReader* external_reader = nullptr,
+                             std::map<std::string, std::string>* run_painters = nullptr);
 
 // Paints a laid-out case. `backend` may be null, in which case the text runs
 // are recorded in the dump's sidecar and no ink is drawn. The ordinary
@@ -82,10 +105,14 @@ Surface PaintCase(CaseResult& result, TextBackend* backend,
 //   1  the original: slot, actual, abs, clip, z-index.
 //   2  adds the parent-local visual origin and the margin, alignments and
 //      rounding a checker re-derives it from.
+//   3  adds a per-run "painter" naming which glyph painter drew each text run,
+//      or null for a run that refused or never reached a backend. Grayscale
+//      recorded-outline coverage is not ClearType, and a comparison against
+//      native ink must be able to see the difference by name.
 //
 // Kept in step with check_render.REQUIRED_SIDECAR_SCHEMA and with
 // build_render.SIDECAR_SCHEMA, which records it in the dump root's provenance.
-inline constexpr int kSidecarSchemaVersion = 2;
+inline constexpr int kSidecarSchemaVersion = 3;
 
 // The sidecar a checker reads: the verified geometry, the rectangles that were
 // painted, the text runs, and every named no-draw.
