@@ -121,6 +121,7 @@ def record(
     fonts: Path | None,
     theme_resources: Path | None,
     sidecar_schema: int,
+    glyph_outlines: Path | None = None,
 ) -> dict[str, Any]:
     """Builds the record. Pure, so a test can compute one without writing dumps."""
     cases = Path(cases)
@@ -137,6 +138,15 @@ def record(
             str(Path(theme_resources).resolve()) if theme_resources else None
         ),
         "theme_resources_digest": tree_digest(theme_resources) if theme_resources else None,
+        # Recorded but, like the fonts, not verified against the sources: the
+        # outlines are a fetched artifact. What the identity buys is the pin --
+        # the Wine gate reads this path back and holds every run in an
+        # outline-backed family to painting or a named refusal, so a dump root
+        # painted with the artifact cannot be re-checked without it.
+        "glyph_outlines_path": (
+            str(Path(glyph_outlines).resolve()) if glyph_outlines else None
+        ),
+        "glyph_outlines_digest": tree_digest(glyph_outlines) if glyph_outlines else None,
         "repository_head": _git_head(repository),
     }
 

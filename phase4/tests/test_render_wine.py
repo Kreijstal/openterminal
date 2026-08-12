@@ -40,7 +40,7 @@ sys.path.insert(0, str(REPOSITORY / "phase3" / "scripts"))
 import render_provenance  # noqa: E402
 
 PHASE3 = REPOSITORY / "phase3"
-SIDECAR_SCHEMA = 2
+SIDECAR_SCHEMA = 3
 
 
 def provenance_problems() -> list[str]:
@@ -87,10 +87,24 @@ class WineRenderGate(unittest.TestCase):
             problems, [],
             "refusing to round-trip stale dumps:\n  " + "\n  ".join(problems))
         report = ROOT / "gdi-render-report.json"
-        completed = subprocess.run(
-            [sys.executable, "-B", str(CHECKER), "--dumps", str(DUMPS),
-             "--output", str(report)],
-            capture_output=True, text=True, check=False)
+        arguments = [sys.executable, "-B", str(CHECKER), "--dumps", str(DUMPS),
+                     "--output", str(report)]
+        # When the dumps were painted with recorded glyph outlines, the checker
+        # must see the same directory, so its artifact-present-family pin holds
+        # every outline-backed run to painting or a named refusal. A recorded
+        # directory that is gone is a failure, not a quiet unpinned pass: the
+        # pin is the difference between the flip being enforced and observed.
+        recorded = render_provenance.read(DUMPS)
+        outlines = recorded.get("glyph_outlines_path")
+        if outlines is not None:
+            self.assertTrue(
+                Path(outlines).is_dir(),
+                f"these dumps were painted from recorded outlines at {outlines}, "
+                "which no longer exists; the outline pin cannot be checked, so the "
+                "round trip must not be believed -- re-fetch the artifact or "
+                "regenerate the dumps")
+            arguments += ["--glyph-outlines", outlines]
+        completed = subprocess.run(arguments, capture_output=True, text=True, check=False)
         self.assertTrue(report.is_file(), completed.stdout + completed.stderr)
         numbers = json.loads(report.read_text())
         self.assertEqual(
@@ -167,6 +181,40 @@ class WineRenderGate(unittest.TestCase):
                          "an ink sample was dumped without its ink being checked")
         print(f"\nink samples: {numbers['painted_exact']} contained, "
               f"{numbers['failed']} with ink outside the derived box")
+
+    def test_the_recorded_outlines_reproduce_directwrites_coverage(self):
+        """The recorded-versus-live gate, read off outline_compare's report.
+
+        Containment proves the outline painter's ink lands in the measured
+        box; only this comparison can say the shapes are the recorded font's.
+        build_render.py runs the tool when given both --ink-font and
+        --glyph-outlines and fails the run on a mismatch; this reads the
+        report so the claim is also enforced wherever the test suite runs
+        over the same root, and says by name when no comparison was made.
+        """
+        report = ROOT / "outline-comparison.json"
+        if not report.is_file():
+            raise unittest.SkipTest(
+                f"no outline comparison under {report}; run build_render.py with "
+                "--ink-font and --glyph-outlines")
+        numbers = json.loads(report.read_text())
+        self.assertGreater(numbers["outlines_checked"], 0,
+                           "no recorded outline was checked; the gate is vacuous")
+        self.assertEqual(
+            numbers["outline_mismatches"], [],
+            "the recording is not what GetGlyphRunOutline answers over the same "
+            "file here")
+        self.assertGreater(numbers["compared"], 0,
+                           "the comparison compared nothing; the gate is vacuous")
+        self.assertEqual(
+            numbers["failed"], 0,
+            "the recorded outlines do not reproduce DirectWrite's coverage over "
+            "the same font file:\n" + json.dumps(
+                [s for s in numbers["samples"] if not s["passed"]][:5], indent=1))
+        print(f"\noutline comparison: {numbers['outlines_checked']} outline(s) "
+              f"matched the live boundary and {numbers['compared']} painted "
+              f"sample(s) in \"{numbers['family']}\" agreed within "
+              f"{numbers['tolerance_px']}px")
 
 
 if __name__ == "__main__":
