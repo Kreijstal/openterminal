@@ -85,11 +85,15 @@ jobs:
           wine "$RUNNER_TEMP/render-mingw/dcomp_scene_backend_tests.exe"
 
       - name: Build and run the OpenXaml ABI smokes
+        # build_xamlcore's ensure_tmp_root refuses any build root outside
+        # /tmp -- that refusal is the binaries-stay-in-temp rule, so the
+        # workflow moves rather than the gate. RUNNER_TEMP is
+        # /home/runner/work/_temp on this runner, which is not /tmp.
         run: |
           python3 -B phase3/scripts/prepare_runtime_fonts.py \
             --output-root "$RUNNER_TEMP/runtime-fonts" --path-style wine
           python3 -B phase3/scripts/build_xamlcore.py \
-            --root "$RUNNER_TEMP/xamlcore" --skip-run
+            --root /tmp/xamlcore --skip-run
 
       - name: Check the artifact-coupled launch contract
         run: python3 -B -m unittest phase4.tests.test_terminal_integration -v
