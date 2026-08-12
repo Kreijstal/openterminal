@@ -99,9 +99,18 @@ int main(int argc, char** argv) {
 
     // Same rule, and for the same reason: a database that is there but
     // unreadable is one fault, not one per case that looks up a key.
+    //
+    // Only the framework's floor, because that is what the oracle probe has.
+    // The probe is a bare WindowsXamlManager with no Application object, so
+    // nothing ever merges XamlControlsResources there: the recording refuses
+    // every WinUI-2-only key by name and answers ButtonPadding with the
+    // framework's 8,4,8,5 (L5-defaults-layer-order). Loading WinUI 2's half
+    // here would resolve keys the recorded runtime refuses and shadow values
+    // it serves -- see LoadThemeResources in resources.h.
     int keys = 0;
     try {
-        keys = LoadThemeResources(ThemeResourceLibrary::Default(), theme_resources.string());
+        keys = LoadThemeResources(ThemeResourceLibrary::Default(), theme_resources.string(),
+                                  ResourceLayer::GlobalThemeResources);
     } catch (const std::exception& e) {
         std::cerr << "cannot load theme resources from " << theme_resources.string() << ": "
                   << e.what() << "\n";

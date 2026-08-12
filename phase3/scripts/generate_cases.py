@@ -2311,16 +2311,19 @@ def level5_defaults() -> Iterator[dict[str, Any]]:
             "reconstruction that is never applied in the recorded environment "
             "must not be applied here either, however faithful it is."))
 
-    # 2. Which layer wins where the two halves disagree.
+    # 2. Which layer answers where the two halves disagree.
     #
     # 56 layout-visible keys are defined by both the framework's generic.xaml
     # and WinUI 2.8.4, with different values. `ButtonPadding` is the clearest:
     # 8,4,8,5 in the framework and 11,5,11,6 in WinUI 2.
     # `dev/dll/XamlControlsResources.cpp` says XamlControlsResources is a
-    # ResourceDictionary merged into Application.Resources, which makes it the
-    # higher layer and WinUI 2's value the answer -- but that is a reading of a
-    # merge, not a measurement of one, and the probe's host may not merge
-    # XamlControlsResources at all.
+    # ResourceDictionary merged into Application.Resources, which would make it
+    # the higher layer and WinUI 2's value the answer -- in an application that
+    # merges it. The probe is not one: it has no Application object at all, and
+    # the recording says so -- this case measured bit-identical to the
+    # framework-inline variant below, which is why that variant is the twin.
+    # The winui-inline variant is kept as the value a real WinUI 2 application
+    # would serve, and as the refutation's other half.
     yield case(
         "L5-defaults-layer-order", 5, "defaults",
         l5_document("Grid", '<Border Padding="{ThemeResource ButtonPadding}">'
@@ -2329,30 +2332,33 @@ def level5_defaults() -> Iterator[dict[str, Any]]:
         "ButtonPadding, which the framework's generic.xaml and WinUI 2.8.4 both "
         "define and disagree about",
         requires=["L2-align"],
-        twin="L5-defaults-layer-order-winui-inline",
+        twin="L5-defaults-layer-order-framework-inline",
         question=(
             "Which layer of Application.Resources answers a key both halves "
             "define. A padded size of [42, 31] is WinUI 2's 11,5,11,6 and says "
             "XamlControlsResources is merged over the framework's dictionary; "
-            "[36, 29] is the framework's 8,4,8,5 and says it is not. A "
-            "rejection says the key does not resolve in the probe's host at "
-            "all, which is the L5-theme finding restated for a key the OS "
-            "half also carries."))
+            "[36, 29] is the framework's 8,4,8,5 and says it is not. The "
+            "recording answered [36, 29]: the probe's host merges nothing, "
+            "and the framework's generic.xaml is the only layer a lookup "
+            "there can reach -- consistent with the L5-theme cases, whose "
+            "WinUI-2-only keys it refused by name."))
     yield case(
         "L5-defaults-layer-order-winui-inline", 5, "defaults",
         l5_document("Grid", '<Border Padding="11,5,11,6">'
                             '<Border Width="20" Height="20"/></Border>'),
         [400.0, 300.0],
-        "inline twin of L5-defaults-layer-order: Padding=\"11,5,11,6\", WinUI 2.8.4's "
-        "value for ButtonPadding",
+        "the refuted half of L5-defaults-layer-order: Padding=\"11,5,11,6\", WinUI "
+        "2.8.4's value for ButtonPadding, which the probe's host -- no "
+        "XamlControlsResources merged -- does not serve",
         requires=["L2-align"])
     yield case(
         "L5-defaults-layer-order-framework-inline", 5, "defaults",
         l5_document("Grid", '<Border Padding="8,4,8,5">'
                             '<Border Width="20" Height="20"/></Border>'),
         [400.0, 300.0],
-        "the other half of L5-defaults-layer-order: Padding=\"8,4,8,5\", the value the "
-        "framework's own generic.xaml holds for ButtonPadding",
+        "inline twin of L5-defaults-layer-order: Padding=\"8,4,8,5\", the value the "
+        "framework's own generic.xaml holds for ButtonPadding and the recorded "
+        "measurement's answer",
         requires=["L2-align"])
 
     # 3. A key only the framework half defines.

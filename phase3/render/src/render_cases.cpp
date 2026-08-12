@@ -87,8 +87,13 @@ int main(int argc, char** argv) {
         return 4;
     }
     try {
+        // The probe host's ceiling: this pass is held to arranging the very
+        // tree the measurement path measures, and that path loads only the
+        // framework's floor because the oracle probe has nothing else -- see
+        // LoadThemeResources in resources.h.
         const int keys = LoadThemeResources(ThemeResourceLibrary::Default(),
-                                            theme_resources.string());
+                                            theme_resources.string(),
+                                            ResourceLayer::GlobalThemeResources);
         std::cerr << "theme resources loaded: " << keys << " key(s)\n";
     } catch (const std::exception& e) {
         std::cerr << "cannot load theme resources from " << theme_resources.string() << ": "

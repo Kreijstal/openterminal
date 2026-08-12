@@ -147,14 +147,35 @@ class TwinTest(unittest.TestCase):
         result = check(self.cases, self.results, 0.01, self.expected)
         self.assertEqual(result["totals"]["mismatched"], 1)
 
-    def test_an_oracle_that_failed_one_half_refutes_nothing(self) -> None:
-        # Two errors, or one, say nothing about whether the halves describe the
-        # same layout, so the pair goes back to being an ordinary twin check.
+    def test_an_oracle_that_failed_exactly_one_half_refutes_the_pairing(self) -> None:
+        # The pairing claims the two halves describe one layout. A recording
+        # where one half loaded and the other did not is the runtime denying
+        # that in the strongest possible way: in the recorded environment one
+        # of the halves is not a layout at all. The L5-theme cases are the
+        # live example -- the probe host has no WinUI 2 dictionary, so the
+        # resolved half is refused by name while the inline half measures.
+        # Demanding self-consistency of such a pair would demand the
+        # implementation resolve a key the recorded runtime could not.
+        self.pair()
+        self.add_result("a", error="resource 'X' not found")
+        self.add_result("b")
+        self.add_expected("a", error="Cannot find a Resource with the Name/Key X")
+        self.add_expected("b")
+        result = check(self.cases, self.results, 0.01, self.expected)
+        self.assertEqual(result["totals"]["matched"], 0)
+        self.assertEqual(result["totals"]["refuted"], 1)
+        self.assertEqual(result["totals"]["mismatched"], 0)
+        self.assertIn("did not load in the recorded environment",
+                      result["refuted"][0]["detail"])
+
+    def test_an_oracle_that_failed_both_halves_refutes_nothing(self) -> None:
+        # Two recorded failures agree about nothing, including about the
+        # pairing, so the pair goes back to being an ordinary twin check.
         self.pair()
         self.add_result("a")
         self.add_result("b")
-        self.add_expected("a", error="the type 'Nonsense' is not implemented")
-        self.add_expected("b")
+        self.add_expected("a", error="the probe machine had no such font")
+        self.add_expected("b", error="the probe machine had no such font")
         result = check(self.cases, self.results, 0.01, self.expected)
         self.assertEqual(result["totals"]["matched"], 1)
         self.assertEqual(result["totals"]["refuted"], 0)

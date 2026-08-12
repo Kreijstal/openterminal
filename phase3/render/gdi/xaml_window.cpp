@@ -87,7 +87,11 @@ int main(int argc, char** argv) {
     }
     if (argc >= 5) {
         try {
-            LoadThemeResources(ThemeResourceLibrary::Default(), argv[4]);
+            // The probe host's ceiling: the window shows what the corpus
+            // measures, and the corpus is measured in a host with only the
+            // framework's floor. See LoadThemeResources in resources.h.
+            LoadThemeResources(ThemeResourceLibrary::Default(), argv[4],
+                               ResourceLayer::GlobalThemeResources);
         } catch (const std::exception& e) {
             std::cerr << "cannot load theme resources: " << e.what() << "\n";
             return 4;

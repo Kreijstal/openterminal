@@ -416,13 +416,18 @@ ResourceLayer LayerOf(const JsonValue& document, const std::string& where) {
     throw JsonError(where + ": unknown resource layer \"" + layer->string + "\"");
 }
 
-void ReadDatabase(const std::string& json, const std::string& where, ThemeResourceLibrary& library) {
+void ReadDatabase(const std::string& json, const std::string& where, ThemeResourceLibrary& library,
+                  ResourceLayer top_layer) {
     const JsonValue document = ParseJson(json);
     const JsonValue* themes = Member(document, "themes");
     if (!themes || themes->kind != JsonValue::Kind::Object)
         throw JsonError(where + ": no \"themes\" object");
 
     const ResourceLayer layer = LayerOf(document, where);
+    // A database above the host's ceiling describes a dictionary the host does
+    // not have. Skipped, not an error: the directory legitimately carries both
+    // halves, and which of them exist is the host's fact, not the file's.
+    if (layer > top_layer) return;
     // Recorded so a database that silently came from somewhere else is visible
     // in the one place a reader looks. The two extractors spell the provenance
     // differently -- one source, or one per half -- so either satisfies it.
@@ -556,7 +561,8 @@ void XamlControlsResources::Merge(ThemeResourceLibrary& library,
         library.Add(theme, std::move(dictionary), ResourceLayer::XamlControlsResources);
 }
 
-int LoadThemeResources(ThemeResourceLibrary& library, const std::string& path) {
+int LoadThemeResources(ThemeResourceLibrary& library, const std::string& path,
+                       ResourceLayer top_layer) {
     namespace fs = std::filesystem;
     std::error_code failure;
 
@@ -576,7 +582,7 @@ int LoadThemeResources(ThemeResourceLibrary& library, const std::string& path) {
         std::ifstream in(file, std::ios::binary);
         std::ostringstream buffer;
         buffer << in.rdbuf();
-        ReadDatabase(buffer.str(), file.filename().string(), library);
+        ReadDatabase(buffer.str(), file.filename().string(), library, top_layer);
     }
 
     return static_cast<int>(library.ActiveKeyCount());

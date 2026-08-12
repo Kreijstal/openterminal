@@ -234,12 +234,25 @@ private:
     bool compact_ = false;
 };
 
-// Loads the extracted database into `library`, and returns how many keys the
-// largest theme carried. `path` may be a file or a directory of them; a
-// directory that is not there loads nothing and is not an error, because the
+// Loads the extracted database into `library`, and returns how many distinct
+// keys the loaded layers resolve. `path` may be a file or a directory of them;
+// a directory that is not there loads nothing and is not an error, because the
 // database is generated rather than committed and a checkout without it must
 // still run.
-int LoadThemeResources(ThemeResourceLibrary& library, const std::string& path);
+//
+// `top_layer` is the highest layer the loading host actually has, and a
+// database above it is skipped rather than loaded -- the file describes a
+// dictionary that does not exist in that host. The default is the full stack,
+// which is what a running WinUI 2 application has once its App.xaml merges
+// XamlControlsResources. The measurement hosts pass GlobalThemeResources: the
+// oracle probe (phase3/harness/xaml_probe.cpp) is a bare WindowsXamlManager
+// with no Application object and nothing merged, so the framework's own
+// generic.xaml is the only dictionary a lookup there can reach -- the
+// recording shows every WinUI-2-only key refused by name and ButtonPadding
+// answering with the framework's value. A measurement host that loaded more
+// would resolve keys the recorded runtime refuses.
+int LoadThemeResources(ThemeResourceLibrary& library, const std::string& path,
+                       ResourceLayer top_layer = ResourceLayer::XamlControlsResources);
 
 // True for the element names that declare a resource of a type this parser
 // knows: the x-namespace primitives and Thickness.
