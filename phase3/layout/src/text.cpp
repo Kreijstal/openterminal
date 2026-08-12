@@ -471,6 +471,27 @@ std::vector<double> TextBlock::ShapedAdvances() const {
     return advances;
 }
 
+double EmptyLineHeight(const std::string& family, double size) {
+    if (std::shared_ptr<RuntimeTextProvider> provider = GetRuntimeTextProvider()) {
+        RuntimeTextResult result;
+        std::string diagnostic;
+        const RuntimeTextRequest request{family, std::string(), size, kInfinity, false, false};
+        if (!provider->Layout(request, result, diagnostic)) return 0.0;
+        return result.size.height;
+    }
+    const FontMetrics* line_font = FontLibrary::Default().Find(family);
+    if (!line_font) {
+        throw TextError("no harvested metrics for the font family \"" + family +
+                        "\"; see phase3/xaml-db/fonts");
+    }
+    if (line_font->units_per_em <= 0.0)
+        throw TextError("the font metrics have no units per em");
+    // An empty line keeps the unsnapped height -- the corpus records both
+    // 15.9609 empty and 15.96 with text, at size 12. See rule 7's neighbour in
+    // LayoutText below, which returns this very value for an empty TextBlock.
+    return AsFloat(line_font->LineSpacing() * size / line_font->units_per_em);
+}
+
 Size TextBlock::LayoutText(double limit) const {
     const std::string& family = font_family();
     const double size = font_size();
@@ -514,7 +535,9 @@ Size TextBlock::LayoutText(double limit) const {
     // An empty TextBlock still occupies a line, and that line keeps the
     // unsnapped height. This is the one place the two differ, and the corpus
     // records both: 15.9609 empty against 15.96 with text, at size 12.
-    if (content.empty()) return {0.0, AsFloat(spacing)};
+    // Answered by EmptyLineHeight so that the ContentControl asking the same
+    // question cannot drift from this one.
+    if (content.empty()) return {0.0, EmptyLineHeight(family, size)};
 
     // Rule 7: text set through the Text property keeps the unsnapped
     // metrics, inline content gets the snapped ones.

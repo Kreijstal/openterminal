@@ -10,9 +10,6 @@ public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.Button"; }
     static const std::vector<std::string>& Owners();
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
-protected:
-    Size MeasureOverride(Size available) override;
-    Size ArrangeOverride(Size final_size) override;
 };
 
 class TextBox : public Control {
