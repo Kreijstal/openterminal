@@ -229,6 +229,15 @@ public:
     explicit TextError(const std::string& what) : std::runtime_error(what) {}
 };
 
+// The height one line of nothing occupies in `family` at `size` -- the empty
+// TextBlock's unsnapped line box, pulled out to where a ContentControl can ask
+// for it: a string Content never becomes an element in this host, but the
+// recorded Button says it still holds one line open. One arithmetic reached
+// twice, not two that agree. Throws TextError when the family has no harvested
+// metrics; a runtime text provider's refusal is a zero-height line instead,
+// the same containment TextBlock applies at its leaf.
+double EmptyLineHeight(const std::string& family, double size);
+
 }  // namespace openxaml
 
 #endif  // OPENXAML_TEXT_H

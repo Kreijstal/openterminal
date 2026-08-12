@@ -33,6 +33,15 @@ public:
     void set_padding(Thickness value) { SetValue(PaddingProperty(), value); }
     static const DependencyProperty& PaddingProperty();
 
+    // Control's own, distinct from Border's and from the panels' chrome pair --
+    // they are separate dependency properties in the runtime. The default
+    // template hands it to the ContentPresenter with a {TemplateBinding}; a
+    // templateless measurement counts it directly, which is the same
+    // observable -- see ContentControl::MeasureOverride.
+    const Thickness& border_thickness() const { return GetThickness(BorderThicknessProperty()); }
+    void set_border_thickness(Thickness value) { SetValue(BorderThicknessProperty(), value); }
+    static const DependencyProperty& BorderThicknessProperty();
+
     // Where the content sits inside the control, which is not where the
     // control sits inside its parent. Control's own pair, distinct from the
     // ContentPresenter properties of the same name -- the template hands one

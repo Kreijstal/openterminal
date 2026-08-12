@@ -2060,20 +2060,28 @@ namespace {
 // without one: a hold list that could grow on suspicion would quietly become
 // a way of making the corpus agree.
 //
-// Both entries were found by running the corpus, not by reading the source.
+// The entry was found by running the corpus, not by reading the source. A
+// second one, Button.Padding, used to sit beside it -- held because applying
+// ButtonPadding on top of the 20 x 32 then transcribed into Button as a flat
+// chrome double-counted it. L5-defaults-builtin-reachability took that model
+// apart (a bare Button is [20, 13]: the padding and border and nothing else),
+// the transcription went with it, and the padding now applies as the padding
+// it is.
 const std::map<std::string, std::string>& HeldSetters() {
     static const std::map<std::string, std::string> held = {
-        {"Button.Padding",
-         "L7-terminal-0e66f8e18d-s0 records a bare Button desiring [20, 32]; applying "
-         "ButtonPadding gives [42, 32]. A Control's Padding is consumed by the "
-         "ContentPresenter its template puts inside it, and the recorded tree has no "
-         "template -- see the note on templateless measurement above. Until this project "
-         "builds the reconstructed ControlTemplate, applying the padding directly moves a "
-         "number the oracle has already answered"},
         {"ToolTip.Padding",
-         "the same rule as Button.Padding, held for the same reason before a case can "
-         "record it: L7-terminal-24911ba19e is a templateless ToolTip and its recorded "
-         "size does not include ToolTipBorderThemePadding"},
+         "L7-terminal-24911ba19e is a templateless ToolTip and its recorded size is "
+         "ToolTipBorderPadding (\"9,6,9,8\", which the ToolTip type carries itself), not "
+         "the dictionary's ToolTipBorderThemePadding; a setter the recording refutes "
+         "must not be applied at all"},
+        {"ToolTip.BorderThickness",
+         "the same recording, L7-terminal-24911ba19e: 18 x 30 around a 0 x 15.9609 line "
+         "with the line at [9, 6] is ToolTipBorderPadding and *nothing else* -- applying "
+         "the extracted style's ToolTipBorderThemeThickness of 1 measures 20 x 32 with "
+         "the line at [10, 7]. The same Button recordings that unheld Button.Padding "
+         "show the ToolTip drift is real: a bare Button *does* include its style's "
+         "border and padding, so what this entry holds is the extraction's lineage, "
+         "not the arithmetic"},
     };
     return held;
 }
@@ -2148,12 +2156,25 @@ bool SetterText(const JsonValue& value, std::string& out, std::string& why) {
 void ReadDefaultStyleTable(const JsonValue& table, const std::string& half,
                            DefaultStyleRegistry& registry, DefaultStyleReport& report,
                            int& registered) {
-    // The application dictionary and nothing above it: a default style is
-    // declared in generic.xaml, so a {ThemeResource} inside one resolves where
-    // generic.xaml is, not where the styled element happens to sit.
+    // The layers a reference inside this half's generic.xaml can see: a
+    // default style resolves where it is declared, not where the styled
+    // element happens to sit -- and the two halves are declared in different
+    // places. The system half *is* the floor, so nothing merged above the
+    // floor exists for it: `ButtonPadding` written inside the system Button
+    // style is the system's "8,4,8,5", never the "11,5,11,6" WinUI 2 merges
+    // over it -- which is what the recorded [20, 13] of
+    // L5-defaults-builtin-reachability is made of. The muxc half is declared
+    // in the merged dictionary and resolves through the whole stack, floor
+    // included. ActiveLayers() is highest first, so the floor is its last
+    // entry -- resources.cpp derives the order from the layer enum.
     ResourceScope application;
-    for (const ResourceDictionary* layer : ThemeResourceLibrary::Default().ActiveLayers())
-        application.push_back(layer);
+    const std::vector<const ResourceDictionary*> layers =
+        ThemeResourceLibrary::Default().ActiveLayers();
+    if (half == "system") {
+        if (!layers.empty()) application.push_back(layers.back());
+    } else {
+        for (const ResourceDictionary* layer : layers) application.push_back(layer);
+    }
     MarkupStyleHost host(application);
 
     for (const auto& [type, entry] : table.object) {

@@ -259,41 +259,92 @@ void AToolTipCarriesTheRecordedDefaultStyle() {
     CHECK(tooltip.font_size() == 30.0);
 }
 
-// What a string handed to a ContentControl is worth, which is nothing.
+// Segoe UI's vertical metrics as segoeui.ttf carries them, under a test name
+// so the test states which numbers it depends on. hhea: ascender 2210,
+// descender -514, no line gap, 2048 units per em -- a line box of
+// 2724/2048 em, which is the 15.9609 the ToolTip recording reads at size 12
+// and 18.6211 at the 14 every Button case inherits.
+FontMetrics SegoeVerticalFace() {
+    FontMetrics metrics;
+    metrics.units_per_em = 2048;
+    metrics.ascender = 2210;
+    metrics.descender = -514;
+    return metrics;
+}
+
+// The recorded default Button style's two layout setters, written where the
+// default-style registry writes them. The values are the harvested
+// dictionary's: ButtonPadding "8,4,8,5" and ButtonBorderThemeThickness "2".
+// L5-defaults-builtin-reachability is what pins them: a bare `<Button/>`
+// measures [20, 13], and 8+2 + 2+8 across, 4+2 + 2+5 down is exactly that.
+void ApplyRecordedButtonStyle(Button& button) {
+    button.SetBuiltInStyleValue(Control::PaddingProperty(), Thickness{8.0, 4.0, 8.0, 5.0});
+    button.SetBuiltInStyleValue(Control::BorderThicknessProperty(), Thickness{2.0, 2.0, 2.0, 2.0});
+}
+
+// What a string handed to a ContentControl is worth: no node, no glyphs, and
+// one line held open.
 //
 // L7-terminal-0e66f8e18d holds `<Button Grid.Row="0">Create</Button>` beside a
 // 400-wide TextBox in a horizontal StackPanel, and the oracle records the
 // Button 20 x 32 at all three available sizes, with no node under it and the
 // panel 420 wide. "Create" in Segoe UI at 14 is 41 wide on its own, so the
-// string is not in the 20: the runtime's Content is an `object`, the probe's
-// walk only descends into one that is a UIElement, and a measurement detached
-// from a live tree never turns this one into anything with a size.
+// string's glyphs are not in the measurement: the runtime's Content is an
+// `object`, the probe's walk only descends into one that is a UIElement, and a
+// measurement detached from a live tree never turns this one into anything
+// that shapes text.
 //
-// So 20 is the whole of the Button's chrome, and 32 is what the recording
-// gives a Button whose content asks for nothing. Which part of 32 is chrome
-// and which is the style's minimum height, no recording says; the corpus has
-// exactly one Button in it.
-void AStringContentIsNeitherANodeNorASize() {
+// The 32 decomposes against L5-defaults-builtin-reachability, which measures
+// the same Button with nothing in it at [20, 13]. 13 is the chrome alone --
+// ButtonPadding plus ButtonBorderThemeThickness, 4+2 over 2+5 -- so the string
+// bought 32 - 13 = 19 of height and none of width. That is one empty line of
+// the control's font: Segoe UI's line box at 14 is 2724/2048 * 14 = 18.6211,
+// and 13 + 18.6211 = 31.6211 is carried to 32 by the ordinary layout rounding
+// every desired size goes through. A string content is an empty line box, not
+// a floor and not a size of its own.
+void AStringContentIsNotANodeButHoldsOneLineOpen() {
+    FontLibrary::Default().Add("Button Test Face", SegoeVerticalFace());
+
     std::unique_ptr<Element> loaded =
-        LoadMarkup(std::string("<Button") + kXamlNamespaces + " Grid.Row=\"0\">Create</Button>");
+        LoadMarkup(std::string("<Button") + kXamlNamespaces +
+                   " FontFamily=\"Button Test Face\" Grid.Row=\"0\">Create</Button>");
     auto* button = dynamic_cast<Button*>(loaded.get());
     CHECK(button != nullptr);
     CHECK(button->content_text() == "Create");
     CHECK(button->Children().empty());
     CHECK(button->RecordedChildren().empty());
+    ApplyRecordedButtonStyle(*button);
 
     // The width a horizontal StackPanel measures its children with.
     button->Measure({kInfinity, 300.0});
     CHECK(button->desired_size().width == 20.0);
     CHECK(button->desired_size().height == 32.0);
 
-    // Content that *is* an element still measures, and still shows through the
-    // same chrome.
+    // Without the string there is no line to hold open, and the chrome is the
+    // whole of the answer -- the recorded [20, 13].
+    std::unique_ptr<Element> bare =
+        LoadMarkup(std::string("<Button") + kXamlNamespaces + "/>");
+    auto* empty = dynamic_cast<Button*>(bare.get());
+    CHECK(empty != nullptr);
+    ApplyRecordedButtonStyle(*empty);
+    bare->Measure({kInfinity, 300.0});
+    CHECK(bare->desired_size().width == 20.0);
+    CHECK(bare->desired_size().height == 13.0);
+
+    // Content that *is* an element measures, and the same chrome surrounds it
+    // on both axes. No recording pins this pair -- the corpus's one Button
+    // holds a string -- but the rule it follows is recorded: the ToolTip of
+    // L7-terminal-24911ba19e is 18 x 30 around a 0 x 15.9609 line, which is
+    // its padding added around element content vertically as well as
+    // horizontally. 10 + 20 across, 40 + 13 down.
     std::unique_ptr<Element> sized = LoadMarkup(
         std::string("<Button") + kXamlNamespaces + "><Border Width=\"10\" Height=\"40\"/></Button>");
+    auto* holder = dynamic_cast<Button*>(sized.get());
+    CHECK(holder != nullptr);
+    ApplyRecordedButtonStyle(*holder);
     sized->Measure({kInfinity, 300.0});
     CHECK(sized->desired_size().width == 30.0);
-    CHECK(sized->desired_size().height == 40.0);
+    CHECK(sized->desired_size().height == 53.0);
     CHECK(sized->RecordedChildren().size() == 1);
 }
 
@@ -306,7 +357,7 @@ int main() {
     AnEmptyCompositeTransformIsTheIdentity();
     ARectangleCarriesItsCornerRadii();
     AToolTipCarriesTheRecordedDefaultStyle();
-    AStringContentIsNeitherANodeNorASize();
+    AStringContentIsNotANodeButHoldsOneLineOpen();
     std::cout << "terminal subtree rules ok\n";
     return 0;
 }
