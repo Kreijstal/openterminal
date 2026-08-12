@@ -41,10 +41,12 @@ That list of tables is exhaustive on purpose, and no outline table is on it.
 `glyf`, `loca`, `CFF ` and `CFF2` are the shapes, and reading shapes is a
 heavier claim than reading widths — the typeface design is generally not
 copyrightable, the outline data in the file generally is. Recording them is
-what would let the 113 cases refusing `DirectWrite could not resolve any
+what will let the 113 cases refusing `DirectWrite could not resolve any
 requested family in "Segoe UI"` actually paint, and the machinery to do it
-exists in `../glyph-outlines/`, gated on a committed per-family licence list
-that Segoe UI is deliberately not on. See that directory's README.
+exists in `../glyph-outlines/`, gated on a committed per-family clearance
+list. Segoe UI is on that list by the repository owner's recorded decision
+(2026-08-11), artifact-only like everything else harvested; see that
+directory's README.
 
 The kern tables are read as **evidence**, into `font_kerning`, and the two
 sources are kept apart — `{"gpos": {…}, "kern": {…}}` — rather than merged.

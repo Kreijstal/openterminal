@@ -275,8 +275,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="print the theme-resource directory instead, and "
                              "report which dictionaries it actually carries")
     parser.add_argument("--glyph-outlines", action="store_true",
-                        help="print the recorded glyph-outline directory instead; "
-                             "no run has produced one yet")
+                        help="print the recorded glyph-outline directory instead")
     parser.add_argument("--require-derived-coverage", action="store_true",
                         help="refuse a harvest carrying a family that "
                              "xaml-db/fonts/derived does not cover, instead of "
@@ -352,14 +351,11 @@ def main(argv: list[str] | None = None) -> int:
         recorded = glyph_outlines_directory(args.dest)
         if recorded is None:
             raise SystemExit(
-                f"run {run_id} has no glyph-outline artifact. No run has ever "
-                f"produced one: the workflow step that builds "
-                f"phase3/harness/glyph_outline_probe.cpp and runs "
-                f"phase3/scripts/harvest_glyph_outlines.py is committed but has "
-                f"not been pushed and run yet.\n"
-                f"Until it has, the 113 cases refusing "
-                f"'DirectWrite could not resolve any requested family in "
-                f"\"Segoe UI\"' stay refused, and that is the honest state.")
+                f"run {run_id} has no glyph-outline artifact: it either "
+                f"predates the measure job's outline-harvest steps or those "
+                f"steps did not run. A current run records Cascadia Mono off "
+                f"the pinned Terminal checkout and Segoe UI off the runner's "
+                f"installed face; pick a newer run.")
         wanted = recorded
 
     ORACLES.mkdir(parents=True, exist_ok=True)
