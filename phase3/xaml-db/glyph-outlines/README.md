@@ -117,8 +117,9 @@ exercised rather than trusted.
 
 ## The consumption plan
 
-Not implemented. What follows is the design, so that the implementation is a
-review of a plan rather than an argument about one.
+Implemented; see the status section for where each piece lives. What follows
+is the design it was implemented from, kept because it is still the best
+statement of *why* each piece is shaped the way it is.
 
 ### Where it plugs in
 
@@ -175,12 +176,16 @@ non-blank run must contain at least one pixel of exactly the probe ink. An
 outline painter satisfying those has demonstrated that its ink lands inside the
 box the layout computed — the containment property, which is real but weak.
 
-Say plainly what it does not prove: that the shapes are Segoe UI's. Only the
-recorded-versus-live comparison on a Windows runner can show that, and the
-honest form of it is to paint the same corpus twice on the runner — once
-through DirectWrite with the font installed, once through the recorded outlines
-— and compare coverage. That gate belongs in the workflow next to the existing
-render-oracle check and does not exist yet.
+Say plainly what it does not prove: that the shapes are Segoe UI's. Only a
+recorded-versus-live comparison against DirectWrite over the same font file can
+show that. The tool for it exists — `outline_compare.exe`, built and run by
+`build_render.py` whenever it is given both `--ink-font` and
+`--glyph-outlines`, holding every recorded outline to `GetGlyphRunOutline`'s
+answer geometrically and every codepoint's ink mask to DirectWrite's glyph-run
+analysis — but it has so far run only under Wine, whose DirectWrite is itself
+an implementation. Running it on the Windows runner, next to the existing
+render-oracle check, is the gate that would close the claim and does not exist
+yet.
 
 ### Order of work
 
@@ -209,5 +214,42 @@ the `xaml-glyph-outlines-<os_build>` artifact;
 no JSON here, by design, and
 `phase3/tests/test_harvest_glyph_outlines.py` names that state as a skip that
 turns into structural checks over any harvest fetched into this directory.
-Consumption is the remaining half: until the renderer paints from the
-recordings, the 113 Segoe UI refusals stand.
+
+Steps 1–5 of the consumption plan are implemented:
+
+1. loader and scanline filler are `phase3/render/src/glyph_outlines.*` and
+   `glyph_outline_rasterizer.*` — plain C++17, tested by
+   `phase3/render/tests/glyph_outlines_test.cpp` and
+   `glyph_outline_rasterizer_test.cpp` on the Linux CTest path;
+2. `DrawRecordedOutlineTextRun` has the DirectWrite painter's signature, and
+   its refusals (a codepoint gap, a line-broken run, a fractional clip, an
+   unmeasured baseline) are all named and all begin with the run's path;
+3. both harnesses take `--glyph-outlines DIR` — the loader takes a directory,
+   not a family list, so a new family in the artifact is picked up with no
+   code change — and `build_render.py` passes it through and records the
+   directory's identity in the dump root's provenance;
+4. sidecar schema 3 names the painter per run (`"recorded-outlines"`,
+   `"directwrite-cleartype"`, or null), so grayscale outline coverage can
+   never be compared against native ClearType silently;
+5. `phase3/render/gdi/outline_compare.cpp` checks the recording against the
+   live boundary over the same SHA-256-checked file, two ways: every recorded
+   outline against what `GetGlyphRunOutline` answers here (geometric, within
+   two design units — implementations segment one shape differently), and
+   every recorded codepoint painted through both DirectWrite's glyph-run
+   analysis and the recorded-outline filler, ink masks within a measured
+   3px (grid-fitting moves hinted glyphs; the recording is unhinted by
+   construction). `build_render.py` runs it whenever it is given both
+   `--ink-font` and `--glyph-outlines`.
+
+The flip is enforced, not observed: `check_render.py --glyph-outlines` fails
+any non-blank run whose family has outlines in the directory and which neither
+painted nor refused for a named recorded-outline reason. The workflow's render
+job passes the artifact to both the harness and the checker, and the artifact
+carries `segoe-ui.json` on every run, so every Segoe UI run either paints from
+the recording or goes red for a named reason — nothing in between, and no
+count is named anywhere.
+
+Step 6 is resolved: Segoe UI is cleared and harvested (the `CLEARED` list in
+`harvest_glyph_outlines.py` records the decision and its terms), and the
+licence gate stays a live assertion against Segoe MDL2 Assets, which is
+genuinely still uncleared.

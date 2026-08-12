@@ -23,6 +23,8 @@ add_library(openxaml_render STATIC
     src/cpu_raster_backend.cpp
     src/case_runner.cpp
     src/external_surface_reader.cpp
+    src/glyph_outlines.cpp
+    src/glyph_outline_rasterizer.cpp
 )
 target_include_directories(openxaml_render PUBLIC src)
 target_link_libraries(openxaml_render PUBLIC openxaml_layout)
@@ -59,6 +61,17 @@ add_executable(cpu_raster_backend_tests tests/cpu_raster_backend_test.cpp)
 target_link_libraries(cpu_raster_backend_tests PRIVATE openxaml_render)
 add_test(NAME cpu_raster_backend COMMAND cpu_raster_backend_tests)
 
+# The recorded-outline loader and rasterizer are plain C++17: the whole point
+# of painting from recorded outlines is that no platform is needed, so the
+# entire consumption path is provable on the Linux test path.
+add_executable(glyph_outlines_tests tests/glyph_outlines_test.cpp)
+target_link_libraries(glyph_outlines_tests PRIVATE openxaml_render)
+add_test(NAME glyph_outlines COMMAND glyph_outlines_tests)
+
+add_executable(glyph_outline_rasterizer_tests tests/glyph_outline_rasterizer_test.cpp)
+target_link_libraries(glyph_outline_rasterizer_tests PRIVATE openxaml_render)
+add_test(NAME glyph_outline_rasterizer COMMAND glyph_outline_rasterizer_tests)
+
 # A runtime text provider may refuse one leaf without erasing independently
 # renderable ancestors or inventing substitute glyphs. This boundary is plain
 # C++ and belongs on the platform-neutral CTest path.
@@ -93,6 +106,8 @@ if(MSVC)
     target_compile_options(render_tests PRIVATE /W4)
     target_compile_options(scene_tests PRIVATE /W4)
     target_compile_options(cpu_raster_backend_tests PRIVATE /W4)
+    target_compile_options(glyph_outlines_tests PRIVATE /W4)
+    target_compile_options(glyph_outline_rasterizer_tests PRIVATE /W4)
     target_compile_options(runtime_text_refusal_tests PRIVATE /W4)
     if(TARGET openxaml_render_dcomp)
         target_compile_options(openxaml_render_dcomp PRIVATE /W4)
@@ -105,6 +120,8 @@ else()
     target_compile_options(render_tests PRIVATE -Wall -Wextra)
     target_compile_options(scene_tests PRIVATE -Wall -Wextra)
     target_compile_options(cpu_raster_backend_tests PRIVATE -Wall -Wextra)
+    target_compile_options(glyph_outlines_tests PRIVATE -Wall -Wextra)
+    target_compile_options(glyph_outline_rasterizer_tests PRIVATE -Wall -Wextra)
     target_compile_options(runtime_text_refusal_tests PRIVATE -Wall -Wextra)
     if(TARGET openxaml_render_dcomp)
         target_compile_options(openxaml_render_dcomp PRIVATE -Wall -Wextra)

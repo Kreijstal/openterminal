@@ -64,7 +64,8 @@ LAYOUT_SOURCES += ["binding.cpp", "visual_state.cpp", "default_styles.cpp",
 # render/CMakeLists.txt and build_render.py.
 RENDER_SOURCES = ["display_list.cpp", "scene.cpp", "surface.cpp",
                   "cpu_raster_backend.cpp", "case_runner.cpp",
-                  "external_surface_reader.cpp"]
+                  "external_surface_reader.cpp",
+                  "glyph_outlines.cpp", "glyph_outline_rasterizer.cpp"]
 GDI_RENDER_SOURCES = ["gdi_target.cpp", "dwrite_text_provider.cpp",
                       "island_frame_cache.cpp"]
 DCOMP_RENDER_SOURCES = ["dcomp_scene_backend.cpp"]

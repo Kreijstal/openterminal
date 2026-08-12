@@ -32,6 +32,8 @@ dump root's provenance record -- see render_provenance.py.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -55,7 +57,7 @@ REPO_DIR = PHASE3_DIR.parent
 # same meaning in phase3/render/src/case_runner.cpp and with
 # check_render.REQUIRED_SIDECAR_SCHEMA. It travels in the provenance record so
 # that a dump root written by an older harness is refused rather than read.
-SIDECAR_SCHEMA = 2
+SIDECAR_SCHEMA = 3
 
 # The same list phase3/layout/CMakeLists.txt and build_xamlcore.py carry, and
 # for the same reason build_xamlcore.py states: a source missing from here is a
@@ -78,6 +80,8 @@ RENDER_SOURCES = [
     "cpu_raster_backend.cpp",
     "case_runner.cpp",
     "external_surface_reader.cpp",
+    "glyph_outlines.cpp",
+    "glyph_outline_rasterizer.cpp",
 ]
 
 DEFAULT_ROOT = Path("/tmp/openterminal-render")
@@ -107,6 +111,12 @@ def main() -> int:
                              "one font whose metrics and glyphs can both be had here")
     parser.add_argument("--ink-family", type=str, default="Cascadia Mono",
                         help="the family name inside --ink-font")
+    parser.add_argument("--glyph-outlines", type=Path, default=None,
+                        help="a recorded glyph-outline directory (CI artifact, see "
+                             "fetch_measurements.py --glyph-outlines); families in it "
+                             "paint from the recording instead of refusing, and with "
+                             "--ink-font the recorded painting is compared against "
+                             "DirectWrite's over the same file")
     parser.add_argument("--runtime-fonts", type=Path, default=None,
                         help="where to place the pinned open-source compatibility font "
                              "(default: <root>/runtime-fonts); it is what the DirectWrite "
@@ -159,6 +169,10 @@ def main() -> int:
     run(common + ["-o", str(ink), str(gdi_src / "ink_check.cpp")]
         + sources + includes + libraries)
 
+    outline_compare = root / "outline_compare.exe"
+    run(common + ["-o", str(outline_compare), str(gdi_src / "outline_compare.cpp")]
+        + sources + includes + libraries)
+
     frame_cache_test = root / "island_frame_cache_test.exe"
     run(common + ["-o", str(frame_cache_test),
                   str(gdi_src / "island_frame_cache_test.cpp")]
@@ -183,8 +197,8 @@ def main() -> int:
         + ["-ldcomp", "-ld3d11", "-ldxgi", "-lole32"])
 
     if args.skip_run:
-        print(f"built {harness}, {host}, {ink}, {frame_cache_test}, {dwrite_test} "
-              f"and {dcomp_test}")
+        print(f"built {harness}, {host}, {ink}, {outline_compare}, {frame_cache_test}, "
+              f"{dwrite_test} and {dcomp_test}")
         return 0
 
     environment = os.environ.copy()
@@ -260,6 +274,16 @@ def main() -> int:
           f"{args.theme_resources}"
           + ("" if dictionaries else
              " -- none; every case naming a WinUI resource key will refuse to lay out"))
+    outline_documents = []
+    if args.glyph_outlines is not None:
+        if not args.glyph_outlines.is_dir():
+            print(f"::error::--glyph-outlines {args.glyph_outlines} is not a directory")
+            return 4
+        outline_documents = sorted(p.stem for p in args.glyph_outlines.glob("*.json"))
+        print(f"::notice::glyph outlines: {len(outline_documents)} recorded famil(ies) in "
+              f"{args.glyph_outlines}"
+              + (f" -- {', '.join(outline_documents)}" if outline_documents else
+                 " -- none; every family keeps painting through DirectWrite or refusing"))
 
     # A window read-back from a previous run would otherwise survive into this
     # one and be compared, pixel for pixel, against dumps it has nothing to do
@@ -271,8 +295,11 @@ def main() -> int:
     results = root / "gdi-dumps"
     if results.exists():
         shutil.rmtree(results)
-    run(["wine", str(harness), str(args.cases.resolve()), str(results),
-         str(args.fonts.resolve()), str(args.theme_resources.resolve())], env=environment)
+    harness_arguments = ["wine", str(harness), str(args.cases.resolve()), str(results),
+                         str(args.fonts.resolve()), str(args.theme_resources.resolve())]
+    if args.glyph_outlines is not None:
+        harness_arguments += ["--glyph-outlines", str(args.glyph_outlines.resolve())]
+    run(harness_arguments, env=environment)
 
     # Written after the dumps, into the directory that was just recreated, so a
     # record can never outlive or precede the dumps it speaks for. The Wine gate
@@ -286,7 +313,8 @@ def main() -> int:
             sources=render_provenance.source_roots(PHASE3_DIR),
             cases=args.cases,
             fonts=args.fonts, theme_resources=args.theme_resources,
-            sidecar_schema=SIDECAR_SCHEMA))
+            sidecar_schema=SIDECAR_SCHEMA,
+            glyph_outlines=args.glyph_outlines))
     print(f"dumps in {results}; provenance in {provenance}")
 
     if args.ink_font:
@@ -303,6 +331,48 @@ def main() -> int:
             print("::error::the ink samples did not paint")
             return 5
         print(f"ink dumps in {ink_dumps}")
+
+    # The recorded-versus-live comparison the glyph-outlines README calls for:
+    # the same runs painted twice, once through DirectWrite with the font file
+    # loaded privately, once through the recorded outlines, and the two
+    # coverages compared. This is the only check that can say the recorded
+    # shapes are the font's -- containment cannot -- and it needs both halves,
+    # so it runs exactly when both were given.
+    if args.ink_font and args.glyph_outlines is not None:
+        document = None
+        for candidate in sorted(args.glyph_outlines.glob("*.json")):
+            recorded = json.loads(candidate.read_text())
+            if str(recorded.get("family", "")).lower() == args.ink_family.lower():
+                document = recorded
+                break
+        if document is None:
+            print(f"::notice::no recorded outlines for \"{args.ink_family}\" in "
+                  f"{args.glyph_outlines}; the recorded-versus-live comparison has "
+                  "nothing to compare and is skipped by name")
+        else:
+            # Same file, not merely the same family: the recording carries the
+            # SHA-256 of the file it was read from, and comparing against any
+            # other file would be comparing two fonts.
+            recorded_hash = str(document.get("source", {}).get("sha256", ""))
+            actual_hash = hashlib.sha256(args.ink_font.read_bytes()).hexdigest()
+            if recorded_hash != actual_hash:
+                print(f"::error::the recorded outlines for \"{args.ink_family}\" were "
+                      f"read off a file whose sha256 is {recorded_hash}, and "
+                      f"{args.ink_font} is {actual_hash}; these are two different "
+                      "fonts and comparing them would prove nothing")
+                return 5
+            comparison_report = root / "outline-comparison.json"
+            comparison_report.unlink(missing_ok=True)
+            completed = run(["wine", str(outline_compare),
+                             windows_path(args.ink_font.resolve()), args.ink_family,
+                             str(args.glyph_outlines.resolve()),
+                             str(comparison_report)],
+                            env=environment, check=False)
+            if completed.returncode != 0:
+                print("::error::the recorded outlines do not reproduce DirectWrite's "
+                      "coverage over the same font file")
+                return 5
+            print(f"outline comparison in {comparison_report}")
 
     if args.window_case:
         case_file = None

@@ -1,5 +1,7 @@
 #include "gdi_target.h"
 #include "dwrite_text_provider.h"
+#include "glyph_outline_rasterizer.h"
+#include "glyph_outlines.h"
 
 #include <algorithm>
 #include <cmath>
@@ -95,11 +97,31 @@ bool FontFamilyInstalled(const std::string& family) {
 }
 
 void GdiTextBackend::DrawRuns(Surface& surface, const std::vector<TextOp>& runs, Color ink,
-                              std::vector<std::string>& failures) {
+                              std::vector<std::string>& failures,
+                              std::vector<std::string>* painters) {
     for (const TextOp& run : runs) {
         std::string diagnostic;
-        if (!DrawDirectWriteTextRun(surface, run, ink, diagnostic))
+        std::string painter;
+        bool drawn;
+        if (GlyphOutlineLibrary::Default().Resolve(run.font_family)) {
+            // Recorded outlines first: for a family whose ink was recorded,
+            // painting the recording is the whole point, and it works whether
+            // or not this machine has the font. Its refusals -- a codepoint
+            // gap, a line-broken run -- stand by name; DirectWrite is not a
+            // fallback for a family the recording claims, because a fallback
+            // would paint different pixels depending on what happens to be
+            // installed, and the dumps are compared byte-for-byte.
+            drawn = DrawRecordedOutlineTextRun(surface, run, ink, diagnostic);
+            painter = "recorded-outlines";
+        } else {
+            drawn = DrawDirectWriteTextRun(surface, run, ink, diagnostic);
+            painter = "directwrite-cleartype";
+        }
+        if (!drawn) {
             failures.push_back(std::move(diagnostic));
+            painter.clear();
+        }
+        if (painters) painters->push_back(std::move(painter));
     }
     target_.Load(surface);
 }

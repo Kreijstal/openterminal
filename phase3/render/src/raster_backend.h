@@ -62,6 +62,16 @@ public:
     // rasterizer should leave the surface unchanged when it returns false.
     virtual bool DrawText(const TextRasterRequest& request, Surface& surface,
                           std::string& message) = 0;
+
+    // Whether this rasterizer has any glyph source for the command's family.
+    // False routes the command to the same missing-text-rasterizer issue a
+    // frame with no rasterizer reports: a family nothing recorded is exactly
+    // as unpaintable as it was before a partial glyph source was installed,
+    // and the refusal must keep saying so rather than become a draw failure.
+    virtual bool Covers(const LocalText& text) const {
+        (void)text;
+        return true;
+    }
 };
 
 // A CPU-readable view of one imported external surface: premultiplied BGRA8

@@ -137,6 +137,10 @@ struct LocalText {
     bool wrap = false;
     bool bold = false;
     std::string language = "en-US";
+    // The element path, carried so a backend's answer for this run -- which
+    // painter drew it -- can be recorded against the sidecar's text table.
+    // Identification only; nothing geometric reads it.
+    std::string path;
 };
 
 // A live producer-owned surface occupies this local rectangle. The lifetime

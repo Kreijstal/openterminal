@@ -44,7 +44,7 @@ def surface(width: int, height: int, rects) -> list[tuple[int, int, int]]:
 
 
 def node(path, type_name, slot, actual, origin=None, abs_origin=None, **overrides):
-    """One geometry row in the shape render_cases writes it (sidecar schema 2)."""
+    """One geometry row in the shape render_cases writes it."""
     if origin is None:
         origin = [slot[0], slot[1]]
     if abs_origin is None:
@@ -79,7 +79,7 @@ def sidecar(width, height, rects, texts=(), geometry=None):
             )
         ]
     return {
-        "schema_version": 2,
+        "schema_version": check_render.REQUIRED_SIDECAR_SCHEMA,
         "case_id": "synthetic",
         "backend": "test",
         "surface": [width, height],
@@ -557,6 +557,122 @@ class ReadPpm(unittest.TestCase):
         width, height, pixels = check_render.read_ppm(path)
         self.assertEqual((width, height), (3, 2))
         self.assertEqual(pixels, bytes(RED) * 6)
+
+
+class RecordedOutlinePin(unittest.TestCase):
+    """A family with recorded outlines is not allowed to keep refusing.
+
+    Without this pin, the flip from refusal to painting would be observed in a
+    table and enforced by nothing: the day segoe-ui.json outlines appear in the
+    artifact, a harness that quietly kept refusing Segoe UI text would still be
+    green. The pin turns that state into a failure, per run, without ever
+    naming a count -- the rule is over families present in the directory the
+    render was given, whatever they are.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.dir.name)
+        self.outlines = self.root / "glyph-outlines"
+        self.outlines.mkdir()
+        (self.outlines / "cascadia-mono.json").write_text(
+            json.dumps({"schema_version": 1, "family": "Cascadia Mono", "outlines": {}})
+        )
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def run_main(self, card, pixels):
+        (self.root / "synthetic.json").write_text(json.dumps(card))
+        (self.root / "synthetic.ppm").write_bytes(ppm(20, 10, pixels))
+        report = self.root / "report.json"
+        argv = sys.argv
+        sys.argv = [
+            "check_render.py", "--dumps", str(self.root), "--output", str(report),
+            "--glyph-outlines", str(self.outlines),
+        ]
+        try:
+            code = check_render.main()
+        finally:
+            sys.argv = argv
+        return code, json.loads(report.read_text())
+
+    def text_run(self, family, painter=None, text="Hi"):
+        return {
+            "path": "/Grid/TextBlock[0]",
+            "bounds": [2.0, 2.0, 8.0, 4.0],
+            "pixels": [2, 2, 10, 6],
+            "font_family": family,
+            "font_size": 14.0,
+            "text": text,
+            "painter": painter,
+        }
+
+    def test_an_outline_backed_run_that_painted_passes(self):
+        card = sidecar(20, 10, [], texts=[self.text_run("Cascadia Mono",
+                                                        painter="recorded-outlines")])
+        code, report = self.run_main(card, surface(20, 10, [((3, 3, 5, 5), INK)]))
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["painted_exact"], 1)
+
+    def test_an_outline_backed_run_that_still_refuses_is_a_failure(self):
+        card = sidecar(20, 10, [], texts=[self.text_run("Cascadia Mono")])
+        card["render_issues"] = [{
+            "code": "missing-text-rasterizer", "node": 1, "command": 0,
+            "message": "text was present but no text rasterizer was supplied",
+        }]
+        code, report = self.run_main(card, surface(20, 10, []))
+        self.assertEqual(code, 1, "the pin must fail, not report a refusal")
+        self.assertEqual(report["failed"], 1)
+        self.assertIn("has recorded outlines", report["failures"][0]["problems"][0])
+
+    def test_the_comma_list_pins_through_its_later_entries_too(self):
+        card = sidecar(20, 10, [],
+                       texts=[self.text_run("Nonexistent, Cascadia Mono")])
+        code, report = self.run_main(card, surface(20, 10, []))
+        self.assertEqual(code, 1)
+        self.assertEqual(report["failed"], 1)
+
+    def test_a_named_recorded_outline_refusal_stays_a_refusal(self):
+        # A line-broken run is unplaceable from retained advances no matter
+        # what was recorded; the painter says so by name and the pin accepts it.
+        card = sidecar(20, 10, [], texts=[self.text_run("Cascadia Mono")])
+        card["text_failures"] = [
+            "/Grid/TextBlock[0]: recorded outlines cannot place a line-broken run: "
+            "the display list retains advances, not where the breaks went"
+        ]
+        code, report = self.run_main(card, surface(20, 10, []))
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["refused"], 1)
+
+    def test_an_availability_refusal_does_not_slip_past_as_named(self):
+        # "no recorded outlines for any family" is the painter saying the
+        # loader was never given the artifact; with the artifact present that
+        # is exactly the state the pin exists to fail.
+        card = sidecar(20, 10, [], texts=[self.text_run("Cascadia Mono")])
+        card["text_failures"] = [
+            "/Grid/TextBlock[0]: no recorded outlines for any family in "
+            "\"Cascadia Mono\""
+        ]
+        code, report = self.run_main(card, surface(20, 10, []))
+        self.assertEqual(code, 1)
+        self.assertEqual(report["failed"], 1)
+
+    def test_families_without_outlines_keep_their_honest_refusal(self):
+        card = sidecar(20, 10, [], texts=[self.text_run("Segoe UI")])
+        card["render_issues"] = [{
+            "code": "missing-text-rasterizer", "node": 1, "command": 0,
+            "message": "text was present but the supplied rasterizer has no glyph "
+                       "source for font family \"Segoe UI\"",
+        }]
+        code, report = self.run_main(card, surface(20, 10, []))
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["refused"], 1)
+
+    def test_a_blank_run_is_not_pinned(self):
+        card = sidecar(20, 10, [], texts=[self.text_run("Cascadia Mono", text=" ")])
+        code, report = self.run_main(card, surface(20, 10, []))
+        self.assertEqual(code, 0, report)
 
 
 if __name__ == "__main__":
