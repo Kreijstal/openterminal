@@ -78,8 +78,9 @@ from typing import Any, Iterable
 # The sidecar shape this checker knows how to read. Bumped when a column it
 # depends on is added, so that a dump root written by an older render pass is
 # refused by name instead of half-checked. Kept beside the writer in
-# phase3/render/src/case_runner.cpp.
-REQUIRED_SIDECAR_SCHEMA = 2
+# phase3/render/src/case_runner.cpp. Schema 3 added the per-run "painter"
+# column, which the recorded-outline pin below reads.
+REQUIRED_SIDECAR_SCHEMA = 3
 
 # Not a case sidecar; see phase3/scripts/render_provenance.py. Spelled out here
 # rather than imported so this checker keeps running from a bare phase4.
@@ -607,6 +608,64 @@ def _box_has_ink(pixels: bytes, width: int, box: tuple[int, int, int, int], ink:
     return False
 
 
+def recorded_outline_families(directory: Path) -> set[str]:
+    """The families a glyph-outline directory carries, lowercased.
+
+    Read from each document's own "family" field rather than inferred from
+    file names, because the file name is a slug and the family is the string
+    the corpus matches against.
+    """
+    families: set[str] = set()
+    for path in sorted(directory.glob("*.json")):
+        try:
+            document = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise DumpError(f"{path.name} is not a readable outline document: {error}")
+        family = document.get("family")
+        if not isinstance(family, str) or not family:
+            raise DumpError(f"{path.name} names no family")
+        families.add(family.lower())
+    return families
+
+
+def outline_pin_problems(sidecar: dict[str, Any], families: set[str]) -> list[str]:
+    """The artifact-present-family pin.
+
+    When a run's family has recorded outlines in the directory this render was
+    given, "the machine has no such font" stopped being true, so a run that
+    neither painted nor refused for a named recorded-outline reason is a
+    FAILURE -- not a refusal to be read about in a table. This is what turns
+    the flip from observed to enforced: the day an outline document for a
+    refusing family appears in the artifact, the old refusal goes red instead
+    of green.
+
+    A named recorded-outline refusal (the painter's own diagnostics all begin
+    with "<path>: recorded outlines") remains an honest refusal: a line-broken
+    run, for one, is unplaceable from retained advances no matter what was
+    recorded, and the pin must not demand pixels nothing can justify.
+    """
+    problems: list[str] = []
+    messages = list(sidecar.get("text_failures", []))
+    messages += [issue.get("message", "") for issue in sidecar.get("render_issues", [])]
+    for run in sidecar.get("texts", []):
+        if not str(run.get("text", "")).strip():
+            continue
+        candidates = [c.strip().lower() for c in str(run.get("font_family", "")).split(",")]
+        if not any(candidate in families for candidate in candidates if candidate):
+            continue
+        if run.get("painter"):
+            continue
+        path = run.get("path", "")
+        marker = f"{path}: recorded outlines"
+        if any(marker in message for message in messages):
+            continue
+        problems.append(
+            f"{path}: \"{run.get('font_family')}\" has recorded outlines and the run "
+            f"neither painted from them nor refused for a named recorded-outline reason"
+        )
+    return problems
+
+
 def iter_cases(dumps: Path) -> Iterable[Path]:
     # The provenance record lives in the dump directory so that it cannot
     # outlive the dumps it describes; it is not a case sidecar. See
@@ -627,9 +686,25 @@ def main() -> int:
     parser.add_argument("--output", type=Path, help="where to write the machine-readable report")
     parser.add_argument("--summary", type=Path, help="a markdown table to append")
     parser.add_argument("--max-failures", type=int, default=10, help="how many failures to print")
+    parser.add_argument(
+        "--glyph-outlines",
+        type=Path,
+        help="the recorded glyph-outline directory this render was given; a text run "
+        "whose family has outlines here must paint or refuse for a named "
+        "recorded-outline reason, and anything else is a failure",
+    )
     args = parser.parse_args()
 
     trees = args.trees or (args.dumps / "trees")
+    outline_families: set[str] = set()
+    if args.glyph_outlines is not None:
+        if not args.glyph_outlines.is_dir():
+            print(
+                f"::error::--glyph-outlines {args.glyph_outlines} is not a directory; "
+                "the artifact-present-family pin cannot be checked against nothing"
+            )
+            return 2
+        outline_families = recorded_outline_families(args.glyph_outlines)
 
     painted_exact = 0
     refused = 0
@@ -663,6 +738,11 @@ def main() -> int:
             not_laid_out_cases.append(
                 {"case_id": case_id, "load_error": sidecar["load_error"]})
             continue
+        if outline_families:
+            pin_problems = outline_pin_problems(sidecar, outline_families)
+            if pin_problems:
+                failures.append({"case_id": case_id, "problems": pin_problems})
+                continue
         if sidecar["refusals"] or sidecar["text_failures"] or sidecar.get("render_issues", []):
             refused += 1
             for refusal in sidecar["refusals"]:
@@ -709,6 +789,13 @@ def main() -> int:
             "re-accumulated"
         )
         print()
+    if outline_families:
+        print(
+            f"recorded outlines: the pin held every non-blank run in "
+            f"{', '.join(sorted(outline_families))} to painting or a named "
+            f"recorded-outline refusal"
+        )
+        print()
     if with_text:
         unchecked = with_text - ink_checked
         print(
@@ -744,6 +831,7 @@ def main() -> int:
 
     report = {
         "schema_version": 2,
+        "outline_families": sorted(outline_families),
         "origins_not_re_derived": origins_not_re_derived,
         "painted_exact": painted_exact,
         "refused": refused,
