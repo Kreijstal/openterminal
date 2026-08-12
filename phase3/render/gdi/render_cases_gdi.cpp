@@ -78,8 +78,11 @@ int main(int argc, char** argv) {
         return 4;
     }
     try {
+        // The probe host's ceiling, like the measurement path this pass is
+        // held to -- see LoadThemeResources in resources.h.
         const int keys = LoadThemeResources(ThemeResourceLibrary::Default(),
-                                            theme_resources.string());
+                                            theme_resources.string(),
+                                            ResourceLayer::GlobalThemeResources);
         std::cerr << "theme resources loaded: " << keys << " key(s)\n";
     } catch (const std::exception& e) {
         std::cerr << "cannot load theme resources: " << e.what() << "\n";

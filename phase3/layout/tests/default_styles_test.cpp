@@ -1,16 +1,25 @@
 // The two halves of an application's default-style universe, and the rules
 // that decide what a lookup in it answers.
 //
-// Neither half can be checked by the corpus, for two different reasons.
+// **The dictionary is layered, and which layers exist is the host's fact.**
+// What `Application.Resources` holds in a running WinUI 2 application is not
+// one dictionary but a stack: the framework's own `generic.xaml` at the
+// bottom, `XamlControlsResources` merged over it, the application's own
+// dictionaries above that. A key both halves define answers from the higher
+// one; a key only the framework defines still answers. Those are the rules
+// the layer tests below pin, and they are Terminal's -- its App.xaml merges
+// XamlControlsResources first thing.
 //
-// **The dictionary is layered, and a measurement cannot see a layer.** What
-// `Application.Resources` holds is not one dictionary but a stack: the
-// framework's own `generic.xaml` at the bottom, `XamlControlsResources` merged
-// over it, the application's own dictionaries above that. A key both halves
-// define answers from the higher one; a key only the framework defines still
-// answers. Flatten the two into one dictionary and every case in the corpus
-// measures exactly the same -- right up to the first key WinUI 2 redefines,
-// where the answer silently becomes the wrong one with no case to catch it.
+// The corpus is not recorded in that host. The oracle probe
+// (phase3/harness/xaml_probe.cpp) has no Application object at all, so
+// nothing merges anything there and the framework's floor is the only layer
+// a lookup can reach: `L5-defaults-layer-order` recorded ButtonPadding as the
+// framework's 8,4,8,5, and every key only WinUI 2 defines was refused by
+// name. The ceiling test below pins how a measurement host loads the same
+// two-file database as that one-layer host without giving up the two-layer
+// rules a real application still needs.
+//
+// The built-in style half cannot be checked by the corpus at all:
 //
 // **A built-in style is a slot, and a measurement cannot see a slot.** The
 // same argument style_test.cpp makes for the style slot, one layer further
@@ -26,6 +35,8 @@
 // Deliberately not a framework, for the reason the files beside it give.
 
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 
@@ -76,6 +87,11 @@ openxaml::ResourceValue Number(const std::string& text) {
 // different failures: getting the first wrong returns the framework's stale
 // value for something WinUI 2 deliberately redefined, and getting the second
 // wrong loses the framework's floor entirely.
+//
+// These are the rules of a host that has both layers -- a running WinUI 2
+// application. The measurement hosts never build this library shape, because
+// the probe they are compared against has one layer; see the ceiling test
+// below.
 void TheHigherLayerShadowsTheLowerOne() {
     openxaml::ThemeResourceLibrary library;
 
@@ -191,7 +207,10 @@ void TheSourceUriIsTheOneTheMitSourceComputes() {
 
 // What merging it does to a lookup: its entries land above the framework's own
 // and shadow them. This is the same rule as the layer checks above, reached
-// through the class that actually performs the merge in an application.
+// through the class that actually performs the merge in an application --
+// and only in an application: the oracle probe never constructs one, which is
+// why ButtonPadding measures as 8,4,8,5 there and not as the 11,5,11,6 this
+// merge serves.
 void MergingItPutsItsEntriesAboveTheFrameworks() {
     openxaml::ThemeResourceLibrary library;
     openxaml::ResourceDictionary framework;
@@ -213,6 +232,72 @@ void MergingItPutsItsEntriesAboveTheFrameworks() {
               "11,5,11,6", "XamlControlsResources' value wins where both define the key");
     CheckText(openxaml::LookUpResource(library.ActiveLayers(), "OnlyTheFramework", "test").text,
               "5", "and the framework's floor is still underneath it");
+}
+
+// --- which layers a host actually has ------------------------------------------
+
+// The two databases in one directory describe the application dictionary of a
+// real WinUI 2 application -- and the oracle probe is not one. The probe
+// (phase3/harness/xaml_probe.cpp) is a bare WindowsXamlManager on a thread:
+// no Application object, no App.xaml, nothing ever merged. The recording says
+// what that means for a lookup, three times over: every key only WinUI 2
+// defines was refused by name (`L5-theme-double-height`,
+// `L5-theme-thickness-padding`, and the CardStrokeColorDefaultBrush /
+// ToggleSwitchOuterBorderStrokeThickness harvests at L7), a key only the
+// framework defines resolved (`L5-defaults-framework-only-key`), and
+// ButtonPadding -- which both halves define and disagree about -- measured as
+// the framework's 8,4,8,5, not WinUI 2's 11,5,11,6
+// (`L5-defaults-layer-order`, bit-identical to its framework-inline twin).
+//
+// So the loader takes a ceiling: the highest layer the loading host actually
+// has. A measurement host models the probe and stops at the framework's
+// floor; a host that models a running application loads everything, and the
+// shadowing rules above are its semantics, unchanged.
+void TheProbeHostCeilingLoadsOnlyTheFrameworksFloor() {
+    namespace fs = std::filesystem;
+    const fs::path directory = fs::temp_directory_path() / "openxaml-layer-ceiling-test";
+    fs::remove_all(directory);
+    fs::create_directories(directory);
+    {
+        std::ofstream out(directory / "default-styles.json");
+        out << R"({"layer": "GlobalThemeResources", "sources": {}, "themes": {"Default": {)"
+            << R"("ButtonPadding": {"status": "value", "type": "Thickness", "text": "8,4,8,5"},)"
+            << R"("OnlyTheFramework": {"status": "value", "type": "x:Double", "text": "14"}}}})";
+    }
+    {
+        // No "layer" member, like the real extractor output: it defaults to
+        // XamlControlsResources, which is what the file is.
+        std::ofstream out(directory / "winui-2.8.4.json");
+        out << R"({"source": {"commit": "test"}, "themes": {"Default": {)"
+            << R"("ButtonPadding": {"status": "value", "type": "Thickness", "text": "11,5,11,6"},)"
+            << R"("OnlyWinUI": {"status": "value", "type": "x:Double", "text": "24"}}}})";
+    }
+
+    openxaml::ThemeResourceLibrary probe_host;
+    const int keys = openxaml::LoadThemeResources(
+        probe_host, directory.string(), openxaml::ResourceLayer::GlobalThemeResources);
+    CheckDouble(static_cast<double>(keys), 2.0,
+                "under the probe-host ceiling only the framework half's keys load");
+    CheckText(openxaml::LookUpResource(probe_host.ActiveLayers(), "ButtonPadding", "test").text,
+              "8,4,8,5",
+              "a key both halves define answers from the framework, the only layer there is");
+    bool refused = false;
+    try {
+        openxaml::LookUpResource(probe_host.ActiveLayers(), "OnlyWinUI", "test");
+    } catch (const openxaml::MarkupError&) {
+        refused = true;
+    }
+    Check(refused, "a key only WinUI 2 defines fails by name, exactly as the probe recorded");
+
+    // The default ceiling is still the full application dictionary: both
+    // layers load and WinUI 2's value shadows. That is a real host too -- it
+    // is Terminal's -- it is just not the one the corpus is recorded in.
+    openxaml::ThemeResourceLibrary application;
+    openxaml::LoadThemeResources(application, directory.string());
+    CheckText(openxaml::LookUpResource(application.ActiveLayers(), "ButtonPadding", "test").text,
+              "11,5,11,6", "without a ceiling both layers load and WinUI 2's value shadows");
+
+    fs::remove_all(directory);
 }
 
 // --- the built-in style slot --------------------------------------------------
@@ -359,6 +444,8 @@ int main() {
 
     TheSourceUriIsTheOneTheMitSourceComputes();
     MergingItPutsItsEntriesAboveTheFrameworks();
+
+    TheProbeHostCeilingLoadsOnlyTheFrameworksFloor();
 
     ABuiltInValueIsNotAStyleValue();
     AStyleValueShadowsTheBuiltInOne();

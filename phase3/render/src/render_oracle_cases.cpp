@@ -67,8 +67,13 @@ int main(int argc, char** argv) {
     try {
         std::cerr << "font metrics loaded: "
                   << LoadFontDirectory(FontLibrary::Default(), fonts.string()) << '\n';
+        // The probe host's ceiling: the render oracle is the same bare
+        // WindowsXamlManager host as the measurement probe, so only the
+        // framework's floor exists there. See LoadThemeResources in
+        // resources.h.
         std::cerr << "theme resources loaded: "
-                  << LoadThemeResources(ThemeResourceLibrary::Default(), themes.string())
+                  << LoadThemeResources(ThemeResourceLibrary::Default(), themes.string(),
+                                        ResourceLayer::GlobalThemeResources)
                   << '\n';
     } catch (const std::exception& error) {
         std::cerr << "cannot load renderer environment: " << error.what() << '\n';

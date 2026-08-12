@@ -98,7 +98,11 @@ int main(int argc, char** argv) {
         return 4;
     }
     try {
-        LoadThemeResources(ThemeResourceLibrary::Default(), theme_resources.string());
+        // The probe host's ceiling, like every host the corpus is measured
+        // in: the oracle has no XamlControlsResources merged, so neither does
+        // any run compared against it. See LoadThemeResources in resources.h.
+        LoadThemeResources(ThemeResourceLibrary::Default(), theme_resources.string(),
+                           ResourceLayer::GlobalThemeResources);
     } catch (const std::exception& e) {
         std::cerr << "cannot load theme resources from " << theme_resources.string() << ": "
                   << e.what() << "\n";
