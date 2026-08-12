@@ -44,11 +44,19 @@ jobs:
           python-version: '3.12'
 
       - name: Install MinGW and Wine
+        # Deliberately no wine32:i386. Ubuntu's /usr/bin/wine dispatch script
+        # prefers the 32-bit loader whenever wine32 is installed, and the
+        # 32-bit half of a win64 prefix resolves user32's zlib1.dll import
+        # through WINEPATH to the 64-bit /usr/x86_64-w64-mingw32/lib/zlib1.dll
+        # (c000007b, wrong architecture). That cascade kills wineboot's
+        # syswow64 pass with the misleading "could not load kernel32.dll,
+        # status c0000135" and exit code 53. Everything this job runs is a
+        # 64-bit PE; without wine32 the dispatch script selects wine64 and
+        # the prefix has no 32-bit side to poison.
         run: |
-          sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake g++-mingw-w64-x86-64-posix wine wine64 wine32:i386 \
+            cmake g++-mingw-w64-x86-64-posix wine wine64 \
             xvfb xauth fonts-liberation
 
       - name: Cross-compile the retained DComp boundary
