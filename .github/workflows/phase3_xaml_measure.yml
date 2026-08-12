@@ -949,6 +949,14 @@ jobs:
           name: ${{ needs.measure.outputs.render_oracle }}
           path: native-render-oracle
 
+      # The recorded glyph outlines the measure job harvested. The name is
+      # derived from os_build the same way the measure job derives it when
+      # uploading, so the render job needs nothing new published to reach it.
+      - uses: actions/download-artifact@v4
+        with:
+          name: xaml-glyph-outlines-${{ needs.measure.outputs.os_build }}
+          path: glyph-outlines
+
       - name: Build the render core
         run: |
           cmake -S phase3/render -B "$RUNNER_TEMP/render-build" -DCMAKE_BUILD_TYPE=Release
@@ -971,7 +979,8 @@ jobs:
         run: |
           for run in 1 2; do
             "$RUNNER_TEMP/render-build/render_cases" \
-              phase3/xaml-db/cases "$RUNNER_TEMP/render$run" fonts
+              phase3/xaml-db/cases "$RUNNER_TEMP/render$run" fonts \
+              --glyph-outlines glyph-outlines
           done
           if ! diff -r "$RUNNER_TEMP/render1" "$RUNNER_TEMP/render2" > "$RUNNER_TEMP/nondet.txt"; then
             echo "::error::renders differ between two runs on the same machine"
@@ -1003,10 +1012,16 @@ jobs:
             exit 1
           fi
 
+      # --glyph-outlines arms the artifact-present-family pin: the day an
+      # outline document for a refusing family lands in the artifact, a run of
+      # that family that keeps refusing is a failure here, not a row in the
+      # refusal table. That is what makes the flip enforced rather than
+      # observed, with no count named anywhere.
       - name: The round trip is pixel-exact
         run: |
           python3 -B phase4/scripts/check_render.py \
             --dumps "$RUNNER_TEMP/render1" \
+            --glyph-outlines glyph-outlines \
             --output render-report.json \
             --summary "$GITHUB_STEP_SUMMARY"
 
