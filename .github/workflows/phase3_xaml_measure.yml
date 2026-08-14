@@ -630,13 +630,13 @@ jobs:
       # Always: a failing report is exactly when the measurements are worth
       # having, and skipping the upload on failure throws away the only copy
       # of what the runtime actually said.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && hashFiles('phase3/xaml-db/measurements/**') != ''
         with:
           name: xaml-measurements-${{ env.os_build }}
           path: phase3/xaml-db/measurements/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: xaml-render-boundaries-${{ env.os_build }}
@@ -651,7 +651,7 @@ jobs:
       # and belong to the checkout, and an artifact that carried the derived
       # numbers alongside the harvested ones would be checking the harvest
       # against a copy of itself.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && hashFiles('phase3/xaml-db/fonts/*.json') != ''
         with:
           name: xaml-fonts-${{ env.os_build }}
@@ -660,7 +660,7 @@ jobs:
       # The recorded ink. Its own artifact, not folded into xaml-fonts-*,
       # because it is a different kind of reading with a different licensing
       # story and the two must not be conflated by living in one directory.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && hashFiles('phase3/xaml-db/glyph-outlines/*.json') != ''
         with:
           name: xaml-glyph-outlines-${{ env.os_build }}
@@ -670,7 +670,7 @@ jobs:
       # oracle just measured travels as an artifact. The layout job measures
       # this exact corpus rather than regenerating its own, so both jobs are
       # answering the same question by construction.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && hashFiles('phase3/xaml-db/cases/**') != ''
         with:
           name: xaml-cases-${{ env.os_build }}
@@ -680,7 +680,7 @@ jobs:
       # the same reason: the layout job must answer lookups out of the same
       # content the classifier assumed, or the two jobs are measuring different
       # corpora and neither says so.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && hashFiles('phase3/xaml-db/theme-resources/*.json') != ''
         with:
           name: xaml-theme-resources-${{ env.os_build }}
@@ -928,7 +928,7 @@ jobs:
           sys.exit(1 if failed else 0)
           PY
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && hashFiles('layout-report.json') != ''
         with:
           name: layout-report
@@ -1094,13 +1094,13 @@ jobs:
                 f"{summary['passed']} passed, {summary['failed']} failed")
           PY
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && hashFiles('render-report.json') != ''
         with:
           name: render-report
           path: render-report.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && hashFiles('native-render-acceptance.json') != ''
         with:
           name: native-render-acceptance-${{ needs.measure.outputs.os_build }}

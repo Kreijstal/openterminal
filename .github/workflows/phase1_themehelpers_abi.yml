@@ -69,7 +69,7 @@ jobs:
           ' artifacts/themehelpers-abi.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload textual ABI harvest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phase1-themehelpers-abi
           path: artifacts/themehelpers-abi.json
