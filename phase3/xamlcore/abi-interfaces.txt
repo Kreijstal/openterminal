@@ -153,6 +153,7 @@ ABI::Windows::UI::Xaml::Hosting::IWindowsXamlManager
 ABI::Windows::UI::Xaml::Hosting::IWindowsXamlManagerStatics
 ABI::Windows::Foundation::IClosable
 ABI::Windows::Foundation::IPropertyValue
+ABI::Windows::Foundation::IPropertyValueStatics
 ABI::Windows::UI::IColorsStatics
 ABI::Windows::UI::ViewManagement::IAccessibilitySettings
 
@@ -196,3 +197,5 @@ ABI::Windows::UI::Xaml::Media::Animation::ITimelineStatics
 # Terminal a null CoreWindow and the keystroke path faults.
 ABI::Windows::UI::Core::ICoreWindow
 ABI::Windows::UI::Core::ICoreWindowStatic
+ABI::Windows::UI::ViewManagement::IUISettings
+ABI::Windows::UI::ViewManagement::IUISettings3

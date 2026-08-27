@@ -46,6 +46,7 @@ namespace wuit = ABI::Windows::UI::Text;
 namespace wuxma = ABI::Windows::UI::Xaml::Media::Animation;
 namespace warc = ABI::Windows::ApplicationModel::Resources::Core;
 namespace wfc = ABI::Windows::Foundation::Collections;
+namespace wf = ABI::Windows::Foundation;
 
 // DComp raster strata consume the same retained LocalText contract as the
 // existing GDI island cache. Keep the adapter at the host boundary: the
@@ -186,6 +187,8 @@ inline constexpr GUID IID_ResourceCandidateVectorView = {
     0xe28e92f0, 0x9ffb, 0x5ea7, {0x9f, 0xc9, 0xa7, 0x3b, 0xda, 0x47, 0x18, 0x86}};
 inline constexpr GUID IID_StringReference = {
     0xfd416dfb, 0x2a07, 0x52eb, {0xaa, 0xe3, 0xdf, 0xce, 0x14, 0x11, 0x6c, 0x05}};
+inline constexpr GUID IID_Int32Reference = {
+    0x548cefbd, 0xbc8a, 0x5fa0, {0x8d, 0xf2, 0x95, 0x74, 0x40, 0xfc, 0x8b, 0xf4}};
 
 // The prepared MinGW SDK headers instantiate only the IReference<T>
 // specializations used by their own metadata surface, and omit HSTRING. Keep
@@ -194,6 +197,10 @@ inline constexpr GUID IID_StringReference = {
 // interface identified by IID_StringReference above.
 struct StringReferenceAbi : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_Value(HSTRING* value) = 0;
+};
+
+struct Int32ReferenceAbi : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Value(INT32* value) = 0;
 };
 
 class ValueSetObject final : public ComObject,
@@ -2117,6 +2124,91 @@ private:
     std::string value_;
 };
 
+class PropertyValueFactory final : public ComObject,
+                                   public IActivationFactory,
+                                   public abi::NotImpl_IPropertyValueStatics {
+public:
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.Foundation.PropertyValue";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        if (IsEqualIID(iid, ::openxaml::iid::Windows_Foundation_IPropertyValueStatics))
+            *object = static_cast<wf::IPropertyValueStatics*>(this);
+        else if (IsEqualIID(iid, ::openxaml::iid::IActivationFactory) ||
+                 IsEqualIID(iid, IID_IUnknown) ||
+                 IsEqualIID(iid, ::openxaml::iid::IInspectable))
+            *object = static_cast<IActivationFactory*>(this);
+        else {
+            *object = nullptr;
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateString(HSTRING value, IInspectable** result) override {
+        if (!result) return E_POINTER;
+        *result = nullptr;
+        auto* boxed = new (std::nothrow) BoxedStringObject(Utf8FromHString(value));
+        if (!boxed) return E_OUTOFMEMORY;
+        *result = static_cast<wf::IPropertyValue*>(boxed);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE CreateInt32(INT32 value, IInspectable** result) override;
+};
+
+class BoxedInt32Object final : public ComObject,
+                               public abi::NotImpl_IPropertyValue,
+                               public Int32ReferenceAbi {
+public:
+    explicit BoxedInt32Object(INT32 value) : value_(value) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.Foundation.IReference`1<Int32>";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_Foundation_IPropertyValue,
+                        wf::IPropertyValue)
+        OPENXAML_QI_ARM(IID_Int32Reference, Int32ReferenceAbi)
+        OPENXAML_QI_ARM(IID_IUnknown, wf::IPropertyValue)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wf::IPropertyValue)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Type(wf::PropertyType* value) override {
+        if (!value) return E_POINTER;
+        *value = wf::PropertyType_Int32;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_IsNumericScalar(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = true;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetInt32(INT32* value) override {
+        if (!value) return E_POINTER;
+        *value = value_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Value(INT32* value) override {
+        if (!value) return E_POINTER;
+        *value = value_;
+        return S_OK;
+    }
+private:
+    INT32 value_;
+};
+
+HRESULT PropertyValueFactory::CreateInt32(INT32 value, IInspectable** result) {
+    if (!result) return E_POINTER;
+    auto* boxed = new (std::nothrow) BoxedInt32Object(value);
+    *result = boxed ? static_cast<wf::IPropertyValue*>(boxed) : nullptr;
+    return boxed ? S_OK : E_OUTOFMEMORY;
+}
+
 inline bool InspectableString(IInspectable* value, std::wstring* text) {
     if (!value || !text) return false;
     wf::IPropertyValue* property = nullptr;
@@ -3074,6 +3166,107 @@ public:
     }
 };
 
+class UriObject final : public ComObject, public wf::IUriRuntimeClass {
+public:
+    using PrimaryInterface = wf::IUriRuntimeClass;
+    explicit UriObject(HSTRING value) { WindowsDuplicateString(value, &value_); }
+    ~UriObject() override { WindowsDeleteString(value_); }
+    const wchar_t* RuntimeClassName() const override { return L"Windows.Foundation.Uri"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        if (IsEqualIID(iid, ::openxaml::iid::Windows_Foundation_IUriRuntimeClass) ||
+            IsEqualIID(iid, IID_IUnknown) ||
+            IsEqualIID(iid, ::openxaml::iid::IInspectable)) {
+            *object = static_cast<wf::IUriRuntimeClass*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT Copy(HSTRING* value) {
+        if (!value) return E_POINTER;
+        return WindowsDuplicateString(value_, value);
+    }
+    HRESULT Empty(HSTRING* value) {
+        if (!value) return E_POINTER;
+        return WindowsCreateString(L"", 0, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_AbsoluteUri(HSTRING* value) override { return Copy(value); }
+    HRESULT STDMETHODCALLTYPE get_DisplayUri(HSTRING* value) override { return Copy(value); }
+    HRESULT STDMETHODCALLTYPE get_Domain(HSTRING* value) override { return Empty(value); }
+    HRESULT STDMETHODCALLTYPE get_Extension(HSTRING* value) override { return Empty(value); }
+    HRESULT STDMETHODCALLTYPE get_Fragment(HSTRING* value) override { return Empty(value); }
+    HRESULT STDMETHODCALLTYPE get_Host(HSTRING* value) override { return Empty(value); }
+    HRESULT STDMETHODCALLTYPE get_Password(HSTRING* value) override { return Empty(value); }
+    HRESULT STDMETHODCALLTYPE get_Path(HSTRING* value) override { return Copy(value); }
+    HRESULT STDMETHODCALLTYPE get_Query(HSTRING* value) override { return Empty(value); }
+    HRESULT STDMETHODCALLTYPE get_QueryParsed(wf::IWwwFormUrlDecoderRuntimeClass** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE get_RawUri(HSTRING* value) override { return Copy(value); }
+    HRESULT STDMETHODCALLTYPE get_SchemeName(HSTRING* value) override { return Empty(value); }
+    HRESULT STDMETHODCALLTYPE get_UserName(HSTRING* value) override { return Empty(value); }
+    HRESULT STDMETHODCALLTYPE get_Port(INT32* value) override {
+        if (!value) return E_POINTER;
+        *value = 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Suspicious(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = false;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Equals(wf::IUriRuntimeClass* uri, boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = uri == static_cast<wf::IUriRuntimeClass*>(this);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE CombineUri(HSTRING relative, wf::IUriRuntimeClass** value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<wf::IUriRuntimeClass*>(new (std::nothrow) UriObject(relative));
+        return *value ? S_OK : E_OUTOFMEMORY;
+    }
+private:
+    HSTRING value_ = nullptr;
+};
+
+class UriFactory final : public ComObject,
+                         public IActivationFactory,
+                         public wf::IUriRuntimeClassFactory {
+public:
+    const wchar_t* RuntimeClassName() const override { return L"Windows.Foundation.Uri"; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        if (IsEqualIID(iid, ::openxaml::iid::Windows_Foundation_IUriRuntimeClassFactory))
+            *object = static_cast<wf::IUriRuntimeClassFactory*>(this);
+        else if (IsEqualIID(iid, ::openxaml::iid::IActivationFactory) ||
+                 IsEqualIID(iid, IID_IUnknown) ||
+                 IsEqualIID(iid, ::openxaml::iid::IInspectable))
+            *object = static_cast<IActivationFactory*>(this);
+        else {
+            *object = nullptr;
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateUri(HSTRING uri, wf::IUriRuntimeClass** value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<wf::IUriRuntimeClass*>(new (std::nothrow) UriObject(uri));
+        return *value ? S_OK : E_OUTOFMEMORY;
+    }
+    HRESULT STDMETHODCALLTYPE CreateWithRelativeUri(HSTRING, HSTRING relative,
+                                                    wf::IUriRuntimeClass** value) override {
+        return CreateUri(relative, value);
+    }
+};
+
 class DispatcherQueueTimerObject final
     : public ComObject,
       public abi::NotImpl_IDispatcherQueueTimer {
@@ -3832,7 +4025,10 @@ public:
             scope_, resource_key);
         if (!resource) {
             TraceResourceMiss(scope_, resource_key);
-            return E_BOUNDS;
+            auto* named = new (std::nothrow) NamedResourceObject(resource_key);
+            if (!named) return E_OUTOFMEMORY;
+            *value = static_cast<warc::INamedResource*>(named);
+            return S_OK;
         }
         auto* named = new (std::nothrow) NamedResourceObject(*resource);
         if (!named) return E_OUTOFMEMORY;
@@ -3848,7 +4044,14 @@ public:
     }
     HRESULT STDMETHODCALLTYPE HasKey(HSTRING key, boolean* value) override {
         if (!value) return E_POINTER;
-        *value = ConfiguredResourceCatalog().Has(scope_, Utf8FromHString(key));
+        const std::string resource_key = Utf8FromHString(key);
+        // Lookup/GetValue deliberately synthesize a candidate from an unknown
+        // key so callers can continue when no PRI catalog is available.  Keep
+        // the map-view contract consistent with that fallback: Terminal first
+        // probes HasKey() for localized command names and rejects its built-in
+        // settings JSON when HasKey says false even though Lookup succeeds.
+        *value = ConfiguredResourceCatalog().Has(scope_, resource_key) ||
+                 !resource_key.empty();
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE Split(NamedResourceMapView** first,
@@ -3879,8 +4082,7 @@ private:
             scope_, resource_key);
         if (!resource) {
             TraceResourceMiss(scope_, resource_key);
-            *value = nullptr;
-            return E_BOUNDS;
+            return CandidateFromUtf8(resource_key, value);
         }
         return CandidateFromUtf8(*resource, value);
     }
@@ -5798,6 +6000,12 @@ namespace wuvm = ABI::Windows::UI::ViewManagement;
 inline constexpr GUID IID_IAccessibilitySettings = {
     0xfe0e8147, 0xc4c0, 0x4562,
     {0xb9, 0x62, 0x13, 0x27, 0xb5, 0x2a, 0xd5, 0xb9}};
+inline constexpr GUID IID_IUISettings = {
+    0x85361600, 0x1c63, 0x4627,
+    {0xbc, 0xb1, 0x3a, 0x89, 0xe0, 0xbc, 0x9c, 0x55}};
+inline constexpr GUID IID_IUISettings3 = {
+    0x03021be4, 0x5254, 0x4781,
+    {0x81, 0x94, 0x51, 0x68, 0xf7, 0xd0, 0x6d, 0x7b}};
 
 class AccessibilitySettingsObject final
     : public ComObject,
@@ -5866,6 +6074,42 @@ private:
     std::map<LONGLONG,
              __FITypedEventHandler_2_Windows__CUI__CViewManagement__CAccessibilitySettings_IInspectable*>
         handlers_;
+};
+
+class UISettingsObject final
+    : public ComObject,
+      public openxaml::abi::NotImpl_IUISettings,
+      public openxaml::abi::NotImpl_IUISettings3 {
+public:
+    using PrimaryInterface = wuvm::IUISettings;
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.ViewManagement.UISettings";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IUISettings, wuvm::IUISettings)
+        OPENXAML_QI_ARM(IID_IUISettings3, wuvm::IUISettings3)
+        OPENXAML_QI_ARM(IID_IUnknown, wuvm::IUISettings)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wuvm::IUISettings)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_AnimationsEnabled(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = true;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetColorValue(wuvm::UIColorType type,
+                                             ABI::Windows::UI::Color* value) override {
+        if (!value) return E_POINTER;
+        const bool foreground = type == wuvm::UIColorType_Foreground;
+        *value = {255, static_cast<BYTE>(foreground ? 255 : 0),
+                       static_cast<BYTE>(foreground ? 255 : 0),
+                       static_cast<BYTE>(foreground ? 255 : 0)};
+        return S_OK;
+    }
 };
 
 namespace wuc = ABI::Windows::UI::Core;
@@ -6143,6 +6387,11 @@ Factory<ValueSetObject>& ValueSetFactory() {
 Factory<AccessibilitySettingsObject>& AccessibilitySettingsFactory() {
     static Factory<AccessibilitySettingsObject> factory(
         L"Windows.UI.ViewManagement.AccessibilitySettings");
+    return factory;
+}
+Factory<UISettingsObject>& UISettingsFactory() {
+    static Factory<UISettingsObject> factory(
+        L"Windows.UI.ViewManagement.UISettings");
     return factory;
 }
 CoreWindowFactory& TheCoreWindowFactory() {
@@ -6481,6 +6730,14 @@ DispatcherQueueFactory& TheDispatcherQueueFactory() {
     static DispatcherQueueFactory factory;
     return factory;
 }
+UriFactory& TheUriFactory() {
+    static UriFactory factory;
+    return factory;
+}
+PropertyValueFactory& ThePropertyValueFactory() {
+    static PropertyValueFactory factory;
+    return factory;
+}
 WindowsXamlManagerFactory& TheWindowsXamlManagerFactory() {
     static WindowsXamlManagerFactory factory;
     return factory;
@@ -6542,6 +6799,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &ValueSetFactory();
     if (wcscmp(name, L"Windows.UI.ViewManagement.AccessibilitySettings") == 0)
         return &AccessibilitySettingsFactory();
+    if (wcscmp(name, L"Windows.UI.ViewManagement.UISettings") == 0)
+        return &UISettingsFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.DispatcherTimer") == 0)
         return &TheDispatcherTimerFactory();
     if (wcscmp(name, L"Windows.UI.Core.CoreWindow") == 0)
@@ -6674,6 +6933,10 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &XamlControlsMetadataProviderFactory();
     if (wcscmp(name, L"Windows.System.DispatcherQueue") == 0)
         return &TheDispatcherQueueFactory();
+    if (wcscmp(name, L"Windows.Foundation.Uri") == 0)
+        return &TheUriFactory();
+    if (wcscmp(name, L"Windows.Foundation.PropertyValue") == 0)
+        return &ThePropertyValueFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Hosting.WindowsXamlManager") == 0)
         return &TheWindowsXamlManagerFactory();
     if (wcscmp(name, L"Windows.ApplicationModel.Resources.Core.ResourceManager") == 0)

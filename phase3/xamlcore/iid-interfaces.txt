@@ -8,6 +8,8 @@
 # indistinguishable from the class not being implemented at all.
 
 Windows.UI.Xaml.IDependencyObject
+Windows.Foundation.IUriRuntimeClass
+Windows.Foundation.IUriRuntimeClassFactory
 Windows.UI.Xaml.IDependencyObject2
 Windows.UI.Xaml.IDispatcherTimer
 Windows.UI.Xaml.IDispatcherTimerFactory
