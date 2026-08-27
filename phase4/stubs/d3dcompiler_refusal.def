@@ -1,4 +1,0 @@
-LIBRARY d3dcompiler_47.dll
-EXPORTS
-    D3DCompileFromFile
-    D3DReflect
