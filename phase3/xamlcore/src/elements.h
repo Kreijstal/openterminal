@@ -76,6 +76,11 @@ namespace wuxdata = ABI::Windows::UI::Xaml::Data;
 namespace wuxs = ABI::Windows::UI::Xaml::Shapes;
 namespace wuxi = ABI::Windows::UI::Xaml::Input;
 
+// Implemented beside ResourceDictionaryObject in factory.cpp. Keeping this
+// construction inside OpenXaml avoids sending our own XAML types back through
+// the host's WinRT registry (Wine and ReactOS do not register system XAML).
+HRESULT CreateResourceDictionary(wux::IResourceDictionary** value);
+
 // --- SizeChangedEventArgs -----------------------------------------------------
 //
 // The one event-arguments class this DLL builds, because SizeChanged is one of
@@ -1747,19 +1752,7 @@ public:
     HRESULT STDMETHODCALLTYPE get_Resources(wux::IResourceDictionary** value) override {
         if (!value) return E_POINTER;
         if (!resources_) {
-            HSTRING name = nullptr;
-            HRESULT hr = WindowsCreateString(
-                L"Windows.UI.Xaml.ResourceDictionary", 34, &name);
-            IInspectable* instance = nullptr;
-            if (SUCCEEDED(hr)) hr = RoActivateInstance(name, &instance);
-            WindowsDeleteString(name);
-            if (SUCCEEDED(hr)) {
-                hr = instance->QueryInterface(
-                    GUID{0xc1ea4f24, 0xd6de, 0x4191,
-                         {0x8e, 0x3a, 0xf4, 0x86, 0x01, 0xf7, 0x48, 0x9c}},
-                    reinterpret_cast<void**>(&resources_));
-            }
-            if (instance) instance->Release();
+            const HRESULT hr = CreateResourceDictionary(&resources_);
             if (FAILED(hr)) return hr;
         }
         *value = resources_;
@@ -5448,6 +5441,63 @@ private:
     openxaml::FontIcon layout_;
     wuxc::IIconSource* source_ = nullptr;
     wuxm::IBrush* foreground_ = nullptr;
+};
+
+inline constexpr GUID IID_IMuxcImageIcon = {
+    0xe30c7c6c, 0x2026, 0x5e76, {0xa2, 0x71, 0x1b, 0x9f, 0xab, 0x3f, 0x84, 0x9d}};
+inline constexpr GUID IID_IMuxcImageIconFactory = {
+    0x235e0279, 0xa7d0, 0x5fda, {0xa3, 0x08, 0x9b, 0x7c, 0xb9, 0xc4, 0xc9, 0x12}};
+
+struct IMuxcImageIcon : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Source(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Source(void*) = 0;
+};
+struct IMuxcImageIconFactory : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE CreateInstance(void*, void**, void**) = 0;
+};
+
+class MuxcImageIconObject final : public XamlElement,
+                                  public abi::NotImpl_IIconElement,
+                                  public IMuxcImageIcon {
+public:
+    using PrimaryInterface = IMuxcImageIcon;
+    ~MuxcImageIconObject() override {
+        if (source_) source_->Release();
+    }
+    openxaml::Element* Layout() override { return &layout_; }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Microsoft.UI.Xaml.Controls.ImageIcon";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IMuxcImageIcon, IMuxcImageIcon)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IIconElement,
+                        wuxc::IIconElement)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Source(void** value) override {
+        if (!value) return E_POINTER;
+        *value = source_;
+        if (source_) source_->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Source(void* value) override {
+        auto* source = static_cast<IInspectable*>(value);
+        if (source) source->AddRef();
+        if (source_) source_->Release();
+        source_ = source;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Foreground(wuxm::IBrush** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Foreground(wuxm::IBrush*) override { return S_OK; }
+private:
+    openxaml::FontIcon layout_;
+    IInspectable* source_ = nullptr;
 };
 
 class MenuFlyoutItemObject final

@@ -4,6 +4,8 @@
 #include "pch.h"
 
 #include <ScopedResourceLoader.h>
+#include <winrt/Windows.UI.Xaml.Hosting.h>
+#include <winstring.h>
 
 #include <algorithm>
 #include <map>
@@ -16,6 +18,19 @@
 
 namespace
 {
+int32_t __stdcall activationHandler(void* classId,
+                                    const winrt::guid& iid,
+                                    void** factory) noexcept
+{
+    const auto openXaml = OpenXamlGetActivationFactory(
+        static_cast<HSTRING>(classId),
+        reinterpret_cast<const IID&>(iid), factory);
+    if (openXaml != CLASS_E_CLASSNOTAVAILABLE)
+        return openXaml;
+    return RoGetActivationFactory(static_cast<HSTRING>(classId),
+                                  reinterpret_cast<const IID&>(iid), factory);
+}
+
 const Json::Value& resourceCatalog()
 {
     static const Json::Value catalog = [] {
@@ -50,6 +65,42 @@ const Json::Value* findResource(const std::wstring_view scope,
     std::replace(keyName.begin(), keyName.end(), '/', '.');
     return resources.isMember(keyName) ? &resources[keyName] : nullptr;
 }
+}
+
+void OpenTerminalInstallActivationHandler() noexcept
+{
+    winrt_activation_handler = activationHandler;
+}
+
+winrt::Windows::System::DispatcherQueue OpenTerminalDispatcherQueue()
+{
+    void* queue{};
+    winrt::check_hresult(OpenXamlGetDispatcherQueue(&queue));
+    return { queue, winrt::take_ownership_from_abi };
+}
+
+winrt::Windows::ApplicationModel::Resources::Core::ResourceManager
+OpenTerminalResourceManager()
+{
+    void* manager{};
+    winrt::check_hresult(OpenXamlGetResourceManager(&manager));
+    return { manager, winrt::take_ownership_from_abi };
+}
+
+winrt::Windows::ApplicationModel::Resources::Core::ResourceContext
+OpenTerminalResourceContext()
+{
+    void* context{};
+    winrt::check_hresult(OpenXamlGetResourceContext(&context));
+    return { context, winrt::take_ownership_from_abi };
+}
+
+winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource
+OpenTerminalDesktopWindowXamlSource()
+{
+    void* source{};
+    winrt::check_hresult(OpenXamlCreateDesktopWindowXamlSource(&source));
+    return { source, winrt::take_ownership_from_abi };
 }
 
 const ScopedResourceLoader& OpenTerminalGetResourceLoaderForScope(

@@ -1351,6 +1351,34 @@ protected:
     }
 };
 
+class MuxcImageIconActivationFactory final
+    : public Factory<MuxcImageIconObject>, public IMuxcImageIconFactory {
+public:
+    MuxcImageIconActivationFactory()
+        : Factory(L"Microsoft.UI.Xaml.Controls.ImageIcon") {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        return Factory<MuxcImageIconObject>::QueryInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE CreateInstance(void*, void** inner, void** value) override {
+        if (!inner || !value) return E_POINTER;
+        *inner = nullptr;
+        *value = nullptr;
+        auto* icon = new (std::nothrow) MuxcImageIconObject();
+        if (!icon) return E_OUTOFMEMORY;
+        auto* projected = static_cast<IMuxcImageIcon*>(icon);
+        projected->AddRef();
+        *inner = static_cast<IInspectable*>(projected);
+        *value = projected;
+        return S_OK;
+    }
+protected:
+    HRESULT QueryStatics(REFIID iid, void** object) override {
+        OPENXAML_QI_ARM(IID_IMuxcImageIconFactory, IMuxcImageIconFactory)
+        return E_NOINTERFACE;
+    }
+};
+
 class ToolTipActivationFactory final
     : public Factory<ToolTipObject>,
       public wuxc::IToolTipFactory {
@@ -2140,6 +2168,114 @@ private:
     std::string value_;
 };
 
+class BoxedBooleanObject final : public ComObject,
+                                 public abi::NotImpl_IPropertyValue {
+public:
+    explicit BoxedBooleanObject(boolean value) : value_(value) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.Foundation.IReference`1<Boolean>";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_Foundation_IPropertyValue,
+                        wf::IPropertyValue)
+        OPENXAML_QI_ARM(IID_IUnknown, wf::IPropertyValue)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wf::IPropertyValue)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Type(wf::PropertyType* value) override {
+        if (!value) return E_POINTER;
+        *value = wf::PropertyType_Boolean;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_IsNumericScalar(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = false;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetBoolean(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = value_;
+        return S_OK;
+    }
+private:
+    boolean value_;
+};
+
+class BoxedUInt32Object final : public ComObject,
+                                public abi::NotImpl_IPropertyValue {
+public:
+    explicit BoxedUInt32Object(UINT32 value) : value_(value) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.Foundation.IReference`1<UInt32>";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_Foundation_IPropertyValue,
+                        wf::IPropertyValue)
+        OPENXAML_QI_ARM(IID_IUnknown, wf::IPropertyValue)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wf::IPropertyValue)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Type(wf::PropertyType* value) override {
+        if (!value) return E_POINTER;
+        *value = wf::PropertyType_UInt32;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_IsNumericScalar(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = true;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetUInt32(UINT32* value) override {
+        if (!value) return E_POINTER;
+        *value = value_;
+        return S_OK;
+    }
+private:
+    UINT32 value_;
+};
+
+class BoxedGuidObject final : public ComObject,
+                              public abi::NotImpl_IPropertyValue {
+public:
+    explicit BoxedGuidObject(GUID value) : value_(value) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.Foundation.IReference`1<Guid>";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_Foundation_IPropertyValue,
+                        wf::IPropertyValue)
+        OPENXAML_QI_ARM(IID_IUnknown, wf::IPropertyValue)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wf::IPropertyValue)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Type(wf::PropertyType* value) override {
+        if (!value) return E_POINTER;
+        *value = wf::PropertyType_Guid;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_IsNumericScalar(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = false;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetGuid(GUID* value) override {
+        if (!value) return E_POINTER;
+        *value = value_;
+        return S_OK;
+    }
+private:
+    GUID value_;
+};
+
 class PropertyValueFactory final : public ComObject,
                                    public IActivationFactory,
                                    public abi::NotImpl_IPropertyValueStatics {
@@ -2173,6 +2309,24 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE CreateInt32(INT32 value, IInspectable** result) override;
+    HRESULT STDMETHODCALLTYPE CreateBoolean(boolean value, IInspectable** result) override {
+        if (!result) return E_POINTER;
+        auto* boxed = new (std::nothrow) BoxedBooleanObject(value);
+        *result = boxed ? static_cast<wf::IPropertyValue*>(boxed) : nullptr;
+        return boxed ? S_OK : E_OUTOFMEMORY;
+    }
+    HRESULT STDMETHODCALLTYPE CreateUInt32(UINT32 value, IInspectable** result) override {
+        if (!result) return E_POINTER;
+        auto* boxed = new (std::nothrow) BoxedUInt32Object(value);
+        *result = boxed ? static_cast<wf::IPropertyValue*>(boxed) : nullptr;
+        return boxed ? S_OK : E_OUTOFMEMORY;
+    }
+    HRESULT STDMETHODCALLTYPE CreateGuid(GUID value, IInspectable** result) override {
+        if (!result) return E_POINTER;
+        auto* boxed = new (std::nothrow) BoxedGuidObject(value);
+        *result = boxed ? static_cast<wf::IPropertyValue*>(boxed) : nullptr;
+        return boxed ? S_OK : E_OUTOFMEMORY;
+    }
 };
 
 class BoxedInt32Object final : public ComObject,
@@ -2712,6 +2866,15 @@ private:
     InspectableMap resources_{this};
     InspectableMap theme_dictionaries_{this};
 };
+
+HRESULT CreateResourceDictionaryImpl(wux::IResourceDictionary** value) {
+    if (!value) return E_POINTER;
+    *value = nullptr;
+    auto* dictionary = new (std::nothrow) ResourceDictionaryObject();
+    if (!dictionary) return E_OUTOFMEMORY;
+    *value = static_cast<wux::IResourceDictionary*>(dictionary);
+    return S_OK;
+}
 
 class XamlControlsResourcesObject final : public ResourceDictionaryObject {
 public:
@@ -5995,6 +6158,11 @@ protected:
 };
 
 }  // namespace
+
+HRESULT CreateResourceDictionary(wux::IResourceDictionary** value) {
+    return CreateResourceDictionaryImpl(value);
+}
+
 // FontFamily is constructed with its name rather than default-constructed and
 // filled in, so its factory carries IFontFamilyFactory alongside
 // IActivationFactory -- the same shape as Grid's statics.
@@ -6579,6 +6747,10 @@ MuxcBitmapIconSourceActivationFactory& MuxcBitmapIconSourceFactory() {
     static MuxcBitmapIconSourceActivationFactory factory;
     return factory;
 }
+MuxcImageIconActivationFactory& MuxcImageIconFactory() {
+    static MuxcImageIconActivationFactory factory;
+    return factory;
+}
 BitmapIconSourceActivationFactory& BitmapIconSourceFactory() {
     static BitmapIconSourceActivationFactory factory;
     return factory;
@@ -6909,6 +7081,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &TheInfoBarFactory();
     if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.BitmapIconSource") == 0)
         return &MuxcBitmapIconSourceFactory();
+    if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.ImageIcon") == 0)
+        return &MuxcImageIconFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.Page") == 0)
         return &PageFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.UserControl") == 0)
@@ -8040,6 +8214,18 @@ DllGetActivationFactory(HSTRING classid, IActivationFactory** factory) {
 }
 
 extern "C" __declspec(dllexport) HRESULT WINAPI
+OpenXamlGetActivationFactory(HSTRING classid, REFIID iid, void** result) {
+    if (!result) return E_POINTER;
+    *result = nullptr;
+    IActivationFactory* factory = nullptr;
+    const HRESULT hr = DllGetActivationFactory(classid, &factory);
+    if (FAILED(hr)) return hr;
+    const HRESULT query_hr = factory->QueryInterface(iid, result);
+    factory->Release();
+    return query_hr;
+}
+
+extern "C" __declspec(dllexport) HRESULT WINAPI
 OpenXamlLoadComponent(IInspectable* component, HSTRING resource_uri) {
     if (!component || !resource_uri) return E_INVALIDARG;
     auto* resource = new (std::nothrow) UriObject(resource_uri);
@@ -8056,6 +8242,59 @@ OpenXamlInitializeForCurrentThread(void** manager) {
     wuxh::IWindowsXamlManager* value = nullptr;
     const HRESULT hr = TheWindowsXamlManagerFactory().InitializeForCurrentThread(&value);
     if (SUCCEEDED(hr)) *manager = value;
+    return hr;
+}
+
+extern "C" __declspec(dllexport) HRESULT WINAPI
+OpenXamlGetApplicationFactory(void** factory) {
+    if (!factory) return E_POINTER;
+    *factory = nullptr;
+    auto* value = static_cast<wux::IApplicationFactory*>(&TheApplicationFactory());
+    value->AddRef();
+    *factory = value;
+    return S_OK;
+}
+
+extern "C" __declspec(dllexport) HRESULT WINAPI
+OpenXamlGetDispatcherQueue(void** queue) {
+    if (!queue) return E_POINTER;
+    *queue = nullptr;
+    ws::IDispatcherQueue* value = nullptr;
+    const HRESULT hr = TheDispatcherQueueFactory().GetForCurrentThread(&value);
+    if (SUCCEEDED(hr)) *queue = value;
+    return hr;
+}
+
+extern "C" __declspec(dllexport) HRESULT WINAPI
+OpenXamlGetResourceManager(void** manager) {
+    if (!manager) return E_POINTER;
+    *manager = nullptr;
+    warc::IResourceManager* value = nullptr;
+    const HRESULT hr = TheResourceManagerFactory().get_Current(&value);
+    if (SUCCEEDED(hr)) *manager = value;
+    return hr;
+}
+
+extern "C" __declspec(dllexport) HRESULT WINAPI
+OpenXamlGetResourceContext(void** context) {
+    if (!context) return E_POINTER;
+    *context = nullptr;
+    warc::IResourceContext* value = nullptr;
+    const HRESULT hr = TheResourceContextFactory().GetForViewIndependentUse(&value);
+    if (SUCCEEDED(hr)) *context = value;
+    return hr;
+}
+
+extern "C" __declspec(dllexport) HRESULT WINAPI
+OpenXamlCreateDesktopWindowXamlSource(void** source) {
+    if (!source) return E_POINTER;
+    *source = nullptr;
+    IInspectable* inner = nullptr;
+    wuxh::IDesktopWindowXamlSource* value = nullptr;
+    const HRESULT hr = TheDesktopWindowXamlSourceFactory().CreateInstance(
+        nullptr, &inner, &value);
+    if (inner) inner->Release();
+    if (SUCCEEDED(hr)) *source = value;
     return hr;
 }
 

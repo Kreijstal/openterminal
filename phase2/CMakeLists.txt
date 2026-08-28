@@ -200,6 +200,8 @@ set(prepared_term_control_automation_source
     "${prepared_terminal_control_dir}/TermControlAutomationPeer.cpp")
 set(prepared_uimarkdown_code_block_source
     "${prepared_header_root}/cascadia/UIMarkdown/CodeBlock.cpp")
+set(prepared_icon_path_converter_source
+    "${prepared_header_root}/cascadia/UIHelpers/IconPathConverter.cpp")
 set(prepared_settings_editor_dir
     "${prepared_header_root}/cascadia/TerminalSettingsEditor")
 set(prepared_cppwinrt_utils_header
@@ -419,6 +421,7 @@ add_custom_command(
         "${prepared_scroll_bar_source}"
         "${prepared_term_control_automation_source}"
         "${prepared_uimarkdown_code_block_source}"
+        "${prepared_icon_path_converter_source}"
         ${prepared_settings_model_sources}
         "${prepared_settings_model_dir}/JsonUtils.h"
         "${prepared_settings_model_dir}/MediaResourceSupport.h"
@@ -450,6 +453,7 @@ add_custom_command(
         "${TERMINAL_SOURCE_DIR}/src/cascadia/TerminalControl/ScrollBarVisualStateManager.cpp"
         "${TERMINAL_SOURCE_DIR}/src/cascadia/TerminalControl/TermControlAutomationPeer.cpp"
         "${TERMINAL_SOURCE_DIR}/src/cascadia/UIMarkdown/CodeBlock.cpp"
+        "${TERMINAL_SOURCE_DIR}/src/cascadia/UIHelpers/IconPathConverter.cpp"
         ${settings_model_prepare_inputs}
         ${settings_editor_prepare_inputs}
         ${terminal_app_prepare_inputs}
@@ -1000,7 +1004,7 @@ set(winrt_utils_dir "${TERMINAL_SOURCE_DIR}/src/cascadia/WinRTUtils")
 add_library(openterminal_winrt_utils STATIC
     "${feature_staging_header}"
     "${CMAKE_CURRENT_SOURCE_DIR}/compat/src/library_resources.cpp"
-    "${winrt_utils_dir}/ScopedResourceLoader.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/compat/src/scoped_resource_loader.cpp"
     "${winrt_utils_dir}/Utils.cpp"
     "${winrt_utils_dir}/pch.cpp"
 )
@@ -1035,7 +1039,7 @@ add_library(openterminal_ui_helpers STATIC
     "${ui_helpers_dir}/init.cpp"
     "${ui_helpers_dir}/pch.cpp"
     "${ui_helpers_dir}/Converters.cpp"
-    "${ui_helpers_dir}/IconPathConverter.cpp"
+    "${prepared_icon_path_converter_source}"
     "${ui_helpers_dir}/ResourceString.cpp"
     "${ui_helpers_dir}/TextMenuFlyout.cpp"
     "${CPPWINRT_UIHELPERS_INCLUDE_DIR}/module.g.cpp"

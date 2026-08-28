@@ -378,6 +378,23 @@ def normalized_generated_copy(source: Path, destination: Path) -> None:
     destination.write_text(content, encoding="utf-8", newline="\n")
 
 
+def route_terminal_app_composition(header: Path) -> None:
+    content = header.read_text(encoding="utf-8-sig")
+    old = """            impl::call_factory<winrt::Windows::UI::Xaml::Application, winrt::Windows::UI::Xaml::IApplicationFactory>([&](winrt::Windows::UI::Xaml::IApplicationFactory const& f) { [[maybe_unused]] auto winrt_impl_discarded = f.CreateInstance(*this, this->m_inner); });"""
+    new = """            void* rawFactory{};
+            winrt::check_hresult(OpenXamlGetApplicationFactory(&rawFactory));
+            winrt::Windows::UI::Xaml::IApplicationFactory factory{
+                rawFactory, winrt::take_ownership_from_abi};
+            [[maybe_unused]] auto winrt_impl_discarded =
+                factory.CreateInstance(*this, this->m_inner);"""
+    if content.count(new) == 1 and old not in content:
+        return
+    if content.count(old) != 1:
+        raise RuntimeError(f"expected system Application composition in {header}")
+    content = content.replace(old, new)
+    header.write_text(content, encoding="utf-8", newline="\n")
+
+
 def normalized_metadata_provider_copy(
     source: Path, destination: Path, namespace: str
 ) -> None:
@@ -1204,6 +1221,13 @@ def main() -> None:
             "generated TerminalApp XBF",
         )
         print(f"{page}.xbf: {xbf.stat().st_size} bytes, sha256={sha256(xbf)}")
+
+    route_terminal_app_composition(
+        require_file(
+            root / "cppwinrt-terminalapp" / "TerminalApp" / "App.g.h",
+            "generated TerminalApp application projection",
+        )
+    )
 
     xamlcore_root = root / "xamlcore-runtime"
     run(

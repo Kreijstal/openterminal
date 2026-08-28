@@ -34,6 +34,36 @@
 extern "C" HRESULT WINAPI OpenXamlLoadComponent(IInspectable* component,
                                                   HSTRING resourceUri);
 extern "C" HRESULT WINAPI OpenXamlInitializeForCurrentThread(void** manager);
+extern "C" HRESULT WINAPI OpenXamlGetApplicationFactory(void** factory);
+extern "C" HRESULT WINAPI OpenXamlGetDispatcherQueue(void** queue);
+extern "C" HRESULT WINAPI OpenXamlGetResourceManager(void** manager);
+extern "C" HRESULT WINAPI OpenXamlGetResourceContext(void** context);
+extern "C" HRESULT WINAPI OpenXamlCreateDesktopWindowXamlSource(void** source);
+extern "C" HRESULT WINAPI OpenXamlGetActivationFactory(HSTRING classId,
+                                                         REFIID iid,
+                                                         void** factory);
+void OpenTerminalInstallActivationHandler() noexcept;
+
+namespace winrt::Windows::System
+{
+    struct DispatcherQueue;
+}
+winrt::Windows::System::DispatcherQueue OpenTerminalDispatcherQueue();
+namespace winrt::Windows::ApplicationModel::Resources::Core
+{
+    struct ResourceManager;
+    struct ResourceContext;
+}
+winrt::Windows::ApplicationModel::Resources::Core::ResourceManager
+OpenTerminalResourceManager();
+winrt::Windows::ApplicationModel::Resources::Core::ResourceContext
+OpenTerminalResourceContext();
+namespace winrt::Windows::UI::Xaml::Hosting
+{
+    struct DesktopWindowXamlSource;
+}
+winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource
+OpenTerminalDesktopWindowXamlSource();
 
 #ifndef E_ILLEGAL_STATE_CHANGE
 #define E_ILLEGAL_STATE_CHANGE _HRESULT_TYPEDEF_(0x8000000DL)

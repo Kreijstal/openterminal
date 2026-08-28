@@ -12,6 +12,34 @@ QUOTED_INCLUDE = re.compile(r'^(\s*#\s*include\s*")([^"]+)(".*)$')
 
 
 def normalize_msvc_includes(content: str) -> str:
+    content = content.replace(
+        "DesktopWindowXamlSource{}", "OpenTerminalDesktopWindowXamlSource()"
+    )
+    content = content.replace(
+        "winrt::Windows::System::DispatcherQueue::GetForCurrentThread()",
+        "OpenTerminalDispatcherQueue()",
+    )
+    content = content.replace(
+        "DispatcherQueue::GetForCurrentThread()",
+        "OpenTerminalDispatcherQueue()",
+    )
+    content = content.replace(
+        "ResourceManager::Current()", "OpenTerminalResourceManager()"
+    )
+    content = content.replace(
+        "ResourceContext::GetForViewIndependentUse()",
+        "OpenTerminalResourceContext()",
+    )
+    content = content.replace(
+        "winrt::Windows::ApplicationModel::Resources::Core::"
+        "OpenTerminalResourceManager()",
+        "OpenTerminalResourceManager()",
+    )
+    content = content.replace(
+        "winrt::Windows::ApplicationModel::Resources::Core::"
+        "OpenTerminalResourceContext()",
+        "OpenTerminalResourceContext()",
+    )
     lines: list[str] = []
     for line in content.splitlines():
         match = QUOTED_INCLUDE.match(line)
@@ -106,6 +134,31 @@ def prepare_uimarkdown_code_block(source: Path, destination: Path) -> None:
     content = normalize_msvc_includes(source.read_text(encoding="utf-8-sig"))
     content += '#include "Microsoft/Terminal/UI/Markdown/CodeBlock.xaml.g.hpp"\n'
     write_if_changed(destination, content)
+
+
+def prepare_icon_path_converter(source: Path, destination: Path) -> None:
+    content = normalize_msvc_includes(source.read_text(encoding="utf-8-sig"))
+    old = """        return _convertToSoftwareBitmap(hicon.get(),
+                                        BitmapPixelFormat::Bgra8,
+                                        BitmapAlphaMode::Premultiplied,
+                                        wicImagingFactory.get());"""
+    new = """        try
+        {
+            return _convertToSoftwareBitmap(hicon.get(),
+                                            BitmapPixelFormat::Bgra8,
+                                            BitmapAlphaMode::Premultiplied,
+                                            wicImagingFactory.get());
+        }
+        catch (const winrt::hresult_class_not_registered&)
+        {
+            // SoftwareBitmap's native WIC bridge is optional outside Windows.
+            // A missing bridge means this profile icon is unavailable, not that
+            // Terminal startup must fail.
+            return nullptr;
+        }"""
+    if content.count(old) != 1:
+        raise RuntimeError("expected SoftwareBitmap WIC conversion")
+    write_if_changed(destination, content.replace(old, new))
 
 
 def prepare_cppwinrt_utils(source: Path, destination: Path) -> None:
@@ -342,16 +395,21 @@ def prepare_terminal_app(source: Path, destination: Path) -> None:
                     if content.count(old) != 1:
                         raise RuntimeError(f"expected external XAML provider: {old}")
                     content = content.replace(old, new)
-                old_manager = (
-                    "_windowsXamlManager = xaml::Hosting::WindowsXamlManager::"
-                    "InitializeForCurrentThread();"
-                )
-                new_manager = """void* manager{};
-            winrt::check_hresult(OpenXamlInitializeForCurrentThread(&manager));
-            _windowsXamlManager = xaml::Hosting::WindowsXamlManager{
-                manager, winrt::take_ownership_from_abi};"""
+                old_manager = """        const auto dispatcherQueue = OpenTerminalDispatcherQueue();
+        if (!dispatcherQueue)
+        {
+            _windowsXamlManager = xaml::Hosting::WindowsXamlManager::InitializeForCurrentThread();
+        }
+        else
+        {
+            FAIL_FAST_MSG("Terminal is not intended to run as a Universal Windows Application");
+        }"""
+                new_manager = """        void* manager{};
+        winrt::check_hresult(OpenXamlInitializeForCurrentThread(&manager));
+        _windowsXamlManager = xaml::Hosting::WindowsXamlManager{
+            manager, winrt::take_ownership_from_abi};"""
                 if content.count(old_manager) != 1:
-                    raise RuntimeError("expected system WindowsXamlManager initialization")
+                    raise RuntimeError("expected system XAML manager/dispatcher initialization")
                 content = content.replace(old_manager, new_manager)
                 high_contrast = (
                     "        HighContrastAdjustment(::winrt::Windows::UI::Xaml::"
@@ -360,6 +418,19 @@ def prepare_terminal_app(source: Path, destination: Path) -> None:
                 if content.count(high_contrast) != 1:
                     raise RuntimeError("expected system XAML high-contrast adjustment")
                 content = content.replace(high_contrast, "")
+            if path.name == "Pane.cpp":
+                duration = (
+                    "DurationHelper::FromTimeSpan(winrt::Windows::Foundation::"
+                    "TimeSpan(std::chrono::milliseconds(AnimationDurationInMilliseconds)))"
+                )
+                aggregate_duration = (
+                    "Duration{winrt::Windows::Foundation::TimeSpan("
+                    "std::chrono::milliseconds(AnimationDurationInMilliseconds)), "
+                    "DurationType::TimeSpan}"
+                )
+                if content.count(duration) != 1:
+                    raise RuntimeError("expected static Pane animation duration")
+                content = content.replace(duration, aggregate_duration)
             if path.name == "Jumplist.cpp":
                 old = (
                     "DEFINE_PROPERTYKEY(PKEY_AppUserModel_DestListLogoUri, "
@@ -469,6 +540,12 @@ def prepare_windows_terminal(source: Path, destination: Path) -> None:
                 content = content.replace(
                     old, old + '\n#include "wil_prop_variant_compat.h"'
                 )
+            if path.name == "main.cpp":
+                old = "int __stdcall wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int nCmdShow)\n{"
+                new = old + "\n    OpenTerminalInstallActivationHandler();"
+                if content.count(old) != 1:
+                    raise RuntimeError("expected WindowsTerminal entry point")
+                content = content.replace(old, new)
             write_if_changed(destination / path.name, content)
 
     resource = source / "WindowsTerminal.rc"
@@ -633,6 +710,10 @@ def main() -> None:
     prepare_windows_terminal(
         args.terminal / "src" / "cascadia" / "WindowsTerminal",
         args.output / "cascadia" / "WindowsTerminal",
+    )
+    prepare_icon_path_converter(
+        args.terminal / "src" / "cascadia" / "UIHelpers" / "IconPathConverter.cpp",
+        args.output / "cascadia" / "UIHelpers" / "IconPathConverter.cpp",
     )
     terminal_control = args.terminal / "src" / "cascadia" / "TerminalControl"
     prepared_terminal_control = args.output / "cascadia" / "TerminalControl"
