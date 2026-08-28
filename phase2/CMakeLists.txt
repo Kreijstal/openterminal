@@ -1766,6 +1766,7 @@ if(OPENTERMINAL_XAML_GENERATED_DIR)
         ${prepared_windows_terminal_sources}
         "${prepared_windows_terminal_resource}"
         "${prepared_settings_model_resource}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/compat/windows_terminal_manifest.rc"
     )
     set_target_properties(openterminal_windows_terminal PROPERTIES
         OUTPUT_NAME WindowsTerminal)
