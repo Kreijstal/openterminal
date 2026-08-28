@@ -33,6 +33,7 @@
 
 extern "C" HRESULT WINAPI OpenXamlLoadComponent(IInspectable* component,
                                                   HSTRING resourceUri);
+extern "C" HRESULT WINAPI OpenXamlInitializeForCurrentThread(void** manager);
 
 #ifndef E_ILLEGAL_STATE_CHANGE
 #define E_ILLEGAL_STATE_CHANGE _HRESULT_TYPEDEF_(0x8000000DL)

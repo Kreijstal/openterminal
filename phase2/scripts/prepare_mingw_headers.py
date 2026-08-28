@@ -342,6 +342,24 @@ def prepare_terminal_app(source: Path, destination: Path) -> None:
                     if content.count(old) != 1:
                         raise RuntimeError(f"expected external XAML provider: {old}")
                     content = content.replace(old, new)
+                old_manager = (
+                    "_windowsXamlManager = xaml::Hosting::WindowsXamlManager::"
+                    "InitializeForCurrentThread();"
+                )
+                new_manager = """void* manager{};
+            winrt::check_hresult(OpenXamlInitializeForCurrentThread(&manager));
+            _windowsXamlManager = xaml::Hosting::WindowsXamlManager{
+                manager, winrt::take_ownership_from_abi};"""
+                if content.count(old_manager) != 1:
+                    raise RuntimeError("expected system WindowsXamlManager initialization")
+                content = content.replace(old_manager, new_manager)
+                high_contrast = (
+                    "        HighContrastAdjustment(::winrt::Windows::UI::Xaml::"
+                    "ApplicationHighContrastAdjustment::None);\n"
+                )
+                if content.count(high_contrast) != 1:
+                    raise RuntimeError("expected system XAML high-contrast adjustment")
+                content = content.replace(high_contrast, "")
             if path.name == "Jumplist.cpp":
                 old = (
                     "DEFINE_PROPERTYKEY(PKEY_AppUserModel_DestListLogoUri, "

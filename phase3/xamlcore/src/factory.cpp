@@ -8049,6 +8049,16 @@ OpenXamlLoadComponent(IInspectable* component, HSTRING resource_uri) {
     return hr;
 }
 
+extern "C" __declspec(dllexport) HRESULT WINAPI
+OpenXamlInitializeForCurrentThread(void** manager) {
+    if (!manager) return E_POINTER;
+    *manager = nullptr;
+    wuxh::IWindowsXamlManager* value = nullptr;
+    const HRESULT hr = TheWindowsXamlManagerFactory().InitializeForCurrentThread(&value);
+    if (SUCCEEDED(hr)) *manager = value;
+    return hr;
+}
+
 extern "C" __declspec(dllexport) HRESULT WINAPI DllCanUnloadNow() {
     // The factories are process-lifetime statics.
     return S_FALSE;
