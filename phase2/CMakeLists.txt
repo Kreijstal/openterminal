@@ -21,6 +21,8 @@ set(CPPWINRT_TERMINALAPP_INCLUDE_DIR "" CACHE PATH "Generated C++/WinRT Terminal
 set(CPPWINRT_WINGET_INCLUDE_DIR "" CACHE PATH "Generated C++/WinRT WinGet projection root")
 set(VISUALSTUDIO_SETUP_INCLUDE_DIR "" CACHE PATH "Extracted Visual Studio Setup Configuration header directory")
 set(OPENTERMINAL_XAML_GENERATED_DIR "" CACHE PATH "Optional WinUI XAML compiler output root")
+set(OPENTERMINAL_XAMLCORE_IMPORT_LIBRARY "" CACHE FILEPATH
+    "Import library for Microsoft.UI.Xaml.dll's OpenXaml compatibility exports")
 set(WINDOWS_SDK_BIN_DIR "" CACHE PATH "Extracted pinned Windows SDK x64 tool directory")
 set(WINDOWS_SDK_WINRT_INCLUDE_DIR "" CACHE PATH "Extracted pinned Windows SDK WinRT headers")
 option(OPENTERMINAL_ALLOW_UNPINNED_SOURCES "Allow source commits other than phase2/upstreams.json" OFF)
@@ -1770,6 +1772,10 @@ if(OPENTERMINAL_XAML_GENERATED_DIR)
     )
     set_target_properties(openterminal_windows_terminal PROPERTIES
         OUTPUT_NAME WindowsTerminal)
+    if(NOT EXISTS "${OPENTERMINAL_XAMLCORE_IMPORT_LIBRARY}")
+        message(FATAL_ERROR
+            "OPENTERMINAL_XAMLCORE_IMPORT_LIBRARY must name the OpenXaml import library")
+    endif()
     configure_terminal_target(openterminal_windows_terminal)
     configure_terminal_resource_scope(openterminal_windows_terminal
         "TerminalApp/Resources")
@@ -1844,6 +1850,7 @@ if(OPENTERMINAL_XAML_GENERATED_DIR)
         shlwapi
         comctl32
         propsys
+        "${OPENTERMINAL_XAMLCORE_IMPORT_LIBRARY}"
     )
 endif()
 

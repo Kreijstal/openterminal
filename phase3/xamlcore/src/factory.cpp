@@ -81,6 +81,16 @@ std::atomic<std::uint64_t> g_next_desktop_island_cookie{1};
 inline constexpr HRESULT kRoClosed = static_cast<HRESULT>(0x80000013UL);
 inline constexpr HRESULT kIllegalDelegateAssignment =
     static_cast<HRESULT>(0x80000018UL);
+inline constexpr GUID kIidAgileObject = {
+    0x94ea2b94, 0xe9cc, 0x49e0,
+    {0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90}};
+inline bool IsAgileObjectIid(REFIID iid) {
+    return IsEqualGUID(iid, kIidAgileObject);
+}
+inline constexpr GUID IID_IXamlControlsResources = {
+    0x0e35a094, 0x868e, 0x5fbe,
+    {0xa9, 0x2e, 0x2e, 0x22, 0x4a, 0x78, 0x1d, 0xd5}};
+struct IXamlControlsResourcesAbi : IInspectable {};
 
 // Private identity carried only by the real per-island XamlRoot projection.
 // FocusManager uses it to reach that island's existing XamlFocusScope; there
@@ -96,7 +106,7 @@ struct IOpenXamlXamlRoot : IUnknown {
 // statics interface as well -- WinRT puts a class's static members on its
 // activation factory rather than on a separate object.
 template <class T>
-class Factory : public ComObject, public IActivationFactory {
+class Factory : public ComObject, public IActivationFactory, public IAgileObject {
 public:
     explicit Factory(const wchar_t* name) : name_(name) {}
 
@@ -109,6 +119,12 @@ public:
         OPENXAML_QI_ARM(::openxaml::iid::IActivationFactory, IActivationFactory)
         OPENXAML_QI_ARM(IID_IUnknown, IActivationFactory)
         OPENXAML_QI_ARM(::openxaml::iid::IInspectable, IActivationFactory)
+        if (IsAgileObjectIid(iid)) {
+            auto* pointer = static_cast<IAgileObject*>(this);
+            pointer->AddRef();
+            *object = pointer;
+            return S_OK;
+        }
         *object = nullptr;
         return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
     }
@@ -2478,11 +2494,13 @@ using ResourceDictionaryVector = Vector<
     __FIVectorView_1_Windows__CUI__CXaml__CResourceDictionary>;
 
 class ResourceDictionaryObject : public ComObject,
+                                 public IAgileObject,
                                  public abi::NotImpl_IDependencyObject,
                                  public wux::IResourceDictionary,
                                  public InspectableMapAbi,
                                  public InspectableMapViewAbi,
                                  public InspectablePairIterableAbi,
+                                 public IXamlControlsResourcesAbi,
                                  public IOpenXamlResourceDictionary {
 public:
     using PrimaryInterface = wux::IResourceDictionary;
@@ -2507,6 +2525,20 @@ public:
             InspectablePairIterableAbi)
         OPENXAML_QI_ARM(IID_IUnknown, wux::IResourceDictionary)
         OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wux::IResourceDictionary)
+        if (IsAgileObjectIid(iid)) {
+            auto* pointer = static_cast<IAgileObject*>(this);
+            pointer->AddRef();
+            *object = pointer;
+            return S_OK;
+        }
+        if (IsEqualGUID(iid, IID_IXamlControlsResources) &&
+            std::wcscmp(RuntimeClassName(),
+                        L"Microsoft.UI.Xaml.Controls.XamlControlsResources") == 0) {
+            auto* pointer = static_cast<IXamlControlsResourcesAbi*>(this);
+            pointer->AddRef();
+            *object = pointer;
+            return S_OK;
+        }
         if (IsEqualGUID(iid, IID_IOpenXamlResourceDictionary)) {
             auto* pointer = static_cast<IOpenXamlResourceDictionary*>(this);
             static_cast<wux::IResourceDictionary*>(this)->AddRef();
@@ -3127,6 +3159,7 @@ private:
 // Microsoft.UI.Xaml.dll does not stop the process at activation.
 class XamlControlsMetadataProviderObject final
     : public ComObject,
+      public IAgileObject,
       public abi::NotImpl_IXamlMetadataProvider {
 public:
     using PrimaryInterface = wuxmk::IXamlMetadataProvider;
@@ -3139,6 +3172,12 @@ public:
                         wuxmk::IXamlMetadataProvider)
         OPENXAML_QI_ARM(IID_IUnknown, wuxmk::IXamlMetadataProvider)
         OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wuxmk::IXamlMetadataProvider)
+        if (IsAgileObjectIid(iid)) {
+            auto* pointer = static_cast<IAgileObject*>(this);
+            pointer->AddRef();
+            *object = pointer;
+            return S_OK;
+        }
         *object = nullptr;
         return E_NOINTERFACE;
     }
@@ -7276,6 +7315,15 @@ HRESULT SetSingleChild(IInspectable* parent, IInspectable* child,
         return hr;
     }
     if (property == "Windows.UI.Xaml.Application.Resources") {
+        // An unpackaged Terminal App is composed on the operating system's
+        // Windows.UI.Xaml.Application. Its Resources setter accepts only a
+        // system ResourceDictionary; passing an OpenXaml dictionary crosses
+        // runtime object families and corrupts the system XAML refcount path.
+        // The parsed graph remains owned by ApplicationFactory and OpenXaml
+        // resolves its resources while materializing the component.
+        if (!ApplicationObject::Current()) {
+            return S_OK;
+        }
         wux::IApplication* application = nullptr;
         HRESULT hr = Query(parent, ::openxaml::iid::Windows_UI_Xaml_IApplication,
                            &application);
@@ -7989,6 +8037,16 @@ DllGetActivationFactory(HSTRING classid, IActivationFactory** factory) {
     found->AddRef();
     *factory = found;
     return S_OK;
+}
+
+extern "C" __declspec(dllexport) HRESULT WINAPI
+OpenXamlLoadComponent(IInspectable* component, HSTRING resource_uri) {
+    if (!component || !resource_uri) return E_INVALIDARG;
+    auto* resource = new (std::nothrow) UriObject(resource_uri);
+    if (!resource) return E_OUTOFMEMORY;
+    const HRESULT hr = TheApplicationFactory().LoadComponent(component, resource);
+    resource->Release();
+    return hr;
 }
 
 extern "C" __declspec(dllexport) HRESULT WINAPI DllCanUnloadNow() {

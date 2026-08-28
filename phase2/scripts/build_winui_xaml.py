@@ -360,6 +360,18 @@ def normalized_generated_copy(source: Path, destination: Path) -> None:
         content = content.replace(lower_name, canonical_name)
     if "#include <winrt/windows." in content:
         raise RuntimeError(f"unhandled lowercase C++/WinRT include in {source}")
+    system_load = (
+        "Application::LoadComponent(*this, resourceLocator, "
+        "ComponentResourceLocation::Nested);"
+    )
+    open_load = """const auto implementation = static_cast<D*>(this)->get_strong();
+            const auto component = implementation.template as<
+                winrt::Windows::Foundation::IInspectable>();
+            const auto absolute = resourceLocator.AbsoluteUri();
+            winrt::check_hresult(OpenXamlLoadComponent(
+                reinterpret_cast<::IInspectable*>(winrt::get_abi(component)),
+                reinterpret_cast<::HSTRING>(winrt::get_abi(absolute))));"""
+    content = content.replace(system_load, open_load)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists() and destination.read_text(encoding="utf-8") == content:
         return
@@ -1193,6 +1205,24 @@ def main() -> None:
         )
         print(f"{page}.xbf: {xbf.stat().st_size} bytes, sha256={sha256(xbf)}")
 
+    xamlcore_root = root / "xamlcore-runtime"
+    run(
+        [
+            sys.executable,
+            str(PHASE2_DIR.parent / "phase3" / "scripts" / "build_xamlcore.py"),
+            "--root",
+            str(xamlcore_root),
+            "--dll-only",
+            "--no-xvfb",
+        ]
+    )
+    xamlcore_dll = require_file(
+        xamlcore_root / "Microsoft.UI.Xaml.dll", "OpenXaml runtime DLL"
+    )
+    xamlcore_import_library = require_file(
+        xamlcore_root / "libopenxaml.dll.a", "OpenXaml import library"
+    )
+
     run(
         [
             "cmake",
@@ -1201,6 +1231,7 @@ def main() -> None:
             "-B",
             str(native_build),
             f"-DOPENTERMINAL_XAML_GENERATED_DIR={root / 'xaml-generated'}",
+            f"-DOPENTERMINAL_XAMLCORE_IMPORT_LIBRARY={xamlcore_import_library}",
         ]
     )
     run(
@@ -1251,6 +1282,8 @@ def main() -> None:
         "--out", str(resource_catalog),
     ])
     print(f"deployed OpenXaml resource catalog: {resource_catalog}")
+    shutil.copy2(xamlcore_dll, native_build / "Microsoft.UI.Xaml.dll")
+    print(f"deployed OpenXaml runtime: {native_build / 'Microsoft.UI.Xaml.dll'}")
     verify_xaml_symbols(native_build / "libMicrosoft.Terminal.Control.Model.a")
     terminal_exe = require_file(
         native_build / "WindowsTerminal.exe",

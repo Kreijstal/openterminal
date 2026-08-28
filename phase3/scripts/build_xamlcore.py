@@ -367,8 +367,11 @@ def main() -> None:
                  "-luser32", "-lmsimg32", "-ldwrite", "-ldcomp",
                  "-ld3d11", "-ldxgi"]
 
-    dll = root / "openxaml.dll"
-    run(common + ["-shared", "-o", str(dll), str(core_src / "factory.cpp"),
+    dll = root / "Microsoft.UI.Xaml.dll"
+    import_library = root / "libopenxaml.dll.a"
+    run(common + ["-shared", "-o", str(dll),
+                  f"-Wl,--out-implib,{import_library}",
+                  str(core_src / "factory.cpp"),
                   str(core_src / "core_dispatcher.cpp"),
                   str(core_src / "island_input_manager.cpp"),
                   str(core_src / "xaml_focus.cpp"),
@@ -383,6 +386,9 @@ def main() -> None:
         + [str(render_gdi / name) for name in GDI_RENDER_SOURCES]
         + [str(render_dcomp / name) for name in DCOMP_RENDER_SOURCES]
         + includes + libraries)
+    # Preserve the historical local probe name while making the PE/import
+    # library agree with the filename used by normal Windows deployments.
+    shutil.copy2(dll, root / "openxaml.dll")
 
     if args.dll_only:
         print(f"built {dll}")

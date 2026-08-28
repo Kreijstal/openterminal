@@ -13,6 +13,7 @@
 #endif
 
 #include <windows.h>
+#include <inspectable.h>
 #include <cfloat>
 #include <memory_resource>
 #include <mutex>
@@ -29,6 +30,9 @@
 #undef _FILE_MODE_INFORMATION
 
 #include <intrin.h>
+
+extern "C" HRESULT WINAPI OpenXamlLoadComponent(IInspectable* component,
+                                                  HSTRING resourceUri);
 
 #ifndef E_ILLEGAL_STATE_CHANGE
 #define E_ILLEGAL_STATE_CHANGE _HRESULT_TYPEDEF_(0x8000000DL)
