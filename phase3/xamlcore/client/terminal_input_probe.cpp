@@ -23,6 +23,9 @@
 //                            back to the focus window, then the host). This
 //                            skips the desktop queue and the loader's keyboard
 //                            state, so it measures a strictly shorter path.
+//   --mechanism sendmessage  Synchronously deliver KeyDown, CharacterReceived
+//                            and KeyUp in physical order, without a message
+//                            pump translating a second character.
 //   --mechanism none         Do everything except inject. This is the negative
 //                            control: a gate that passes with this cannot be
 //                            measuring the input path at all.
@@ -41,10 +44,11 @@
 
 namespace {
 
-enum class Mechanism { SendInput, PostMessage, None };
+enum class Mechanism { SendInput, PostMessage, SendMessage, None };
 
 struct Options {
     std::wstring window_class = L"CASCADIA_HOSTING_WINDOW_CLASS";
+    unsigned process_id = 0;
     std::wstring text;
     std::wstring wait_file;  // typing starts once this exists
     unsigned deadline_ms = 30000;
@@ -64,6 +68,7 @@ constexpr long kVisibleBonus = 1 << 28;
 
 struct Search {
     const wchar_t* window_class = nullptr;
+    DWORD process_id = 0;
     HWND found = nullptr;
     long found_area = 0;
     bool found_visible = false;
@@ -83,6 +88,9 @@ BOOL CALLBACK CollectWindow(HWND window, LPARAM parameter) {
         if (!known && search->seen->size() < 48) search->seen->push_back(name);
     }
     if (std::wcscmp(class_name, search->window_class) != 0) return TRUE;
+    DWORD process_id = 0;
+    GetWindowThreadProcessId(window, &process_id);
+    if (search->process_id && process_id != search->process_id) return TRUE;
     RECT client{};
     const bool visible = IsWindowVisible(window) != FALSE;
     const bool measured = GetClientRect(window, &client) != FALSE;
@@ -92,9 +100,9 @@ BOOL CALLBACK CollectWindow(HWND window, LPARAM parameter) {
         // and never gains WS_VISIBLE was never shown, which is a different
         // failure from one that was shown somewhere unreadable.
         std::swprintf(description, 191,
-                      L"hwnd=%p visible=%d client=%ldx%ld style=%08lx "
+                      L"hwnd=%p pid=%lu visible=%d client=%ldx%ld style=%08lx "
                       L"exstyle=%08lx",
-                      static_cast<void*>(window), visible ? 1 : 0,
+                      static_cast<void*>(window), process_id, visible ? 1 : 0,
                       measured ? client.right - client.left : -1,
                       measured ? client.bottom - client.top : -1,
                       static_cast<unsigned long>(GetWindowLongW(window, GWL_STYLE)),
@@ -126,11 +134,13 @@ BOOL CALLBACK CollectWindow(HWND window, LPARAM parameter) {
 // first, and says nothing when there is none. Enumerate instead, so a run that
 // matched nothing can report what it saw in place of only that it saw nothing.
 HWND FindHostingWindow(const std::wstring& window_class,
+                       DWORD process_id,
                        std::vector<std::wstring>* seen,
                        std::vector<std::wstring>* candidates,
                        bool* visible) {
     Search search;
     search.window_class = window_class.c_str();
+    search.process_id = process_id;
     search.seen = seen;
     search.candidates = candidates;
     EnumWindows(CollectWindow, reinterpret_cast<LPARAM>(&search));
@@ -298,6 +308,9 @@ bool ParseOptions(int argc, wchar_t** argv, Options* options) {
         if (name == L"--class" && value) {
             options->window_class = value;
             ++index;
+        } else if (name == L"--pid" && value &&
+                   ParseUnsigned(value, &options->process_id)) {
+            ++index;
         } else if (name == L"--text" && value) {
             options->text = value;
             ++index;
@@ -314,6 +327,7 @@ bool ParseOptions(int argc, wchar_t** argv, Options* options) {
             const std::wstring mechanism(value);
             if (mechanism == L"sendinput") options->mechanism = Mechanism::SendInput;
             else if (mechanism == L"postmessage") options->mechanism = Mechanism::PostMessage;
+            else if (mechanism == L"sendmessage") options->mechanism = Mechanism::SendMessage;
             else if (mechanism == L"none") options->mechanism = Mechanism::None;
             else {
                 std::fprintf(stderr, "input: unknown mechanism\n");
@@ -350,6 +364,7 @@ const wchar_t* MechanismName(Mechanism mechanism) {
     switch (mechanism) {
         case Mechanism::SendInput: return L"sendinput";
         case Mechanism::PostMessage: return L"postmessage";
+        case Mechanism::SendMessage: return L"sendmessage";
         case Mechanism::None: return L"none";
     }
     return L"unknown";
@@ -380,7 +395,8 @@ int wmain(int argc, wchar_t** argv) {
     while (GetTickCount() - started < options.deadline_ms) {
         ++attempts;
         bool visible = false;
-        host = FindHostingWindow(options.window_class, &seen_classes,
+        host = FindHostingWindow(options.window_class, options.process_id,
+                                 &seen_classes,
                                  &candidates, &visible);
         RECT client{};
         if (host && GetClientRect(host, &client) &&
@@ -481,16 +497,35 @@ int wmain(int argc, wchar_t** argv) {
                 break;
             case Mechanism::PostMessage: {
                 const HWND target = island ? island : (focus ? focus : host);
-                const WORD virtual_key =
-                    stroke.virtual_key
-                        ? stroke.virtual_key
-                        : static_cast<WORD>(VkKeyScanW(stroke.character) & 0xff);
+                const WORD virtual_key = stroke.virtual_key
+                    ? stroke.virtual_key
+                    : static_cast<WORD>(VkKeyScanW(stroke.character) & 0xff);
                 sent_down = PostMessageW(target, WM_KEYDOWN, virtual_key,
                                          KeyLparam(virtual_key, false)) ? 1 : 0;
                 sent_down += PostMessageW(target, WM_CHAR, stroke.character,
                                           KeyLparam(virtual_key, false)) ? 1 : 0;
                 sent_up = PostMessageW(target, WM_KEYUP, virtual_key,
                                        KeyLparam(virtual_key, true)) ? 1 : 0;
+                break;
+            }
+            case Mechanism::SendMessage: {
+                const HWND target = island ? island : (focus ? focus : host);
+                const WORD virtual_key = stroke.virtual_key
+                    ? stroke.virtual_key
+                    : static_cast<WORD>(VkKeyScanW(stroke.character) & 0xff);
+                DWORD_PTR ignored = 0;
+                sent_down = SendMessageTimeoutW(
+                    target, WM_KEYDOWN, virtual_key,
+                    KeyLparam(virtual_key, false), SMTO_ABORTIFHUNG, 2000,
+                    &ignored) ? 1 : 0;
+                sent_down += SendMessageTimeoutW(
+                    target, WM_CHAR, stroke.character,
+                    KeyLparam(virtual_key, false), SMTO_ABORTIFHUNG, 2000,
+                    &ignored) ? 1 : 0;
+                sent_up = SendMessageTimeoutW(
+                    target, WM_KEYUP, virtual_key,
+                    KeyLparam(virtual_key, true), SMTO_ABORTIFHUNG, 2000,
+                    &ignored) ? 1 : 0;
                 break;
             }
         }

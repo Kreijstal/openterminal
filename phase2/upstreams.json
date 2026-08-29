@@ -61,7 +61,7 @@
     "repository": "https://github.com/microsoft/wil.git"
   },
   "windows_terminal": {
-    "commit": "4e4d204edbc065caf67e070f5c0373c10d493a8b",
+    "commit": "a9db64d1a00586a51ca21bc7b23031cf5a8d6c19",
     "ref": "reactos-openterminal",
     "repository": "https://github.com/Kreijstal/terminal.git"
   },
