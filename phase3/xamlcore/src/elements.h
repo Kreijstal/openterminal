@@ -5300,6 +5300,12 @@ inline constexpr GUID IID_IMuxcBitmapIconSourceFactory = {
 inline constexpr GUID IID_IMuxcIconSource = {
     0x6e3501ed, 0xdd31, 0x51e9,
     {0x8f, 0x14, 0x25, 0x61, 0xf9, 0x9c, 0x8a, 0x8f}};
+inline constexpr GUID IID_IMuxcImageIconSource = {
+    0xc789d80c, 0x0494, 0x54be,
+    {0xb9, 0x41, 0x75, 0x7d, 0x3f, 0x72, 0x30, 0x03}};
+inline constexpr GUID IID_IMuxcImageIconSourceFactory = {
+    0x24f76321, 0x71bd, 0x530a,
+    {0x8c, 0xc8, 0x3f, 0x61, 0x5c, 0xd1, 0x43, 0x7a}};
 
 struct IMuxcBitmapIconSource : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_UriSource(void**) = 0;
@@ -5316,6 +5322,15 @@ struct IMuxcIconSource : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE CreateIconElement(void**) = 0;
     virtual HRESULT STDMETHODCALLTYPE get_Foreground(void**) = 0;
     virtual HRESULT STDMETHODCALLTYPE put_Foreground(void*) = 0;
+};
+struct IMuxcImageIconSource : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_ImageSource(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ImageSource(void*) = 0;
+};
+struct IMuxcImageIconSourceFactory : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE CreateInstance(
+        IInspectable* base, IInspectable** inner,
+        IMuxcImageIconSource** value) = 0;
 };
 
 class MuxcBitmapIconSourceObject final
@@ -5388,6 +5403,68 @@ private:
     IInspectable* uri_ = nullptr;
     IInspectable* foreground_ = nullptr;
     boolean monochrome_ = 0;
+};
+
+class MuxcImageIconSourceObject final
+    : public ComObject,
+      public abi::NotImpl_IDependencyObject,
+      public IMuxcImageIconSource,
+      public IMuxcIconSource {
+public:
+    using PrimaryInterface = IMuxcImageIconSource;
+    ~MuxcImageIconSourceObject() override {
+        if (image_source_) image_source_->Release();
+        if (foreground_) foreground_->Release();
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Microsoft.UI.Xaml.Controls.ImageIconSource";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IMuxcImageIconSource, IMuxcImageIconSource)
+        OPENXAML_QI_ARM(IID_IMuxcIconSource, IMuxcIconSource)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IDependencyObject,
+                        wux::IDependencyObject)
+        OPENXAML_QI_ARM(IID_IUnknown, IMuxcImageIconSource)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, IMuxcImageIconSource)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_ImageSource(void** value) override {
+        return Get(image_source_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_ImageSource(void* value) override {
+        return Put(image_source_, static_cast<IInspectable*>(value));
+    }
+    HRESULT STDMETHODCALLTYPE CreateIconElement(void** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Foreground(void** value) override {
+        return Get(foreground_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Foreground(void* value) override {
+        return Put(foreground_, static_cast<IInspectable*>(value));
+    }
+
+private:
+    static HRESULT Get(IInspectable* source, void** value) {
+        if (!value) return E_POINTER;
+        *value = source;
+        if (source) source->AddRef();
+        return S_OK;
+    }
+    static HRESULT Put(IInspectable*& target, IInspectable* value) {
+        if (value) value->AddRef();
+        if (target) target->Release();
+        target = value;
+        return S_OK;
+    }
+    IInspectable* image_source_ = nullptr;
+    IInspectable* foreground_ = nullptr;
 };
 
 class IconSourceElementObject final

@@ -764,7 +764,7 @@ add_library(openterminal_renderer_atlas STATIC
     ${renderer_atlas_shader_headers}
     "${renderer_atlas_dir}/AtlasEngine.cpp"
     "${renderer_atlas_dir}/AtlasEngine.api.cpp"
-    "${renderer_atlas_dir}/AtlasEngine.r.cpp"
+    "${prepared_header_root}/renderer/atlas/AtlasEngine.r.cpp"
     "${renderer_atlas_dir}/Backend.cpp"
     "${renderer_atlas_dir}/BackendD2D.cpp"
     "${renderer_atlas_dir}/BackendD3D.cpp"

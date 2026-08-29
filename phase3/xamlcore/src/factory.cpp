@@ -205,6 +205,8 @@ inline constexpr GUID IID_StringReference = {
     0xfd416dfb, 0x2a07, 0x52eb, {0xaa, 0xe3, 0xdf, 0xce, 0x14, 0x11, 0x6c, 0x05}};
 inline constexpr GUID IID_Int32Reference = {
     0x548cefbd, 0xbc8a, 0x5fa0, {0x8d, 0xf2, 0x95, 0x74, 0x40, 0xfc, 0x8b, 0xf4}};
+inline constexpr GUID IID_UInt64Reference = {
+    0x6755e376, 0x53bb, 0x568b, {0xa1, 0x1d, 0x17, 0x23, 0x98, 0x68, 0x30, 0x9e}};
 
 // The prepared MinGW SDK headers instantiate only the IReference<T>
 // specializations used by their own metadata surface, and omit HSTRING. Keep
@@ -217,6 +219,10 @@ struct StringReferenceAbi : IInspectable {
 
 struct Int32ReferenceAbi : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_Value(INT32* value) = 0;
+};
+
+struct UInt64ReferenceAbi : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Value(UINT64* value) = 0;
 };
 
 class ValueSetObject final : public ComObject,
@@ -1327,6 +1333,29 @@ protected:
     }
 };
 
+class MuxcImageIconSourceActivationFactory final
+    : public Factory<MuxcImageIconSourceObject>,
+      public IMuxcImageIconSourceFactory {
+public:
+    MuxcImageIconSourceActivationFactory()
+        : Factory(L"Microsoft.UI.Xaml.Controls.ImageIconSource") {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        return Factory<MuxcImageIconSourceObject>::QueryInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE CreateInstance(
+        IInspectable*, IInspectable** inner,
+        IMuxcImageIconSource** value) override {
+        return CreateComposableObject<MuxcImageIconSourceObject>(inner, value);
+    }
+protected:
+    HRESULT QueryStatics(REFIID iid, void** object) override {
+        OPENXAML_QI_ARM(IID_IMuxcImageIconSourceFactory,
+                        IMuxcImageIconSourceFactory)
+        return E_NOINTERFACE;
+    }
+};
+
 class IconSourceElementActivationFactory final
     : public Factory<IconSourceElementObject>,
       public wuxc::IIconSourceElementFactory {
@@ -2240,6 +2269,47 @@ private:
     UINT32 value_;
 };
 
+class BoxedUInt64Object final : public ComObject,
+                                public abi::NotImpl_IPropertyValue,
+                                public UInt64ReferenceAbi {
+public:
+    explicit BoxedUInt64Object(UINT64 value) : value_(value) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.Foundation.IReference`1<UInt64>";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_Foundation_IPropertyValue,
+                        wf::IPropertyValue)
+        OPENXAML_QI_ARM(IID_UInt64Reference, UInt64ReferenceAbi)
+        OPENXAML_QI_ARM(IID_IUnknown, wf::IPropertyValue)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wf::IPropertyValue)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Type(wf::PropertyType* value) override {
+        if (!value) return E_POINTER;
+        *value = wf::PropertyType_UInt64;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_IsNumericScalar(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = true;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetUInt64(UINT64* value) override {
+        if (!value) return E_POINTER;
+        *value = value_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Value(UINT64* value) override {
+        return GetUInt64(value);
+    }
+private:
+    UINT64 value_;
+};
+
 class BoxedGuidObject final : public ComObject,
                               public abi::NotImpl_IPropertyValue {
 public:
@@ -2318,6 +2388,12 @@ public:
     HRESULT STDMETHODCALLTYPE CreateUInt32(UINT32 value, IInspectable** result) override {
         if (!result) return E_POINTER;
         auto* boxed = new (std::nothrow) BoxedUInt32Object(value);
+        *result = boxed ? static_cast<wf::IPropertyValue*>(boxed) : nullptr;
+        return boxed ? S_OK : E_OUTOFMEMORY;
+    }
+    HRESULT STDMETHODCALLTYPE CreateUInt64(UINT64 value, IInspectable** result) override {
+        if (!result) return E_POINTER;
+        auto* boxed = new (std::nothrow) BoxedUInt64Object(value);
         *result = boxed ? static_cast<wf::IPropertyValue*>(boxed) : nullptr;
         return boxed ? S_OK : E_OUTOFMEMORY;
     }
@@ -4886,27 +4962,14 @@ public:
             return HRESULT_FROM_WIN32(error);
         }
         EnableHostState(child_);
-        presentation_mode_ = PresentationMode::Undecided;
-        const HRESULT dcomp_attach = InitializeDcompPresenter(child_);
-        if (FAILED(dcomp_attach)) {
-            presentation_mode_ = PresentationMode::Cpu;
-            TraceDcompFallback("initialize", dcomp_attach);
-        } else {
-            openxaml::render::DcompUpdateResult probe;
-            if (ProbeDcompPresenter(child_, probe)) {
-                presentation_mode_ = PresentationMode::Dcomp;
-                TraceDcompState("probe", "attach", probe);
-            } else {
-                // Backend selection is based only on a complete transparent
-                // compositor transaction. The current Content is deliberately
-                // absent from this probe, so an authored/render semantic can
-                // never permanently classify DirectComposition unavailable.
-                TraceDcompState("probe-failed", "attach", probe);
-                TraceDcompFallback("probe",
-                                   FAILED(probe.error) ? probe.error : E_FAIL);
-                ReleaseDcompPresenter();
-            }
-        }
+        // This HWND is deliberately layered because the CPU presenter publishes
+        // its complete alpha surface through UpdateLayeredWindow. A successful
+        // DirectComposition probe does not make that layered surface opaque on
+        // native Windows; it merely causes WM_PAINT to stop replaying the CPU
+        // frame, leaving a transparent island. Keep the presenter consistent
+        // with the HWND contract until the DComp path owns a non-layered child.
+        presentation_mode_ = PresentationMode::Cpu;
+        TraceDcompFallback("layered-child", E_NOTIMPL);
         xaml_root_->SetHostVisible(IsWindowVisible(child_) != FALSE);
         input_manager_->SetHostFocusRequester(
             MakeHostFocusRequester(host_state_));
@@ -6747,6 +6810,10 @@ MuxcBitmapIconSourceActivationFactory& MuxcBitmapIconSourceFactory() {
     static MuxcBitmapIconSourceActivationFactory factory;
     return factory;
 }
+MuxcImageIconSourceActivationFactory& MuxcImageIconSourceFactory() {
+    static MuxcImageIconSourceActivationFactory factory;
+    return factory;
+}
 MuxcImageIconActivationFactory& MuxcImageIconFactory() {
     static MuxcImageIconActivationFactory factory;
     return factory;
@@ -7081,6 +7148,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &TheInfoBarFactory();
     if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.BitmapIconSource") == 0)
         return &MuxcBitmapIconSourceFactory();
+    if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.ImageIconSource") == 0)
+        return &MuxcImageIconSourceFactory();
     if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.ImageIcon") == 0)
         return &MuxcImageIconFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.Page") == 0)

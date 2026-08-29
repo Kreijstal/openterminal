@@ -606,6 +606,22 @@ def prepare_windows_terminal(source: Path, destination: Path) -> None:
     write_if_changed(destination / resource.name, resource_content)
 
 
+def prepare_atlas_engine(source: Path, destination: Path) -> None:
+    content = normalize_msvc_includes(source.read_text(encoding="utf-8-sig"))
+    old = """        const auto module = GetModuleHandleW(L\"dcomp.dll\");
+        const auto DCompositionCreateSurfaceHandle = GetProcAddressByFunctionDeclaration(module, DCompositionCreateSurfaceHandle);"""
+    new = """        // The unpackaged OpenTerminal XAML presenter can use its CPU
+        // backend without loading DirectComposition. Load the system DLL here
+        // before resolving the optional surface-handle API instead of assuming
+        // another component happened to load it first.
+        wil::unique_hmodule module{ LoadLibraryW(L\"dcomp.dll\") };
+        THROW_LAST_ERROR_IF(!module);
+        const auto DCompositionCreateSurfaceHandle = GetProcAddressByFunctionDeclaration(module.get(), DCompositionCreateSurfaceHandle);"""
+    if content.count(old) != 1:
+        raise RuntimeError("expected DirectComposition surface-handle lookup")
+    write_if_changed(destination, content.replace(old, new))
+
+
 def prepare_scroll_bar_header(source: Path, destination: Path) -> None:
     content = normalize_msvc_includes(source.read_text(encoding="utf-8-sig"))
     old = '#include "ScrollBarVisualStateManager.g.h"'
@@ -763,6 +779,10 @@ def main() -> None:
     prepare_windows_terminal(
         args.terminal / "src" / "cascadia" / "WindowsTerminal",
         args.output / "cascadia" / "WindowsTerminal",
+    )
+    prepare_atlas_engine(
+        args.terminal / "src" / "renderer" / "atlas" / "AtlasEngine.r.cpp",
+        args.output / "renderer" / "atlas" / "AtlasEngine.r.cpp",
     )
     prepare_icon_path_converter(
         args.terminal / "src" / "cascadia" / "UIHelpers" / "IconPathConverter.cpp",
