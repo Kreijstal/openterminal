@@ -61,9 +61,9 @@
     "repository": "https://github.com/microsoft/wil.git"
   },
   "windows_terminal": {
-    "commit": "e74649d5f18b1c123556461b30f763407aea558f",
-    "ref": "main",
-    "repository": "https://github.com/microsoft/terminal.git"
+    "commit": "4e4d204edbc065caf67e070f5c0373c10d493a8b",
+    "ref": "reactos-openterminal",
+    "repository": "https://github.com/Kreijstal/terminal.git"
   },
   "windows_sdk_cpp": {
     "id": "Microsoft.Windows.SDK.CPP",
