@@ -4424,14 +4424,22 @@ inline constexpr GUID IID_IMuxcSplitButtonClickEventArgs = {
 
 struct IMuxcSplitButtonClickEventArgs : IInspectable {};
 
-// The delegate IID is closed over Microsoft.UI.Xaml's two runtime classes,
-// but its ABI is the ordinary WinRT typed-event-handler shape. Keeping that
-// shape local avoids importing generated WinUI headers into the replacement
-// Windows.UI.Xaml DLL.
-struct IMuxcSplitButtonClickHandler : IUnknown {
-    virtual HRESULT STDMETHODCALLTYPE Invoke(
-        IMuxcSplitButton* sender,
-        IMuxcSplitButtonClickEventArgs* args) = 0;
+// A C++/WinRT delegate is implemented by a C++ type unknown to this DLL.
+// Calling it through a locally invented, structurally identical C++ virtual
+// interface is undefined behaviour (and GCC devirtualizes that invalid cast
+// at -O2). Keep the foreign object at the language-neutral COM ABI boundary.
+struct MuxcSplitButtonClickHandlerAbi;
+struct MuxcSplitButtonClickHandlerVtbl {
+    HRESULT (STDMETHODCALLTYPE* QueryInterface)(
+        MuxcSplitButtonClickHandlerAbi*, REFIID, void**);
+    ULONG (STDMETHODCALLTYPE* AddRef)(MuxcSplitButtonClickHandlerAbi*);
+    ULONG (STDMETHODCALLTYPE* Release)(MuxcSplitButtonClickHandlerAbi*);
+    HRESULT (STDMETHODCALLTYPE* Invoke)(
+        MuxcSplitButtonClickHandlerAbi*, IMuxcSplitButton*,
+        IMuxcSplitButtonClickEventArgs*);
+};
+struct MuxcSplitButtonClickHandlerAbi {
+    const MuxcSplitButtonClickHandlerVtbl* lpVtbl;
 };
 
 class SplitButtonClickEventArgsObject final
@@ -4490,7 +4498,8 @@ public:
         if (flyout_) flyout_->Release();
         if (command_) command_->Release();
         if (command_parameter_) command_parameter_->Release();
-        for (auto& [_, handler] : click_handlers_) handler->Release();
+        for (auto& [_, handler] : click_handlers_)
+            handler->lpVtbl->Release(handler);
     }
     const wchar_t* RuntimeClassName() const override {
         return L"Microsoft.UI.Xaml.Controls.SplitButton";
@@ -4523,11 +4532,26 @@ public:
 
     HRESULT STDMETHODCALLTYPE add_Click(void* handler,
                                          EventRegistrationToken* token) override {
-        return AddTypedEvent(static_cast<IMuxcSplitButtonClickHandler*>(handler),
-                             token, click_handlers_);
+        if (!handler || !token) return E_INVALIDARG;
+        RegisterXamlFocusTarget(*this);
+        auto* abi = static_cast<MuxcSplitButtonClickHandlerAbi*>(handler);
+        token->value = InterlockedIncrement64(&next_click_token_);
+        abi->lpVtbl->AddRef(abi);
+        try {
+            click_handlers_.emplace(token->value, abi);
+        } catch (...) {
+            abi->lpVtbl->Release(abi);
+            token->value = 0;
+            return E_OUTOFMEMORY;
+        }
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE remove_Click(EventRegistrationToken token) override {
-        return RemoveTypedEvent(token, click_handlers_);
+        const auto found = click_handlers_.find(token.value);
+        if (found == click_handlers_.end()) return S_OK;
+        found->second->lpVtbl->Release(found->second);
+        click_handlers_.erase(found);
+        return S_OK;
     }
 
     void InvokeIslandTapEvent(
@@ -4555,23 +4579,25 @@ public:
                 return;
             }
 
-            std::vector<IMuxcSplitButtonClickHandler*> snapshot;
+            std::vector<MuxcSplitButtonClickHandlerAbi*> snapshot;
             snapshot.reserve(click_handlers_.size());
             for (const auto& [_, handler] : click_handlers_) {
-                handler->AddRef();
+                handler->lpVtbl->AddRef(handler);
                 snapshot.push_back(handler);
             }
             auto* event_args = new (std::nothrow) SplitButtonClickEventArgsObject;
             if (!event_args) {
-                for (auto* handler : snapshot) handler->Release();
+                for (auto* handler : snapshot)
+                    handler->lpVtbl->Release(handler);
                 return;
             }
             auto* sender = static_cast<IMuxcSplitButton*>(this);
             auto* projected_args =
                 static_cast<IMuxcSplitButtonClickEventArgs*>(event_args);
             for (auto* handler : snapshot) {
-                (void)handler->Invoke(sender, projected_args);
-                handler->Release();
+                (void)handler->lpVtbl->Invoke(
+                    handler, sender, projected_args);
+                handler->lpVtbl->Release(handler);
             }
             projected_args->Release();
             (void)args->put_Handled(1);
@@ -4586,7 +4612,8 @@ private:
     IInspectable* command_parameter_ = nullptr;
     OpaqueSyntheticTextBlock label_;
     std::vector<openxaml::Element*> visual_children_;
-    std::map<LONGLONG, IMuxcSplitButtonClickHandler*> click_handlers_;
+    volatile LONGLONG next_click_token_ = 0;
+    std::map<LONGLONG, MuxcSplitButtonClickHandlerAbi*> click_handlers_;
 };
 
 inline constexpr GUID IID_IMuxcInfoBar = {

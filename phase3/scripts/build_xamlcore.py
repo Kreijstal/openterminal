@@ -462,6 +462,12 @@ def main() -> None:
                       "tap_input_smoke.cpp")]
         + includes + libraries)
 
+    split_button_input_smoke = root / "split_button_input_smoke.exe"
+    run(common + ["-o", str(split_button_input_smoke),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "split_button_input_smoke.cpp")]
+        + includes + libraries)
+
     pointer_routing_test = root / "pointer_routing_test.exe"
     run(common + ["-o", str(pointer_routing_test),
                   str(PHASE3_DIR / "xamlcore" / "client" /
@@ -569,6 +575,7 @@ def main() -> None:
     run(["wine", str(pointer_input_smoke)], env=environment)
     run(["wine", str(pointer_routing_test)], env=environment)
     run(["wine", str(tap_input_smoke)], env=environment)
+    run(["wine", str(split_button_input_smoke)], env=environment)
     run(["wine", str(tap_routing_test)], env=environment)
     run(["wine", str(core_dispatcher_test)], env=environment)
     run(["wine", str(resource_catalog_test)], env=environment)
