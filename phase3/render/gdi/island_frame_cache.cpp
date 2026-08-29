@@ -153,7 +153,6 @@ IslandFrameCache::SceneRecords RecordSceneOf(const DisplayList& list) {
     IslandFrameCache::SceneRecords records;
     records.node_total = list.geometry.size();
     records.fill_total = list.rects.size();
-    const auto* nodes = list.scene ? &list.scene->nodes() : nullptr;
     const std::size_t node_count =
         std::min(list.geometry.size(), IslandFrameCache::kMaxSceneRecords);
     records.nodes.reserve(node_count);
@@ -169,8 +168,12 @@ IslandFrameCache::SceneRecords RecordSceneOf(const DisplayList& list) {
         record.opacity = geometry.opacity;
         record.visible = geometry.visible;
         record.has_layout_storage = geometry.has_layout_storage;
-        if (nodes && index < nodes->size() && (*nodes)[index].content)
-            record.commands = (*nodes)[index].content->commands.size();
+        if (list.scene) {
+            if (const VisualNode* node = list.scene->Find(geometry.id);
+                node && node->content) {
+                record.commands = node->content->commands.size();
+            }
+        }
         records.nodes.push_back(std::move(record));
     }
 

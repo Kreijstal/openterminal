@@ -29,6 +29,27 @@ protected:
     Size MeasureOverride(Size) override { return {16.0, 16.0}; }
 };
 
+class TabViewHarness final : public TabView {
+public:
+    TabViewItem* AddTab(bool selected) {
+        auto item = std::make_unique<TabViewItem>();
+        item->set_selected(selected);
+        TabViewItem* const pointer = item.get();
+        tabs_.push_back(std::move(item));
+        return pointer;
+    }
+
+    std::vector<Element*> Children() const override {
+        std::vector<Element*> children;
+        children.reserve(tabs_.size());
+        for (const auto& tab : tabs_) children.push_back(tab.get());
+        return children;
+    }
+
+private:
+    std::vector<std::unique_ptr<TabViewItem>> tabs_;
+};
+
 void VirtualizationAndSelection() {
     ListView list;
     list.set_item_extent(32.0);
@@ -139,6 +160,24 @@ void PopupFlyoutAndMuxc() {
     CHECK(tip.TypeName() == "Microsoft.UI.Xaml.Controls.TeachingTip");
 }
 
+void TabViewLaysOutItsItemCollection() {
+    TabViewHarness row;
+    TabViewItem* const first = row.AddTab(true);
+    TabViewItem* const second = row.AddTab(false);
+
+    row.Measure({500.0, 200.0});
+    CHECK(row.desired_size().width == 240.0);
+    CHECK(row.desired_size().height == 32.0);
+
+    row.Arrange({0.0, 0.0, 500.0, 32.0});
+    CHECK(first->layout_slot().x == 0.0);
+    CHECK(first->layout_slot().width == 120.0);
+    CHECK(second->layout_slot().x == 120.0);
+    CHECK(second->layout_slot().width == 120.0);
+    CHECK(first->selected());
+    CHECK(!second->selected());
+}
+
 void ControlMarkup() {
     std::unique_ptr<Element> page = LoadMarkup("<Page><Border Width=\"20\"/></Page>");
     CHECK(page->TypeName() == "Windows.UI.Xaml.Controls.Page");
@@ -165,5 +204,6 @@ int main() {
     PageContentAlwaysUsesThePageBounds();
     UserControlContentAlwaysUsesTheControlBounds();
     PopupFlyoutAndMuxc();
+    TabViewLaysOutItsItemCollection();
     ControlMarkup();
 }

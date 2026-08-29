@@ -1280,9 +1280,14 @@ bool XamlFocusScope::RequestFocus(
                          static_cast<int>(state));
         return false;
     }
+    const openxaml::Element* const requested = target.FocusLayoutElement();
     TraceIslandInput("OpenXaml input event=focus-request granted=%d state=%d "
-                     "host_focused=%d\n", active_ == &target ? 1 : 0,
-                     static_cast<int>(state), host_focused_ ? 1 : 0);
+                     "host_focused=%d node=%llu type=%s\n",
+                     active_ == &target ? 1 : 0, static_cast<int>(state),
+                     host_focused_ ? 1 : 0,
+                     requested ? static_cast<unsigned long long>(
+                                     requested->render_node_id()) : 0,
+                     requested ? requested->TypeName().c_str() : "none");
     return active_ == &target;
 }
 
@@ -1344,12 +1349,32 @@ bool XamlFocusScope::OnIslandKey(const IslandKeyEvent& event) noexcept {
     for (auto current = route.targets.rbegin();
          current != route.targets.rend(); ++current) {
         (*current)->InvokeIslandKeyEvent(true, event.key_down, args);
-        if (args->handled()) break;
+        if (args->handled()) {
+            const openxaml::Element* const element =
+                (*current)->FocusLayoutElement();
+            TraceIslandInput(
+                "OpenXaml input event=key-handler phase=preview vk=%u node=%llu type=%s\n",
+                static_cast<unsigned>(event.virtual_key),
+                element ? static_cast<unsigned long long>(
+                              element->render_node_id()) : 0,
+                element ? element->TypeName().c_str() : "none");
+            break;
+        }
     }
     if (!args->handled()) {
         for (XamlFocusTarget* target : route.targets) {
             target->InvokeIslandKeyEvent(false, event.key_down, args);
-            if (args->handled()) break;
+            if (args->handled()) {
+                const openxaml::Element* const element =
+                    target->FocusLayoutElement();
+                TraceIslandInput(
+                    "OpenXaml input event=key-handler phase=bubble vk=%u node=%llu type=%s\n",
+                    static_cast<unsigned>(event.virtual_key),
+                    element ? static_cast<unsigned long long>(
+                                  element->render_node_id()) : 0,
+                    element ? element->TypeName().c_str() : "none");
+                break;
+            }
         }
     }
     const bool handled = args->handled();
@@ -1379,7 +1404,16 @@ bool XamlFocusScope::OnIslandCharacter(
     }
     for (XamlFocusTarget* target : route.targets) {
         target->InvokeIslandCharacterEvent(args);
-        if (args->handled()) break;
+        if (args->handled()) {
+            const openxaml::Element* const element = target->FocusLayoutElement();
+            TraceIslandInput(
+                "OpenXaml input event=char-handler char=%u node=%llu type=%s\n",
+                event.character,
+                element ? static_cast<unsigned long long>(
+                              element->render_node_id()) : 0,
+                element ? element->TypeName().c_str() : "none");
+            break;
+        }
     }
     const bool handled = args->handled();
     static_cast<ABI::Windows::UI::Xaml::Input::ICharacterReceivedRoutedEventArgs*>(

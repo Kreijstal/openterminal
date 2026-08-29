@@ -328,9 +328,43 @@ template <class Base>
 class ChildSourced : public Base {
 public:
     const ChildCollection* source = nullptr;
+    const std::vector<openxaml::Element*>* supplemental = nullptr;
+    bool include_source = true;
     std::vector<openxaml::Element*> Children() const override {
-        return source ? source->Projected() : std::vector<openxaml::Element*>{};
+        std::vector<openxaml::Element*> result;
+        if (include_source && source) result = source->Projected();
+        if (supplemental) {
+            result.insert(result.end(), supplemental->begin(), supplemental->end());
+        }
+        return result;
     }
+};
+
+// Small template-less controls need text and an opaque backing in one visual
+// for DirectWrite ClearType. A normal TextBlock reports its glyph ink from
+// ArrangeOverride even when its slot is larger; this synthetic leaf instead
+// retains the fixed backing box it was assigned.
+class OpaqueSyntheticTextBlock final : public openxaml::TextBlock {
+public:
+    void set_box_size(openxaml::Size value) {
+        box_size_ = value;
+        set_min_width(value.width);
+        set_min_height(value.height);
+    }
+
+protected:
+    openxaml::Size MeasureOverride(openxaml::Size available) override {
+        const openxaml::Size measured = openxaml::TextBlock::MeasureOverride(available);
+        return {std::max(measured.width, box_size_.width),
+                std::max(measured.height, box_size_.height)};
+    }
+    openxaml::Size ArrangeOverride(openxaml::Size final_size) override {
+        return {std::max(final_size.width, box_size_.width),
+                std::max(final_size.height, box_size_.height)};
+    }
+
+private:
+    openxaml::Size box_size_{};
 };
 
 using AbiBorder = ChildSourced<openxaml::Border>;
@@ -3300,6 +3334,16 @@ public:
     }
 
 private:
+    void OnOwnedCollectionChanged(IUnknown* added) override {
+        // Island layout enters the native Element tree directly, so it does
+        // not pass through this object's ABI Measure/Arrange methods. Keep the
+        // native definition snapshots current when the WinRT collections are
+        // edited; otherwise a programmatic Auto + Star titlebar grid silently
+        // becomes a one-cell overlay and its client content covers the tabs.
+        SyncDefinitions();
+        XamlElement::OnOwnedCollectionChanged(added);
+    }
+
     void SyncDefinitions() {
         layout_.column_definitions.clear();
         for (const openxaml::Definition* definition : columns_.Projected())
@@ -3902,7 +3946,7 @@ private:
     InspectableCollection added_;
 };
 
-class TabViewObject final : public ContentControlObjectBase<openxaml::ContentControl>,
+class TabViewObject final : public ContentControlObjectBase<openxaml::TabView>,
                             public IMuxcTabView {
 public:
     using PrimaryInterface = IMuxcTabView;
@@ -3910,7 +3954,11 @@ public:
         : tab_items_({::openxaml::iid::PIID_FIVector_1_IInspectable,
                       ::openxaml::iid::PIID_FIIterable_1_IInspectable,
                       ::openxaml::iid::PIID_FIIterator_1_IInspectable},
-                     L"Microsoft.UI.Xaml.Controls.TabView.TabItems", this) {}
+                     L"Microsoft.UI.Xaml.Controls.TabView.TabItems", this) {
+        layout_.supplemental = &visual_children_;
+        layout_.set_background_brush(openxaml::BrushValue::SolidColor(
+            {0xff, 0x20, 0x20, 0x20}));
+    }
     ~TabViewObject() override {
         for (auto& [_, handler] : selection_changed_handlers_)
             handler->Release();
@@ -3965,9 +4013,7 @@ public:
     HRESULT STDMETHODCALLTYPE put_##name(void* value) override {             \
         return PutObject(field, static_cast<IInspectable*>(value));          \
     }
-    OPENXAML_MUXC_OBJECT(TabStripHeader, tab_strip_header_)
     OPENXAML_MUXC_OBJECT(TabStripHeaderTemplate, tab_strip_header_template_)
-    OPENXAML_MUXC_OBJECT(TabStripFooter, tab_strip_footer_)
     OPENXAML_MUXC_OBJECT(TabStripFooterTemplate, tab_strip_footer_template_)
     OPENXAML_MUXC_OBJECT(AddTabButtonCommand, add_tab_command_)
     OPENXAML_MUXC_OBJECT(AddTabButtonCommandParameter, add_tab_parameter_)
@@ -3975,6 +4021,21 @@ public:
     OPENXAML_MUXC_OBJECT(TabItemTemplate, tab_item_template_)
     OPENXAML_MUXC_OBJECT(TabItemTemplateSelector, tab_item_template_selector_)
 #undef OPENXAML_MUXC_OBJECT
+
+    HRESULT STDMETHODCALLTYPE get_TabStripHeader(void** value) override {
+        return GetObject(tab_strip_header_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_TabStripHeader(void* value) override {
+        return PutVisualObject(
+            tab_strip_header_, static_cast<IInspectable*>(value));
+    }
+    HRESULT STDMETHODCALLTYPE get_TabStripFooter(void** value) override {
+        return GetObject(tab_strip_footer_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_TabStripFooter(void* value) override {
+        return PutVisualObject(
+            tab_strip_footer_, static_cast<IInspectable*>(value));
+    }
 
     HRESULT STDMETHODCALLTYPE get_SelectedIndex(INT32* value) override {
         if (!value) return E_POINTER;
@@ -4067,6 +4128,46 @@ public:
     }
 
 private:
+    void RebuildVisualChildren() {
+        visual_children_.clear();
+        AppendVisual(tab_strip_header_);
+        for (IInspectable* item : tab_items_.Projected()) AppendVisual(item);
+        AppendVisual(tab_strip_footer_);
+    }
+
+    void AppendVisual(IInspectable* value) {
+        if (!value) return;
+        IOpenXamlNative* native = nullptr;
+        if (SUCCEEDED(value->QueryInterface(
+                IID_IOpenXamlNative, reinterpret_cast<void**>(&native)))) {
+            visual_children_.push_back(native->LayoutElement());
+            native->Release();
+        }
+    }
+
+    HRESULT PutVisualObject(IInspectable*& target, IInspectable* value) {
+        if (SameIdentity(target, value)) return S_OK;
+        const HRESULT validation = ValidateOwnedCollectionChange(target, value);
+        if (FAILED(validation)) return validation;
+        IInspectable* previous = target;
+        if (previous) OnOwnedCollectionRemoving(previous);
+        if (value) value->AddRef();
+        target = value;
+        RebuildVisualChildren();
+        if (previous) {
+            OnOwnedCollectionRemoved(previous);
+            previous->Release();
+        }
+        if (value) OnOwnedCollectionChanged(value);
+        else Layout()->NotifyVisualStructureChanged();
+        return S_OK;
+    }
+
+    void OnOwnedCollectionChanged(IUnknown* added) override {
+        RebuildVisualChildren();
+        XamlElement::OnOwnedCollectionChanged(added);
+    }
+
     static bool SameIdentity(IUnknown* left, IUnknown* right) {
         if (left == right) return true;
         if (!left || !right) return false;
@@ -4156,6 +4257,7 @@ private:
     std::map<LONGLONG, wuxc::ISelectionChangedEventHandler*>
         selection_changed_handlers_;
     InspectableCollection tab_items_;
+    std::vector<openxaml::Element*> visual_children_;
 };
 
 inline constexpr GUID IID_IMuxcTabViewItem = {
@@ -4184,12 +4286,24 @@ struct IMuxcTabViewItemFactory : IInspectable {
 };
 
 class TabViewItemObject final
-    : public ContentControlObjectBase<openxaml::ContentControl>,
+    : public ContentControlObjectBase<openxaml::TabViewItem>,
       public abi::NotImpl_ISelectorItem,
       public IMuxcTabViewItem {
 public:
     using PrimaryInterface = IMuxcTabViewItem;
+    TabViewItemObject() {
+        label_.set_text("Terminal");
+        label_.set_font_size(12.0);
+        label_.set_foreground_brush(openxaml::BrushValue::SolidColor(
+            {0xff, 0xf2, 0xf2, 0xf2}));
+        SetSelectedVisual(false);
+        layout_.include_source = false;
+        visual_children_.push_back(&label_);
+        layout_.supplemental = &visual_children_;
+        (void)layout_.AttachVisualChild(label_);
+    }
     ~TabViewItemObject() override {
+        layout_.DetachVisualChild(label_);
         if (header_) header_->Release();
         if (header_template_) header_template_->Release();
         if (icon_source_) icon_source_->Release();
@@ -4242,7 +4356,18 @@ public:
     }
     HRESULT STDMETHODCALLTYPE put_IsSelected(boolean value) override {
         is_selected_ = value != 0;
+        SetSelectedVisual(is_selected_);
         return S_OK;
+    }
+
+    HRESULT SetAutomationString(UINT32 property, HSTRING value) override {
+        const HRESULT hr = XamlElement::SetAutomationString(property, value);
+        if (SUCCEEDED(hr) && property == 6) {
+            const std::string name = Utf8FromHString(value);
+            label_.set_text(name.empty() ? "Terminal" : name);
+            label_.InvalidateRender(true);
+        }
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE get_TabViewTemplateSettings(void** value) override {
         if (!value) return E_POINTER;
@@ -4259,11 +4384,25 @@ public:
     }
 
 private:
+    void SetSelectedVisual(bool selected) {
+        layout_.set_selected(selected);
+        // DirectComposition rasterizes each visual node into its own surface.
+        // Text on an otherwise transparent node cannot use ClearType, so give
+        // the synthetic header label the same opaque backing as its tab. This
+        // keeps the glyph run and its backing in one CPU stratum and matches
+        // WinUI's opaque tab-strip rendering contract.
+        label_.set_background_brush(openxaml::BrushValue::SolidColor(
+            selected ? openxaml::Color{0xff, 0x3a, 0x3a, 0x3a}
+                     : openxaml::Color{0xff, 0x24, 0x24, 0x24}));
+    }
+
     IInspectable* header_ = nullptr;
     IInspectable* header_template_ = nullptr;
     IInspectable* icon_source_ = nullptr;
     boolean is_closable_ = 1;
     boolean is_selected_ = 0;
+    openxaml::TextBlock label_;
+    std::vector<openxaml::Element*> visual_children_;
 };
 
 inline constexpr GUID IID_IMuxcSplitButton = {
@@ -4285,7 +4424,28 @@ class SplitButtonObject final
       public IMuxcSplitButton {
 public:
     using PrimaryInterface = IMuxcSplitButton;
+    SplitButtonObject() {
+        label_.set_text("+  v");
+        label_.set_font_size(14.0);
+        label_.set_foreground_brush(openxaml::BrushValue::SolidColor(
+            {0xff, 0xf2, 0xf2, 0xf2}));
+        const auto backing = openxaml::BrushValue::SolidColor(
+            {0xff, 0x2b, 0x2b, 0x2b});
+        label_.set_background_brush(backing);
+        label_.set_box_size({52.0, 24.0});
+        layout_.set_background_brush(backing);
+        layout_.set_min_width(52.0);
+        layout_.set_min_height(24.0);
+        layout_.set_horizontal_content_alignment(
+            openxaml::HorizontalAlignment::Stretch);
+        layout_.set_vertical_content_alignment(
+            openxaml::VerticalAlignment::Stretch);
+        visual_children_.push_back(&label_);
+        layout_.supplemental = &visual_children_;
+        (void)layout_.AttachVisualChild(label_);
+    }
     ~SplitButtonObject() override {
+        layout_.DetachVisualChild(label_);
         if (flyout_) flyout_->Release();
         if (command_) command_->Release();
         if (command_parameter_) command_parameter_->Release();
@@ -4331,6 +4491,8 @@ private:
     IInspectable* flyout_ = nullptr;
     IInspectable* command_ = nullptr;
     IInspectable* command_parameter_ = nullptr;
+    OpaqueSyntheticTextBlock label_;
+    std::vector<openxaml::Element*> visual_children_;
 };
 
 inline constexpr GUID IID_IMuxcInfoBar = {
@@ -5793,7 +5955,11 @@ class ButtonObject final : public ContentControlObjectBase<openxaml::Button>,
                            public abi::NotImpl_IButtonBase {
 public:
     using PrimaryInterface = wuxc::IButton;
-    ~ButtonObject() override { if (flyout_) flyout_->Release(); }
+    ButtonObject() { layout_.supplemental = &visual_children_; }
+    ~ButtonObject() override {
+        if (label_attached_) layout_.DetachVisualChild(label_);
+        if (flyout_) flyout_->Release();
+    }
     const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.Button"; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
         if (!object) return E_POINTER;
@@ -5805,6 +5971,12 @@ public:
         return QueryControlInterface(iid, object);
     }
     OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE put_Name(HSTRING value) override {
+        const HRESULT hr = XamlElement::put_Name(value);
+        if (SUCCEEDED(hr)) ConfigureNamedVisual(Utf8FromHString(value));
+        return hr;
+    }
 
     HRESULT STDMETHODCALLTYPE add_Click(wux::IRoutedEventHandler* handler,
                                         EventRegistrationToken* token) override {
@@ -5827,7 +5999,40 @@ public:
     }
 
 private:
+    void ConfigureNamedVisual(const std::string& name) {
+        std::string glyph;
+        if (name == "MinimizeButton") glyph = "-";
+        else if (name == "MaximizeButton") glyph = "[]";
+        else if (name == "CloseButton") glyph = "x";
+        else return;
+
+        label_.set_text(std::move(glyph));
+        label_.set_font_size(14.0);
+        label_.set_foreground_brush(openxaml::BrushValue::SolidColor(
+            {0xff, 0xf2, 0xf2, 0xf2}));
+        const auto backing = openxaml::BrushValue::SolidColor(
+            {0xff, 0x2b, 0x2b, 0x2b});
+        label_.set_background_brush(backing);
+        // Keep ClearType on a fully opaque integer-sized stratum. A glyph-sized
+        // TextBlock has fractional edges, leaving antialiased backing pixels
+        // that cannot legally carry ClearType coverage in DirectComposition.
+        label_.set_box_size({46.0, 40.0});
+        layout_.set_background_brush(backing);
+        layout_.set_horizontal_content_alignment(
+            openxaml::HorizontalAlignment::Stretch);
+        layout_.set_vertical_content_alignment(
+            openxaml::VerticalAlignment::Stretch);
+        if (!label_attached_) {
+            label_attached_ = layout_.AttachVisualChild(label_);
+            if (label_attached_) visual_children_.push_back(&label_);
+        }
+        label_.InvalidateRender(true);
+    }
+
     wuxcp::IFlyoutBase* flyout_ = nullptr;
+    OpaqueSyntheticTextBlock label_;
+    std::vector<openxaml::Element*> visual_children_;
+    bool label_attached_ = false;
 };
 
 class AppBarButtonObject final

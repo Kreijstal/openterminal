@@ -245,6 +245,70 @@ void ListView::NotifySelection() {
     if (selection_changed_) selection_changed_(selected_indices());
 }
 
+namespace {
+
+constexpr double kTabRowHeight = 32.0;
+constexpr double kMinimumTabWidth = 120.0;
+constexpr double kMaximumTabWidth = 220.0;
+
+double TabChildWidth(Element& child) {
+    if (dynamic_cast<TabViewItem*>(&child)) {
+        return std::clamp(child.desired_size().width, kMinimumTabWidth,
+                          kMaximumTabWidth);
+    }
+    return child.desired_size().width;
+}
+
+}  // namespace
+
+Size TabView::MeasureOverride(Size available) {
+    double width = 0.0;
+    double height = kTabRowHeight;
+    for (Element* child : Children()) {
+        child->Measure({available.width, kTabRowHeight});
+        width += TabChildWidth(*child);
+        height = std::max(height, child->desired_size().height);
+    }
+    if (std::isfinite(available.width)) width = std::min(width, available.width);
+    return {width, height};
+}
+
+Size TabView::ArrangeOverride(Size final_size) {
+    double x = 0.0;
+    for (Element* child : Children()) {
+        const double remaining = std::max(0.0, final_size.width - x);
+        const double width = std::min(TabChildWidth(*child), remaining);
+        child->Arrange({x, 0.0, width, final_size.height});
+        x += width;
+    }
+    return final_size;
+}
+
+void TabViewItem::set_selected(bool value) {
+    if (selected_ == value) return;
+    selected_ = value;
+    set_background_brush(BrushValue::SolidColor(
+        selected_ ? Color{0xff, 0x3a, 0x3a, 0x3a}
+                  : Color{0xff, 0x24, 0x24, 0x24}));
+    InvalidateRender(false);
+}
+
+Size TabViewItem::MeasureOverride(Size available) {
+    const Size measured = ContentControl::MeasureOverride(available);
+    return {std::max(kMinimumTabWidth, measured.width),
+            std::max(kTabRowHeight, measured.height)};
+}
+
+Size TabViewItem::ArrangeOverride(Size final_size) {
+    const std::vector<Element*> children = Children();
+    if (!children.empty()) {
+        children.front()->Arrange({12.0, 0.0,
+                                   std::max(0.0, final_size.width - 24.0),
+                                   final_size.height});
+    }
+    return final_size;
+}
+
 Size Popup::MeasureOverride(Size available) {
     return is_open_ ? ContentControl::MeasureOverride(available) : Size{};
 }

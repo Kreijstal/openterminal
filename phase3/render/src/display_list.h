@@ -119,6 +119,7 @@ struct Refusal {
 // re-derive `origin` from the declared markup and the measured slot instead of
 // believing the number the render pass wrote.
 struct NodeGeometry {
+    NodeId id;
     std::string path;
     std::string type;
     Rect slot;        // in the parent's coordinates

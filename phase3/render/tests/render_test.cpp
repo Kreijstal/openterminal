@@ -274,6 +274,28 @@ void ATextBlockBecomesARunAtItsArrangedOrigin() {
     }
 }
 
+void AZeroAreaTextBlockPaintsNothing() {
+    InstallTestFont();
+    auto text = std::make_unique<TextBlock>();
+    text->set_font_family("RenderTestFont");
+    text->set_height(20.0);
+    text->Measure({0.0, 20.0});
+    // Grid's track allocator may leave a tiny positive remainder for a track
+    // it considers zero. This must remain a no-draw just like exact zero.
+    text->Arrange({0.0, 0.0, 1e-6, 20.0});
+    // Model a binding changing after the retained layout was committed. The
+    // render invalidation can run before the coalesced layout invalidation.
+    text->set_text("bound but hidden");
+    const DisplayList list = Build(*text, Size{200.0, 100.0});
+
+    CHECK(list.texts.empty());
+    CHECK(list.refusals.empty());
+    CHECK(list.scene && list.scene->nodes().size() == 1);
+    if (list.scene && !list.scene->nodes().empty()) {
+        CHECK(list.scene->nodes().front().content->commands.empty());
+    }
+}
+
 // --- composition --------------------------------------------------------------
 
 void APartlyTransparentBrushUsesPremultipliedSourceOver() {
@@ -1122,6 +1144,7 @@ int main() {
     ABorderThicknessWithNoBrushPaintsNothingAndRefusesNothing();
     TransparentPaintsNothingAndIsNotARefusal();
     ATextBlockBecomesARunAtItsArrangedOrigin();
+    AZeroAreaTextBlockPaintsNothing();
     APartlyTransparentBrushUsesPremultipliedSourceOver();
     ABrushWithNoColourIsANamedNoDraw();
     TheProbeInkColourIsReserved();

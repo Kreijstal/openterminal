@@ -216,6 +216,7 @@ struct Walker {
         auto content = std::make_shared<LocalDisplayList>();
 
         NodeGeometry node;
+        node.id = visual_id;
         node.path = path;
         node.type = element.TypeName();
         node.slot = slot;
@@ -425,7 +426,17 @@ struct Walker {
         }
 
         if (const auto* text = dynamic_cast<const TextBlock*>(&element)) {
-            if (!text->text().empty()) {
+            // A non-empty string can remain on a collapsed binding target or
+            // a control whose arranged width is zero. DirectWrite may still
+            // produce overhang pixels for such a run, but XAML clips the
+            // element to its empty layout box, so it paints nothing.
+            // Grid uses 1e-5 as its zero tolerance while distributing tracks.
+            // Apply the same threshold here so its positive floating-point
+            // remainder cannot resurrect text in a zero-width track.
+            constexpr double kLayoutPaintEpsilon = 1e-5;
+            if (!text->text().empty() && actual.width >= kLayoutPaintEpsilon &&
+                actual.height >= kLayoutPaintEpsilon && slot.width >= kLayoutPaintEpsilon &&
+                slot.height >= kLayoutPaintEpsilon) {
                 if (!text->runtime_text_refusal().empty()) {
                     Refuse(path, "Text", text->runtime_text_refusal());
                 } else {

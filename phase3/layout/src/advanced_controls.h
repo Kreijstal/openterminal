@@ -211,11 +211,38 @@ OPENXAML_MUXC_CONTROL(NavigationViewItem, "NavigationViewItem");
 OPENXAML_MUXC_CONTROL(NumberBox, "NumberBox");
 OPENXAML_MUXC_CONTROL(ProgressRing, "ProgressRing");
 OPENXAML_MUXC_CONTROL(SplitButton, "SplitButton");
-OPENXAML_MUXC_CONTROL(TabView, "TabView");
 OPENXAML_MUXC_CONTROL(TeachingTip, "TeachingTip");
 OPENXAML_MUXC_CONTROL(TreeView, "TreeView");
 
 #undef OPENXAML_MUXC_CONTROL
+
+// TabView is populated through its WinRT TabItems vector rather than through
+// ContentControl.Content. It therefore needs a real multi-child layout
+// contract even before the complete WinUI generic.xaml template is available.
+class TabView : public MuxContentControl {
+public:
+    TabView() : MuxContentControl("Microsoft.UI.Xaml.Controls.TabView") {}
+
+protected:
+    Size MeasureOverride(Size available) override;
+    Size ArrangeOverride(Size final_size) override;
+};
+
+class TabViewItem : public MuxContentControl {
+public:
+    TabViewItem()
+        : MuxContentControl("Microsoft.UI.Xaml.Controls.TabViewItem") {}
+
+    void set_selected(bool value);
+    bool selected() const { return selected_; }
+
+protected:
+    Size MeasureOverride(Size available) override;
+    Size ArrangeOverride(Size final_size) override;
+
+private:
+    bool selected_ = false;
+};
 
 }  // namespace openxaml
 

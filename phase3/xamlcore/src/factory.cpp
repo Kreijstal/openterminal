@@ -207,6 +207,8 @@ inline constexpr GUID IID_Int32Reference = {
     0x548cefbd, 0xbc8a, 0x5fa0, {0x8d, 0xf2, 0x95, 0x74, 0x40, 0xfc, 0x8b, 0xf4}};
 inline constexpr GUID IID_UInt64Reference = {
     0x6755e376, 0x53bb, 0x568b, {0xa1, 0x1d, 0x17, 0x23, 0x98, 0x68, 0x30, 0x9e}};
+inline constexpr GUID IID_DoubleReference = {
+    0x2f2d6c29, 0x5473, 0x5f3e, {0x92, 0xe7, 0x96, 0x57, 0x2b, 0xb9, 0x90, 0xe2}};
 
 // The prepared MinGW SDK headers instantiate only the IReference<T>
 // specializations used by their own metadata surface, and omit HSTRING. Keep
@@ -223,6 +225,10 @@ struct Int32ReferenceAbi : IInspectable {
 
 struct UInt64ReferenceAbi : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_Value(UINT64* value) = 0;
+};
+
+struct DoubleReferenceAbi : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Value(DOUBLE* value) = 0;
 };
 
 class ValueSetObject final : public ComObject,
@@ -2310,6 +2316,47 @@ private:
     UINT64 value_;
 };
 
+class BoxedDoubleObject final : public ComObject,
+                                public abi::NotImpl_IPropertyValue,
+                                public DoubleReferenceAbi {
+public:
+    explicit BoxedDoubleObject(DOUBLE value) : value_(value) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.Foundation.IReference`1<Double>";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_Foundation_IPropertyValue,
+                        wf::IPropertyValue)
+        OPENXAML_QI_ARM(IID_DoubleReference, DoubleReferenceAbi)
+        OPENXAML_QI_ARM(IID_IUnknown, wf::IPropertyValue)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wf::IPropertyValue)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Type(wf::PropertyType* value) override {
+        if (!value) return E_POINTER;
+        *value = wf::PropertyType_Double;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_IsNumericScalar(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = true;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetDouble(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = value_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Value(DOUBLE* value) override {
+        return GetDouble(value);
+    }
+private:
+    DOUBLE value_;
+};
+
 class BoxedGuidObject final : public ComObject,
                               public abi::NotImpl_IPropertyValue {
 public:
@@ -2394,6 +2441,12 @@ public:
     HRESULT STDMETHODCALLTYPE CreateUInt64(UINT64 value, IInspectable** result) override {
         if (!result) return E_POINTER;
         auto* boxed = new (std::nothrow) BoxedUInt64Object(value);
+        *result = boxed ? static_cast<wf::IPropertyValue*>(boxed) : nullptr;
+        return boxed ? S_OK : E_OUTOFMEMORY;
+    }
+    HRESULT STDMETHODCALLTYPE CreateDouble(DOUBLE value, IInspectable** result) override {
+        if (!result) return E_POINTER;
+        auto* boxed = new (std::nothrow) BoxedDoubleObject(value);
         *result = boxed ? static_cast<wf::IPropertyValue*>(boxed) : nullptr;
         return boxed ? S_OK : E_OUTOFMEMORY;
     }
@@ -5845,15 +5898,15 @@ private:
             constexpr std::size_t kMaximumNodes = 256;
             const std::size_t count =
                 std::min(list.geometry.size(), kMaximumNodes);
-            const auto* nodes = list.scene ? &list.scene->nodes() : nullptr;
             for (std::size_t index = 0; index < count; ++index) {
                 const auto& geometry = list.geometry[index];
                 std::size_t commands = 0;
                 std::uint64_t node_id = 0;
-                if (nodes && index < nodes->size()) {
-                    const auto& node = (*nodes)[index];
-                    node_id = node.id.value;
-                    if (node.content) commands = node.content->commands.size();
+                if (list.scene) {
+                    if (const auto* node = list.scene->Find(geometry.id)) {
+                        node_id = node->id.value;
+                        if (node->content) commands = node->content->commands.size();
+                    }
                 }
                 char values[320]{};
                 std::snprintf(
@@ -5974,6 +6027,40 @@ private:
         OutputDebugStringA(stats.c_str());
 
         constexpr std::size_t kMaximumLine = 240;
+        for (std::size_t index = 0; index < update.render_issues.size(); ++index) {
+            const auto& issue = update.render_issues[index];
+            char prefix[192]{};
+            const char* command = issue.command_index ==
+                    openxaml::render::RenderIssue::kNoCommand
+                ? "none"
+                : nullptr;
+            const int prefix_length = command
+                ? std::snprintf(
+                      prefix, sizeof(prefix),
+                      "OpenXaml frame event=render-issue reason=%s index=%zu node=%llu command=%s code=%d message=\"",
+                      reason, index,
+                      static_cast<unsigned long long>(issue.node.value), command,
+                      static_cast<int>(issue.code))
+                : std::snprintf(
+                      prefix, sizeof(prefix),
+                      "OpenXaml frame event=render-issue reason=%s index=%zu node=%llu command=%zu code=%d message=\"",
+                      reason, index,
+                      static_cast<unsigned long long>(issue.node.value),
+                      issue.command_index, static_cast<int>(issue.code));
+            if (prefix_length <= 0) continue;
+            std::string detail(prefix,
+                               std::min<std::size_t>(
+                                   static_cast<std::size_t>(prefix_length),
+                                   sizeof(prefix) - 1));
+            const std::size_t suffix_size = 2;
+            for (char character : issue.message) {
+                if (detail.size() >= kMaximumLine - suffix_size) break;
+                detail.push_back(character == '\n' || character == '\r'
+                                     ? ' ' : character);
+            }
+            detail += "\"\n";
+            OutputDebugStringA(detail.c_str());
+        }
         for (std::size_t index = 0; index < update.issues.size(); ++index) {
             const auto& issue = update.issues[index];
             char prefix[192]{};
@@ -7310,6 +7397,33 @@ INT32 ConstantInteger(const xbf::Constant& value) {
     return static_cast<INT32>(ConstantNumber(value));
 }
 
+IInspectable* BoxXbfResourceConstant(const xbf::Constant& value) {
+    switch (value.kind) {
+    case xbf::ConstantKind::SharedString:
+    case xbf::ConstantKind::UniqueString:
+    case xbf::ConstantKind::NullString:
+        return static_cast<wf::IPropertyValue*>(
+            new (std::nothrow) BoxedStringObject(value.string_value));
+    case xbf::ConstantKind::False:
+    case xbf::ConstantKind::True:
+        return static_cast<wf::IPropertyValue*>(new (std::nothrow)
+            BoxedBooleanObject(value.kind == xbf::ConstantKind::True));
+    case xbf::ConstantKind::Float:
+    case xbf::ConstantKind::GridLength:
+        return static_cast<wf::IPropertyValue*>(new (std::nothrow)
+            BoxedDoubleObject(ConstantNumber(value)));
+    case xbf::ConstantKind::Signed:
+        return static_cast<wf::IPropertyValue*>(new (std::nothrow)
+            BoxedInt32Object(value.signed_value));
+    case xbf::ConstantKind::Enum:
+    case xbf::ConstantKind::Color:
+        return static_cast<wf::IPropertyValue*>(new (std::nothrow)
+            BoxedUInt32Object(value.unsigned_value));
+    default:
+        return nullptr;
+    }
+}
+
 bool EndsWith(const std::string& value, const char* suffix) {
     const std::size_t length = std::strlen(suffix);
     return value.size() >= length &&
@@ -7569,6 +7683,18 @@ HRESULT SetSingleChild(IInspectable* parent, IInspectable* child,
         if (FAILED(hr)) return hr;
         hr = info_bar->put_ActionButton(child);
         info_bar->Release();
+        return hr;
+    }
+    if (property == "Microsoft.UI.Xaml.Controls.TabView.TabStripHeader" ||
+        property == "Microsoft.UI.Xaml.Controls.TabView.TabStripFooter") {
+        IMuxcTabView* tab_view = nullptr;
+        HRESULT hr = parent->QueryInterface(
+            IID_IMuxcTabView, reinterpret_cast<void**>(&tab_view));
+        if (FAILED(hr)) return hr;
+        hr = EndsWith(property, ".TabStripHeader")
+            ? tab_view->put_TabStripHeader(child)
+            : tab_view->put_TabStripFooter(child);
+        tab_view->Release();
         return hr;
     }
     if (property == "Windows.UI.Xaml.Controls.Panel.Background") {
@@ -8225,15 +8351,10 @@ HRESULT BuildXbfObject(const std::shared_ptr<xbf::Object>& graph,
                     hr = dictionary->InsertResource(key.c_str(), child);
                     child->Release();
                     if (FAILED(hr)) break;
-                } else if (value.kind == xbf::Value::Kind::Constant &&
-                           (value.constant.kind == xbf::ConstantKind::SharedString ||
-                            value.constant.kind == xbf::ConstantKind::UniqueString ||
-                            value.constant.kind == xbf::ConstantKind::NullString)) {
-                    auto* boxed = new (std::nothrow)
-                        BoxedStringObject(value.constant.string_value);
-                    if (!boxed) { hr = E_OUTOFMEMORY; break; }
-                    hr = dictionary->InsertResource(
-                        key.c_str(), static_cast<wf::IPropertyValue*>(boxed));
+                } else if (value.kind == xbf::Value::Kind::Constant) {
+                    IInspectable* boxed = BoxXbfResourceConstant(value.constant);
+                    if (!boxed) continue;
+                    hr = dictionary->InsertResource(key.c_str(), boxed);
                     boxed->Release();
                     if (FAILED(hr)) break;
                 }
