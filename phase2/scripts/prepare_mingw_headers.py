@@ -158,7 +158,30 @@ def prepare_icon_path_converter(source: Path, destination: Path) -> None:
         }"""
     if content.count(old) != 1:
         raise RuntimeError("expected SoftwareBitmap WIC conversion")
-    write_if_changed(destination, content.replace(old, new))
+    content = content.replace(old, new)
+    old_source = """        winrt::Windows::UI::Xaml::Media::Imaging::SoftwareBitmapSource bitmapSource{};
+        bitmapSource.SetBitmapAsync(swBitmap);
+        return bitmapSource;"""
+    new_source = """        try
+        {
+            winrt::Windows::UI::Xaml::Media::Imaging::SoftwareBitmapSource bitmapSource{};
+            bitmapSource.SetBitmapAsync(swBitmap);
+            return bitmapSource;
+        }
+        catch (const winrt::hresult_class_not_registered&)
+        {
+            return nullptr;
+        }
+        catch (const winrt::hresult_wrong_thread&)
+        {
+            // OpenXaml owns this thread's XAML state, so Windows' system XAML
+            // image source cannot be composed here. The profile icon is
+            // optional; retain the profile and omit only its bitmap.
+            return nullptr;
+        }"""
+    if content.count(old_source) != 1:
+        raise RuntimeError("expected SoftwareBitmapSource construction")
+    write_if_changed(destination, content.replace(old_source, new_source))
 
 
 def prepare_cppwinrt_utils(source: Path, destination: Path) -> None:
