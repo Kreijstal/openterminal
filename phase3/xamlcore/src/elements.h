@@ -4419,22 +4419,63 @@ struct IMuxcSplitButton : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE remove_Click(EventRegistrationToken) = 0;
 };
 
+inline constexpr GUID IID_IMuxcSplitButtonClickEventArgs = {
+    0x6af896c2, 0xe65a, 0x5998, {0x9c, 0x82, 0x2a, 0xf8, 0xf3, 0xe0, 0x74, 0x1f}};
+
+struct IMuxcSplitButtonClickEventArgs : IInspectable {};
+
+// The delegate IID is closed over Microsoft.UI.Xaml's two runtime classes,
+// but its ABI is the ordinary WinRT typed-event-handler shape. Keeping that
+// shape local avoids importing generated WinUI headers into the replacement
+// Windows.UI.Xaml DLL.
+struct IMuxcSplitButtonClickHandler : IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE Invoke(
+        IMuxcSplitButton* sender,
+        IMuxcSplitButtonClickEventArgs* args) = 0;
+};
+
+class SplitButtonClickEventArgsObject final
+    : public ComObject,
+      public IMuxcSplitButtonClickEventArgs {
+public:
+    const wchar_t* RuntimeClassName() const override {
+        return L"Microsoft.UI.Xaml.Controls.SplitButtonClickEventArgs";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IMuxcSplitButtonClickEventArgs,
+                        IMuxcSplitButtonClickEventArgs)
+        OPENXAML_QI_ARM(IID_IUnknown, IMuxcSplitButtonClickEventArgs)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable,
+                        IMuxcSplitButtonClickEventArgs)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+};
+
 class SplitButtonObject final
     : public ContentControlObjectBase<openxaml::ContentControl>,
       public IMuxcSplitButton {
 public:
     using PrimaryInterface = IMuxcSplitButton;
     SplitButtonObject() {
-        label_.set_text("+  v");
+        // Terminal requests two 31-DIP halves: a primary new-tab button and a
+        // dropdown. Preserve that visual separation even while this control
+        // remains template-less. The inset prevents the plus from running
+        // into the selected tab's title, which made "PowerShell+ v" look like
+        // one truncated label.
+        label_.set_text("+      v");
         label_.set_font_size(14.0);
         label_.set_foreground_brush(openxaml::BrushValue::SolidColor(
             {0xff, 0xf2, 0xf2, 0xf2}));
         const auto backing = openxaml::BrushValue::SolidColor(
             {0xff, 0x2b, 0x2b, 0x2b});
         label_.set_background_brush(backing);
-        label_.set_box_size({52.0, 24.0});
+        label_.set_margin({8.0, 0.0, 0.0, 0.0});
+        label_.set_box_size({54.0, 24.0});
         layout_.set_background_brush(backing);
-        layout_.set_min_width(52.0);
+        layout_.set_min_width(62.0);
         layout_.set_min_height(24.0);
         layout_.set_horizontal_content_alignment(
             openxaml::HorizontalAlignment::Stretch);
@@ -4449,6 +4490,7 @@ public:
         if (flyout_) flyout_->Release();
         if (command_) command_->Release();
         if (command_parameter_) command_parameter_->Release();
+        for (auto& [_, handler] : click_handlers_) handler->Release();
     }
     const wchar_t* RuntimeClassName() const override {
         return L"Microsoft.UI.Xaml.Controls.SplitButton";
@@ -4481,10 +4523,61 @@ public:
 
     HRESULT STDMETHODCALLTYPE add_Click(void* handler,
                                          EventRegistrationToken* token) override {
-        return AddEvent(static_cast<IUnknown*>(handler), token);
+        return AddTypedEvent(static_cast<IMuxcSplitButtonClickHandler*>(handler),
+                             token, click_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_Click(EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        return RemoveTypedEvent(token, click_handlers_);
+    }
+
+    void InvokeIslandTapEvent(
+        IslandTapEventKind kind,
+        wuxi::ITappedRoutedEventArgs* args) noexcept override {
+        ContentControlObjectBase<openxaml::ContentControl>::InvokeIslandTapEvent(
+            kind, args);
+        if (kind != IslandTapEventKind::Tapped || !args) return;
+
+        try {
+            wf::Point position{};
+            if (FAILED(args->GetPosition(
+                    static_cast<wux::IUIElement*>(this), &position))) return;
+
+            // The right 31 DIPs are the split-button's dropdown half.
+            if (position.X >= 31.0f) {
+                wuxcp::IFlyoutBase* flyout = nullptr;
+                if (flyout_ && SUCCEEDED(flyout_->QueryInterface(
+                        ::openxaml::iid::Windows_UI_Xaml_Controls_Primitives_IFlyoutBase,
+                        reinterpret_cast<void**>(&flyout))) && flyout) {
+                    (void)flyout->ShowAt(static_cast<wux::IFrameworkElement*>(this));
+                    flyout->Release();
+                    (void)args->put_Handled(1);
+                }
+                return;
+            }
+
+            std::vector<IMuxcSplitButtonClickHandler*> snapshot;
+            snapshot.reserve(click_handlers_.size());
+            for (const auto& [_, handler] : click_handlers_) {
+                handler->AddRef();
+                snapshot.push_back(handler);
+            }
+            auto* event_args = new (std::nothrow) SplitButtonClickEventArgsObject;
+            if (!event_args) {
+                for (auto* handler : snapshot) handler->Release();
+                return;
+            }
+            auto* sender = static_cast<IMuxcSplitButton*>(this);
+            auto* projected_args =
+                static_cast<IMuxcSplitButtonClickEventArgs*>(event_args);
+            for (auto* handler : snapshot) {
+                (void)handler->Invoke(sender, projected_args);
+                handler->Release();
+            }
+            projected_args->Release();
+            (void)args->put_Handled(1);
+        } catch (...) {
+            // Pointer routing is an HWND-bound noexcept seam.
+        }
     }
 
 private:
@@ -4493,6 +4586,7 @@ private:
     IInspectable* command_parameter_ = nullptr;
     OpaqueSyntheticTextBlock label_;
     std::vector<openxaml::Element*> visual_children_;
+    std::map<LONGLONG, IMuxcSplitButtonClickHandler*> click_handlers_;
 };
 
 inline constexpr GUID IID_IMuxcInfoBar = {
