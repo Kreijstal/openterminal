@@ -445,6 +445,36 @@ def prepare_terminal_app(source: Path, destination: Path) -> None:
                 if content.count(old) != 1:
                     raise RuntimeError("expected destination-list logo property key")
                 content = content.replace(old, new)
+            if path.name == "LanguageProfileNotifier.cpp":
+                old = """    if (FAILED(_source->AdviseSink(IID_ITfInputProcessorProfileActivationSink, static_cast<ITfInputProcessorProfileActivationSink*>(this), &_cookie)))
+    {
+        _cookie = TF_INVALID_COOKIE;
+        THROW_LAST_ERROR();
+    }"""
+                old_setup = """    const auto manager = wil::CoCreateInstance<ITfThreadMgr>(CLSID_TF_ThreadMgr);
+    _source = manager.query<ITfSource>();
+""" + old
+                new = """    try
+    {
+        const auto manager = wil::CoCreateInstance<ITfThreadMgr>(CLSID_TF_ThreadMgr);
+        _source = manager.query<ITfSource>();
+        if (FAILED(_source->AdviseSink(IID_ITfInputProcessorProfileActivationSink, static_cast<ITfInputProcessorProfileActivationSink*>(this), &_cookie)))
+        {
+            _cookie = TF_INVALID_COOKIE;
+            _source.reset();
+        }
+    }
+    catch (...)
+    {
+        // Language-profile notifications are optional. In unpackaged and
+        // compatibility environments TSF creation, ITfSource acquisition, or
+        // sink registration may fail even though the terminal is usable.
+        _cookie = TF_INVALID_COOKIE;
+        _source.reset();
+    }"""
+                if content.count(old_setup) != 1:
+                    raise RuntimeError("expected TSF language-profile subscription")
+                content = content.replace(old_setup, new)
             if path.name == "Tab.cpp":
                 dependent_casts = (
                     "p->GetContent().try_as<SnippetsPaneContent>()",
