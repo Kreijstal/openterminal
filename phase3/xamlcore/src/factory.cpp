@@ -4947,7 +4947,12 @@ public:
         auto* binding = new (std::nothrow) WindowBinding(this);
         if (!binding) return E_OUTOFMEMORY;
         window_binding_ = binding;
-        child_ = CreateWindowExW(WS_EX_LAYERED, WindowClassName(),
+        // DirectComposition targets a normal child HWND. The CPU fallback
+        // converts it to a layered child only after the complete compositor
+        // probe fails: a layered DComp target stays transparent on native
+        // Windows, while a normal HWND cannot be published with
+        // UpdateLayeredWindow on Wine/ReactOS.
+        child_ = CreateWindowExW(0, WindowClassName(),
                                  L"OpenXaml Island", WS_CHILD,
                                  0, 0, 1, 1, parent, nullptr,
                                  GetModuleHandleW(nullptr), binding);
@@ -4962,14 +4967,30 @@ public:
             return HRESULT_FROM_WIN32(error);
         }
         EnableHostState(child_);
-        // This HWND is deliberately layered because the CPU presenter publishes
-        // its complete alpha surface through UpdateLayeredWindow. A successful
-        // DirectComposition probe does not make that layered surface opaque on
-        // native Windows; it merely causes WM_PAINT to stop replaying the CPU
-        // frame, leaving a transparent island. Keep the presenter consistent
-        // with the HWND contract until the DComp path owns a non-layered child.
-        presentation_mode_ = PresentationMode::Cpu;
-        TraceDcompFallback("layered-child", E_NOTIMPL);
+        presentation_mode_ = PresentationMode::Undecided;
+        const HRESULT dcomp_attach = InitializeDcompPresenter(child_);
+        if (FAILED(dcomp_attach)) {
+            TraceDcompFallback("initialize", dcomp_attach);
+            const HRESULT fallback = EnableLayeredCpuPresenter(child_);
+            if (FAILED(fallback)) return fallback;
+        } else {
+            openxaml::render::DcompUpdateResult probe;
+            if (ProbeDcompPresenter(child_, probe)) {
+                presentation_mode_ = PresentationMode::Dcomp;
+                TraceDcompState("probe", "attach", probe);
+            } else {
+                // Content is absent from this capability probe, so an authored
+                // render semantic cannot classify DirectComposition as
+                // unavailable. Failure means the platform cannot complete the
+                // device/surface/target/commit path and should use CPU pixels.
+                TraceDcompState("probe-failed", "attach", probe);
+                TraceDcompFallback("probe",
+                                   FAILED(probe.error) ? probe.error : E_FAIL);
+                ReleaseDcompPresenter();
+                const HRESULT fallback = EnableLayeredCpuPresenter(child_);
+                if (FAILED(fallback)) return fallback;
+            }
+        }
         xaml_root_->SetHostVisible(IsWindowVisible(child_) != FALSE);
         input_manager_->SetHostFocusRequester(
             MakeHostFocusRequester(host_state_));
@@ -5688,6 +5709,30 @@ private:
         device->Release();
         dxgi_device->Release();
         rendering_device->Release();
+        return S_OK;
+    }
+
+    HRESULT EnableLayeredCpuPresenter(HWND window) noexcept {
+        if (!window || !IsWindow(window)) return E_INVALIDARG;
+        SetLastError(ERROR_SUCCESS);
+        const LONG_PTR extended_style = GetWindowLongPtrW(window, GWL_EXSTYLE);
+        DWORD error = GetLastError();
+        if (extended_style == 0 && error != ERROR_SUCCESS)
+            return HRESULT_FROM_WIN32(error);
+        SetLastError(ERROR_SUCCESS);
+        const LONG_PTR previous = SetWindowLongPtrW(
+            window, GWL_EXSTYLE, extended_style | WS_EX_LAYERED);
+        error = GetLastError();
+        if (previous == 0 && error != ERROR_SUCCESS)
+            return HRESULT_FROM_WIN32(error);
+        if (!SetWindowPos(window, nullptr, 0, 0, 0, 0,
+                          SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE |
+                              SWP_NOACTIVATE | SWP_NOZORDER)) {
+            error = GetLastError();
+            return HRESULT_FROM_WIN32(error == ERROR_SUCCESS
+                                          ? ERROR_GEN_FAILURE : error);
+        }
+        presentation_mode_ = PresentationMode::Cpu;
         return S_OK;
     }
 
