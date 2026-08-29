@@ -1069,6 +1069,65 @@ int main() {
         scale->Release();
     }
 
+    // Terminal positions its native title-bar input sink with
+    // dragBar.TransformToVisual(rootGrid). An identity result moves the sink to
+    // x=0, covering the new-tab SplitButton and stealing its clicks.
+    auto* transform_root = Activate<wux::IUIElement>(
+        L"Windows.UI.Xaml.Controls.Grid",
+        openxaml::iid::Windows_UI_Xaml_IUIElement);
+    auto* transform_child = Activate<wux::IUIElement>(
+        L"Windows.UI.Xaml.Controls.Grid",
+        openxaml::iid::Windows_UI_Xaml_IUIElement);
+    openxaml::winrt::IOpenXamlNative* transform_root_native = nullptr;
+    openxaml::winrt::IOpenXamlNative* transform_child_native = nullptr;
+    if (transform_root) {
+        transform_root->QueryInterface(
+            openxaml::winrt::IID_IOpenXamlNative,
+            reinterpret_cast<void**>(&transform_root_native));
+    }
+    if (transform_child) {
+        transform_child->QueryInterface(
+            openxaml::winrt::IID_IOpenXamlNative,
+            reinterpret_cast<void**>(&transform_child_native));
+    }
+    bool transform_attached = false;
+    if (transform_root_native && transform_child_native) {
+        auto* root_layout = transform_root_native->LayoutElement();
+        auto* child_layout = transform_child_native->LayoutElement();
+        transform_attached = root_layout->AttachVisualChild(*child_layout);
+        root_layout->Arrange({0.0, 0.0, 320.0, 100.0});
+        child_layout->Arrange({73.0, 11.0, 80.0, 24.0});
+    }
+    wuxm::IGeneralTransform* child_to_root = nullptr;
+    wf::Rect translated{};
+    check(transform_attached &&
+              SUCCEEDED(transform_child->TransformToVisual(
+                  transform_root, &child_to_root)) && child_to_root &&
+              SUCCEEDED(child_to_root->TransformBounds(
+                  {0.0f, 0.0f, 80.0f, 24.0f}, &translated)) &&
+              translated.X == 73.0f && translated.Y == 11.0f &&
+              translated.Width == 80.0f && translated.Height == 24.0f,
+          "TransformToVisual preserves nested retained offset");
+    wuxm::IGeneralTransform* root_to_child = nullptr;
+    wf::Point inverse_point{};
+    check(child_to_root &&
+              SUCCEEDED(child_to_root->get_Inverse(&root_to_child)) &&
+              root_to_child &&
+              SUCCEEDED(root_to_child->TransformPoint(
+                  {73.0f, 11.0f}, &inverse_point)) &&
+              inverse_point.X == 0.0f && inverse_point.Y == 0.0f,
+          "TransformToVisual inverse restores local coordinates");
+    if (transform_root_native && transform_child_native && transform_attached) {
+        transform_root_native->LayoutElement()->DetachVisualChild(
+            *transform_child_native->LayoutElement());
+    }
+    if (root_to_child) root_to_child->Release();
+    if (child_to_root) child_to_root->Release();
+    if (transform_child_native) transform_child_native->Release();
+    if (transform_root_native) transform_root_native->Release();
+    if (transform_child) transform_child->Release();
+    if (transform_root) transform_root->Release();
+
     auto* user_control = Activate<wuxc::IUserControl>(
         L"Windows.UI.Xaml.Controls.UserControl",
         openxaml::iid::Windows_UI_Xaml_Controls_IUserControl);

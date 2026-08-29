@@ -373,12 +373,15 @@ using AbiStackPanel = ChildSourced<openxaml::StackPanel>;
 using AbiCanvas = ChildSourced<openxaml::Canvas>;
 
 // TransformToVisual is used by the desktop host to place its native title-bar
-// input window over the XAML tree. Until the renderer grows a separate visual
-// transform stack, layout coordinates are already expressed in the island's
-// coordinate space, so this object is the identity transform.
+// input window over the XAML tree. Each retained render origin is relative to
+// its visual parent, so transforming between two elements is the difference
+// between their accumulated origins in their common visual root.
 class GeneralTransformObject final : public ComObject,
                                      public wuxm::IGeneralTransform {
 public:
+    GeneralTransformObject(double offset_x = 0.0, double offset_y = 0.0)
+        : offset_x_(offset_x), offset_y_(offset_y) {}
+
     const wchar_t* RuntimeClassName() const override {
         return L"Windows.UI.Xaml.Media.GeneralTransform";
     }
@@ -395,28 +398,53 @@ public:
 
     HRESULT STDMETHODCALLTYPE get_Inverse(wuxm::IGeneralTransform** value) override {
         if (!value) return E_POINTER;
-        *value = this;
-        AddRef();
-        return S_OK;
+        *value = new (std::nothrow)
+            GeneralTransformObject(-offset_x_, -offset_y_);
+        return *value ? S_OK : E_OUTOFMEMORY;
     }
     HRESULT STDMETHODCALLTYPE TransformPoint(wf::Point point, wf::Point* value) override {
         if (!value) return E_POINTER;
-        *value = point;
+        *value = {static_cast<FLOAT>(point.X + offset_x_),
+                  static_cast<FLOAT>(point.Y + offset_y_)};
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE TryTransform(wf::Point point, wf::Point* value,
                                            boolean* transformed) override {
         if (!value || !transformed) return E_POINTER;
-        *value = point;
+        *value = {static_cast<FLOAT>(point.X + offset_x_),
+                  static_cast<FLOAT>(point.Y + offset_y_)};
         *transformed = 1;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE TransformBounds(wf::Rect rect, wf::Rect* value) override {
         if (!value) return E_POINTER;
-        *value = rect;
+        *value = {static_cast<FLOAT>(rect.X + offset_x_),
+                  static_cast<FLOAT>(rect.Y + offset_y_),
+                  rect.Width, rect.Height};
         return S_OK;
     }
+
+private:
+    double offset_x_ = 0.0;
+    double offset_y_ = 0.0;
 };
+
+inline openxaml::Element* VisualRootOf(openxaml::Element* element) noexcept {
+    if (!element) return nullptr;
+    while (element->visual_parent()) element = element->visual_parent();
+    return element;
+}
+
+inline openxaml::Point VisualOriginInRoot(
+    const openxaml::Element* element) noexcept {
+    openxaml::Point result{};
+    for (auto* current = element; current; current = current->visual_parent()) {
+        const openxaml::Point origin = current->render_origin();
+        result.x += origin.x;
+        result.y += origin.y;
+    }
+    return result;
+}
 
 class TransformMutationObserver {
 public:
@@ -1479,9 +1507,29 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE TransformToVisual(
-        wux::IUIElement*, wuxm::IGeneralTransform** value) override {
+        wux::IUIElement* relative_to,
+        wuxm::IGeneralTransform** value) override {
         if (!value) return E_POINTER;
-        *value = new (std::nothrow) GeneralTransformObject();
+        *value = nullptr;
+
+        openxaml::Element* const source = Layout();
+        const openxaml::Point source_origin = VisualOriginInRoot(source);
+        openxaml::Point target_origin{};
+        if (relative_to) {
+            IOpenXamlNative* native = nullptr;
+            const HRESULT queried = relative_to->QueryInterface(
+                IID_IOpenXamlNative, reinterpret_cast<void**>(&native));
+            if (FAILED(queried) || !native) return E_INVALIDARG;
+            openxaml::Element* const target = native->LayoutElement();
+            native->Release();
+            if (!target || VisualRootOf(source) != VisualRootOf(target))
+                return E_INVALIDARG;
+            target_origin = VisualOriginInRoot(target);
+        }
+
+        *value = new (std::nothrow) GeneralTransformObject(
+            source_origin.x - target_origin.x,
+            source_origin.y - target_origin.y);
         return *value ? S_OK : E_OUTOFMEMORY;
     }
     HRESULT STDMETHODCALLTYPE get_Dispatcher(
