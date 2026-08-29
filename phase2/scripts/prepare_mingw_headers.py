@@ -532,6 +532,59 @@ def prepare_terminal_app(source: Path, destination: Path) -> None:
                     "const auto hr = TerminalTrySetWindowAssociatedProcesses(",
                     "const auto hr = OpenTerminalTrySetWindowAssociatedProcesses(",
                 )
+                old = """        if (_tabs.Size() == 0)
+        {
+            CloseWindowRequested.raise(*this, nullptr);
+            co_return;
+        }
+        else
+        {"""
+                new = """        // OpenXaml dispatches startup actions asynchronously. The first
+        // new-tab action can still be queued when initialization reaches this
+        // point, so zero tabs is not proof that an elevation handoff occurred.
+        // Queue the zero-tab decision behind that action.
+        {"""
+                if content.count(old) != 1:
+                    raise RuntimeError("expected zero-tab startup close check")
+                content = content.replace(old, new)
+                old = """            Dispatcher().RunAsync(CoreDispatcherPriority::Low, [weak = get_weak()]() {
+                if (auto self{ weak.get() })
+                {
+                    self->Initialized.raise(*self, nullptr);
+                }
+            });"""
+                new = """            Dispatcher().RunAsync(CoreDispatcherPriority::Low, [weak = get_weak()]() {
+                if (auto self{ weak.get() })
+                {
+                    if (self->_tabs.Size() == 0)
+                    {
+                        self->CloseWindowRequested.raise(*self, nullptr);
+                    }
+                    else
+                    {
+                        self->Initialized.raise(*self, nullptr);
+                    }
+                }
+            });"""
+                if content.count(old) != 1:
+                    raise RuntimeError("expected deferred initialization callback")
+                content = content.replace(old, new)
+                old = """            });
+        }
+    }
+
+    // Method Description:
+    // - Show a dialog with \"About\" information."""
+                new = """            });
+        }
+        co_return;
+    }
+
+    // Method Description:
+    // - Show a dialog with \"About\" information."""
+                if content.count(old) != 1:
+                    raise RuntimeError("expected initialization completion tail")
+                content = content.replace(old, new)
                 # C++/WinRT's get_self helper takes the address of a member
                 # through the projected ABI pointer. MSVC happens to preserve
                 # null here, while GCC materializes the implementation offset
@@ -598,6 +651,17 @@ def prepare_windows_terminal(source: Path, destination: Path) -> None:
                 new = old + "\n    OpenTerminalInstallActivationHandler();"
                 if content.count(old) != 1:
                     raise RuntimeError("expected WindowsTerminal entry point")
+                content = content.replace(old, new)
+            if path.name == "WindowEmperor.cpp":
+                old = """            // If we created no windows, e.g. because the args are \"/?\" we can just exit now.
+            _postQuitMessageIfNeeded();"""
+                new = """            // OpenXaml's compatibility DispatcherQueue enqueues window creation
+            // asynchronously. An eager zero-window check here races that queued
+            // callback and posts WM_QUIT before the first AppHost exists. Actual
+            // window removal still calls _postQuitMessageIfNeeded(), so defer
+            // lifetime decisions until a window has really been created."""
+                if content.count(old) != 1:
+                    raise RuntimeError("expected eager startup quit check")
                 content = content.replace(old, new)
             write_if_changed(destination / path.name, content)
 
