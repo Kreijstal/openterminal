@@ -1837,6 +1837,68 @@ private:
     }
 };
 
+inline constexpr GUID IID_OpenXamlSelectorStatics = {
+    0x13300b06, 0xbd10, 0x4e09,
+    {0xbf, 0xf7, 0x71, 0xef, 0xb8, 0xbb, 0xb4, 0x2b}};
+
+class SelectorStaticsFactory final
+    : public ComObject,
+      public IActivationFactory,
+      public wuxcp::ISelectorStatics {
+public:
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.Primitives.Selector";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_OpenXamlSelectorStatics, wuxcp::ISelectorStatics)
+        OPENXAML_QI_ARM(::openxaml::iid::IActivationFactory, IActivationFactory)
+        OPENXAML_QI_ARM(IID_IUnknown, IActivationFactory)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, IActivationFactory)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable**) override {
+        return CLASS_E_CLASSNOTAVAILABLE;
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectedIndexProperty(
+        wux::IDependencyProperty** value) override {
+        return Property(SelectorSelectedIndexProperty(), value);
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectedItemProperty(
+        wux::IDependencyProperty** value) override {
+        return Property(SelectorSelectedItemProperty(), value);
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectedValueProperty(
+        wux::IDependencyProperty** value) override {
+        return Property(SelectorSelectedValueProperty(), value);
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectedValuePathProperty(
+        wux::IDependencyProperty** value) override {
+        return Property(SelectorSelectedValuePathProperty(), value);
+    }
+    HRESULT STDMETHODCALLTYPE get_IsSynchronizedWithCurrentItemProperty(
+        wux::IDependencyProperty** value) override {
+        return Property(SelectorIsSynchronizedWithCurrentItemProperty(), value);
+    }
+    HRESULT STDMETHODCALLTYPE GetIsSelectionActive(
+        wux::IDependencyObject*, boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = 0;
+        return S_OK;
+    }
+
+private:
+    static HRESULT Property(const openxaml::DependencyProperty& property,
+                            wux::IDependencyProperty** value) {
+        if (!value) return E_POINTER;
+        *value = ProjectProperty(property);
+        (*value)->AddRef();
+        return S_OK;
+    }
+};
+
 // DependencyProperty.Register and RegisterAttached.
 //
 // Static-only, like LayoutInformation: a DependencyProperty is never
@@ -7361,6 +7423,10 @@ PanelStaticsFactory& PanelFactory() {
     static PanelStaticsFactory factory;
     return factory;
 }
+SelectorStaticsFactory& SelectorFactory() {
+    static SelectorStaticsFactory factory;
+    return factory;
+}
 ComposableFactory<StackPanelObject, wuxc::IStackPanelFactory, wuxc::IStackPanel>&
 StackPanelFactory() {
     static ComposableFactory<StackPanelObject, wuxc::IStackPanelFactory, wuxc::IStackPanel>
@@ -7909,6 +7975,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &FrameFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.ComboBox") == 0)
         return &ComboBoxFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.Primitives.Selector") == 0)
+        return &SelectorFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.ToggleSwitch") == 0)
         return &ToggleSwitchFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.CheckBox") == 0)

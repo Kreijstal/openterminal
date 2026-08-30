@@ -6857,6 +6857,63 @@ private:
     INT32 cache_size_ = 10;
 };
 
+inline const openxaml::DependencyProperty& SelectorSelectedIndexProperty() {
+    static const openxaml::DependencyProperty* property =
+        openxaml::RegisterProperty("Selector", "SelectedIndex", {-1, false, false});
+    return *property;
+}
+
+inline const openxaml::DependencyProperty& SelectorSelectedItemProperty() {
+    // The layout store cannot own arbitrary WinRT objects yet. The value in
+    // this slot is therefore a monotonically changing selection revision;
+    // ComboBox's typed SelectedItem accessor remains the value source. The
+    // slot gives RegisterPropertyChangedCallback the native notification
+    // identity used by generated x:Bind code.
+    static const openxaml::DependencyProperty* property =
+        openxaml::RegisterProperty("Selector", "SelectedItem", {0, false, false});
+    return *property;
+}
+
+inline const openxaml::DependencyProperty& SelectorSelectedValueProperty() {
+    static const openxaml::DependencyProperty* property =
+        openxaml::RegisterProperty("Selector", "SelectedValue",
+                                   {std::monostate{}, false, false});
+    return *property;
+}
+
+inline const openxaml::DependencyProperty& SelectorSelectedValuePathProperty() {
+    static const openxaml::DependencyProperty* property =
+        openxaml::RegisterProperty("Selector", "SelectedValuePath",
+                                   {std::string(), false, false});
+    return *property;
+}
+
+inline const openxaml::DependencyProperty&
+SelectorIsSynchronizedWithCurrentItemProperty() {
+    static const openxaml::DependencyProperty* property =
+        openxaml::RegisterProperty("Selector", "IsSynchronizedWithCurrentItem",
+                                   {std::monostate{}, false, false});
+    return *property;
+}
+
+// IVector<T> has the same ABI for every WinRT runtime-class T. ComboBox does
+// not know Terminal's model types at compile time, so it queries the exact
+// parameterized IIDs observed on the ItemsSource and uses this ABI-only view.
+struct RuntimeObjectVectorAbi : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE GetAt(UINT32, IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Size(UINT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetView(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE IndexOf(IInspectable*, UINT32*, boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetAt(UINT32, IInspectable*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE InsertAt(UINT32, IInspectable*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE RemoveAt(UINT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE Append(IInspectable*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE RemoveAtEnd() = 0;
+    virtual HRESULT STDMETHODCALLTYPE Clear() = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetMany(UINT32, UINT32, IInspectable**, UINT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE ReplaceAll(UINT32, IInspectable**) = 0;
+};
+
 class ComboBoxObject final
     : public ContentControlObjectBase<openxaml::ComboBox>,
       public abi::NotImpl_IComboBox,
@@ -6870,6 +6927,9 @@ public:
         if (selected_value_) selected_value_->Release();
         if (selected_item_) selected_item_->Release();
         WindowsDeleteString(selected_value_path_);
+        ReleaseHandlers(selection_changed_handlers_);
+        ReleaseHandlers(drop_down_opened_handlers_);
+        ReleaseHandlers(drop_down_closed_handlers_);
     }
     const wchar_t* RuntimeClassName() const override {
         return L"Windows.UI.Xaml.Controls.ComboBox";
@@ -6890,7 +6950,10 @@ public:
         return GetObject(items_source_, value);
     }
     HRESULT STDMETHODCALLTYPE put_ItemsSource(IInspectable* value) override {
-        return PutObject(items_source_, value);
+        const HRESULT hr = PutObject(items_source_, value);
+        if (SUCCEEDED(hr) && selected_item_)
+            selected_index_ = IndexOfItem(selected_item_);
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE get_ItemTemplate(wux::IDataTemplate** value) override {
         return GetObject(item_template_, value);
@@ -6904,19 +6967,21 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE put_SelectedIndex(INT32 value) override {
-        selected_index_ = value;
-        return S_OK;
+        if (value < -1) return E_INVALIDARG;
+        IInspectable* item = nullptr;
+        if (value >= 0) {
+            const HRESULT hr = ItemAt(static_cast<UINT32>(value), &item);
+            if (FAILED(hr)) return hr;
+        }
+        const HRESULT hr = Select(item, value);
+        if (item) item->Release();
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE get_SelectedItem(IInspectable** value) override {
         return GetObject(selected_item_, value);
     }
     HRESULT STDMETHODCALLTYPE put_SelectedItem(IInspectable* value) override {
-        const HRESULT hr = PutObject(selected_item_, value);
-        if (SUCCEEDED(hr)) {
-            const std::string text = SelectedDisplayText(value);
-            SetFallbackContentText(text.empty() ? "▼" : text + "  ▼", true);
-        }
-        return hr;
+        return Select(value, IndexOfItem(value));
     }
     HRESULT STDMETHODCALLTYPE get_SelectedValue(IInspectable** value) override {
         return GetObject(selected_value_, value);
@@ -6937,7 +7002,269 @@ public:
         return S_OK;
     }
 
+    HRESULT STDMETHODCALLTYPE get_IsDropDownOpen(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = is_drop_down_open_ ? 1 : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_IsDropDownOpen(boolean value) override {
+        if (!value) {
+            if (is_drop_down_open_) EndMenu();
+            is_drop_down_open_ = false;
+            return S_OK;
+        }
+        return ShowDropDown();
+    }
+    HRESULT STDMETHODCALLTYPE get_IsEditable(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_IsSelectionBoxHighlighted(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_MaxDropDownHeight(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = max_drop_down_height_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_MaxDropDownHeight(DOUBLE value) override {
+        max_drop_down_height_ = value;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectionBoxItem(IInspectable** value) override {
+        return GetObject(selected_item_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectionBoxItemTemplate(
+        wux::IDataTemplate** value) override {
+        return GetObject(item_template_, value);
+    }
+    HRESULT STDMETHODCALLTYPE add_DropDownClosed(
+        __FIEventHandler_1_IInspectable* handler,
+        EventRegistrationToken* token) override {
+        return AddTypedEvent(handler, token, drop_down_closed_handlers_);
+    }
+    HRESULT STDMETHODCALLTYPE remove_DropDownClosed(
+        EventRegistrationToken token) override {
+        return RemoveTypedEvent(token, drop_down_closed_handlers_);
+    }
+    HRESULT STDMETHODCALLTYPE add_DropDownOpened(
+        __FIEventHandler_1_IInspectable* handler,
+        EventRegistrationToken* token) override {
+        return AddTypedEvent(handler, token, drop_down_opened_handlers_);
+    }
+    HRESULT STDMETHODCALLTYPE remove_DropDownOpened(
+        EventRegistrationToken token) override {
+        return RemoveTypedEvent(token, drop_down_opened_handlers_);
+    }
+    HRESULT STDMETHODCALLTYPE add_SelectionChanged(
+        wuxc::ISelectionChangedEventHandler* handler,
+        EventRegistrationToken* token) override {
+        return AddTypedEvent(handler, token, selection_changed_handlers_);
+    }
+    HRESULT STDMETHODCALLTYPE remove_SelectionChanged(
+        EventRegistrationToken token) override {
+        return RemoveTypedEvent(token, selection_changed_handlers_);
+    }
+
+    void InvokeIslandTapEvent(
+        IslandTapEventKind kind,
+        wuxi::ITappedRoutedEventArgs* args) noexcept override {
+        ContentControlObjectBase<openxaml::ComboBox>::InvokeIslandTapEvent(kind, args);
+        if (kind != IslandTapEventKind::Tapped || !args) return;
+        (void)ShowDropDown();
+        (void)args->put_Handled(1);
+    }
+
 private:
+    inline static constexpr GUID kProfileVectorIid = {
+        0x88dc7911, 0x10de, 0x5dac,
+        {0x8c, 0xe8, 0x51, 0xe9, 0x25, 0x5e, 0xa1, 0x60}};
+    inline static constexpr GUID kDefaultTerminalVectorIid = {
+        0xeb90ee49, 0x5034, 0x5804,
+        {0xbc, 0x5c, 0x07, 0xf8, 0x9a, 0xdf, 0xb4, 0x31}};
+    inline static constexpr GUID kEnumEntryVectorIid = {
+        0xc931a336, 0x8b8d, 0x5bda,
+        {0x85, 0x3b, 0x80, 0x62, 0x8b, 0xe0, 0xab, 0x7c}};
+
+    RuntimeObjectVectorAbi* ItemsVector() const {
+        if (!items_source_) return nullptr;
+        for (const GUID& iid : {kProfileVectorIid, kDefaultTerminalVectorIid,
+                                kEnumEntryVectorIid}) {
+            RuntimeObjectVectorAbi* vector = nullptr;
+            if (SUCCEEDED(items_source_->QueryInterface(
+                    iid, reinterpret_cast<void**>(&vector))) && vector)
+                return vector;
+        }
+        return nullptr;
+    }
+    HRESULT ItemAt(UINT32 index, IInspectable** value) const {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        RuntimeObjectVectorAbi* vector = ItemsVector();
+        if (!vector) return E_NOINTERFACE;
+        const HRESULT hr = vector->GetAt(index, value);
+        vector->Release();
+        return hr;
+    }
+    INT32 IndexOfItem(IInspectable* value) const {
+        if (!value) return -1;
+        RuntimeObjectVectorAbi* vector = ItemsVector();
+        if (!vector) return -1;
+        UINT32 index = 0;
+        boolean found = 0;
+        const HRESULT hr = vector->IndexOf(value, &index, &found);
+        vector->Release();
+        return SUCCEEDED(hr) && found ? static_cast<INT32>(index) : -1;
+    }
+    static bool SameIdentity(IUnknown* left, IUnknown* right) {
+        if (left == right) return true;
+        if (!left || !right) return false;
+        IUnknown* left_identity = nullptr;
+        IUnknown* right_identity = nullptr;
+        const HRESULT left_hr = left->QueryInterface(
+            IID_IUnknown, reinterpret_cast<void**>(&left_identity));
+        const HRESULT right_hr = right->QueryInterface(
+            IID_IUnknown, reinterpret_cast<void**>(&right_identity));
+        const bool same = SUCCEEDED(left_hr) && SUCCEEDED(right_hr) &&
+                          left_identity == right_identity;
+        if (left_identity) left_identity->Release();
+        if (right_identity) right_identity->Release();
+        return same;
+    }
+    HRESULT Select(IInspectable* value, INT32 index) {
+        if (SameIdentity(selected_item_, value)) {
+            selected_index_ = index;
+            return S_OK;
+        }
+
+        auto* arguments = new (std::nothrow)
+            SelectionChangedEventArgsObject(selected_item_, value);
+        if (!arguments) return E_OUTOFMEMORY;
+        if (value) value->AddRef();
+        IInspectable* removed = selected_item_;
+        selected_item_ = value;
+        selected_index_ = index;
+
+        const std::string text = SelectedDisplayText(value);
+        SetFallbackContentText(text.empty() ? "▼" : text + "  ▼", true);
+
+        // x:Bind registers against Selector.SelectedItemProperty and reads the
+        // actual item back through ISelector. Advancing this revision invokes
+        // that callback without pretending the scalar layout store owns COM.
+        layout_.SetValue(SelectorSelectedIndexProperty(), index);
+        layout_.SetValue(SelectorSelectedItemProperty(), ++selection_revision_);
+
+        std::vector<wuxc::ISelectionChangedEventHandler*> snapshot;
+        snapshot.reserve(selection_changed_handlers_.size());
+        for (const auto& [_, handler] : selection_changed_handlers_) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+        auto* sender = static_cast<IInspectable*>(
+            static_cast<wuxc::IComboBox*>(this));
+        auto* event_args = static_cast<wuxc::ISelectionChangedEventArgs*>(arguments);
+        HRESULT result = S_OK;
+        for (auto* handler : snapshot) {
+            const HRESULT invoked = handler->Invoke(sender, event_args);
+            if (FAILED(invoked) && SUCCEEDED(result)) result = invoked;
+            handler->Release();
+        }
+        arguments->Release();
+        if (removed) removed->Release();
+        return result;
+    }
+    HRESULT InvokeDropDownHandlers(
+        std::map<LONGLONG, __FIEventHandler_1_IInspectable*>& handlers) {
+        std::vector<__FIEventHandler_1_IInspectable*> snapshot;
+        snapshot.reserve(handlers.size());
+        for (const auto& [_, handler] : handlers) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+        auto* sender = static_cast<IInspectable*>(
+            static_cast<wuxc::IComboBox*>(this));
+        HRESULT result = S_OK;
+        for (auto* handler : snapshot) {
+            const HRESULT invoked = handler->Invoke(sender, nullptr);
+            if (FAILED(invoked) && SUCCEEDED(result)) result = invoked;
+            handler->Release();
+        }
+        return result;
+    }
+    HRESULT ShowDropDown() {
+        if (is_drop_down_open_) return S_OK;
+        RuntimeObjectVectorAbi* vector = ItemsVector();
+        if (!vector) return E_NOINTERFACE;
+        UINT32 count = 0;
+        HRESULT result = vector->get_Size(&count);
+        if (FAILED(result)) {
+            vector->Release();
+            return result;
+        }
+
+        HMENU menu = CreatePopupMenu();
+        if (!menu) {
+            vector->Release();
+            return HRESULT_FROM_WIN32(GetLastError());
+        }
+        std::vector<IInspectable*> items;
+        items.reserve(count);
+        for (UINT32 index = 0; index < count; ++index) {
+            IInspectable* item = nullptr;
+            result = vector->GetAt(index, &item);
+            if (FAILED(result) || !item) break;
+            items.push_back(item);
+            const std::string utf8 = SelectedDisplayText(item);
+            HSTRING label = nullptr;
+            (void)HStringFromUtf8(utf8.empty()
+                                      ? "Item " + std::to_string(index + 1)
+                                      : utf8,
+                                  &label);
+            const wchar_t* wide = WindowsGetStringRawBuffer(label, nullptr);
+            UINT flags = MF_STRING;
+            if (static_cast<INT32>(index) == selected_index_) flags |= MF_CHECKED;
+            if (!AppendMenuW(menu, flags, index + 1, wide ? wide : L""))
+                result = HRESULT_FROM_WIN32(GetLastError());
+            WindowsDeleteString(label);
+            if (FAILED(result)) break;
+        }
+        vector->Release();
+        if (FAILED(result)) {
+            for (auto* item : items) item->Release();
+            DestroyMenu(menu);
+            return result;
+        }
+
+        is_drop_down_open_ = true;
+        (void)InvokeDropDownHandlers(drop_down_opened_handlers_);
+        POINT position{};
+        if (!GetCursorPos(&position)) position = {};
+        HWND owner = GetActiveWindow();
+        if (!owner) owner = GetForegroundWindow();
+        if (!owner) {
+            owner = WindowFromPoint(position);
+            if (owner) owner = GetAncestor(owner, GA_ROOT);
+        }
+        const UINT selected = TrackPopupMenuEx(
+            menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
+            position.x, position.y + 2, owner, nullptr);
+        DestroyMenu(menu);
+        is_drop_down_open_ = false;
+
+        if (selected > 0 && selected <= items.size())
+            result = Select(items[selected - 1], static_cast<INT32>(selected - 1));
+        for (auto* item : items) item->Release();
+        const HRESULT closed = InvokeDropDownHandlers(drop_down_closed_handlers_);
+        return FAILED(result) ? result : closed;
+    }
+    template <class Handler>
+    static void ReleaseHandlers(std::map<LONGLONG, Handler*>& handlers) {
+        for (auto& [_, handler] : handlers) handler->Release();
+    }
+
     std::string SelectedDisplayText(IInspectable* value) {
         if (!value) return {};
         wf::IPropertyValue* property = nullptr;
@@ -6992,6 +7319,15 @@ private:
     IInspectable* selected_value_ = nullptr;
     HSTRING selected_value_path_ = nullptr;
     INT32 selected_index_ = -1;
+    INT32 selection_revision_ = 0;
+    bool is_drop_down_open_ = false;
+    DOUBLE max_drop_down_height_ = 0.0;
+    std::map<LONGLONG, wuxc::ISelectionChangedEventHandler*>
+        selection_changed_handlers_;
+    std::map<LONGLONG, __FIEventHandler_1_IInspectable*>
+        drop_down_opened_handlers_;
+    std::map<LONGLONG, __FIEventHandler_1_IInspectable*>
+        drop_down_closed_handlers_;
 };
 
 inline const openxaml::DependencyProperty& ToggleSwitchIsOnProperty() {
