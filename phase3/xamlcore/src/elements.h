@@ -79,6 +79,11 @@ namespace wuxd = ABI::Windows::UI::Xaml::Documents;
 namespace wuxdata = ABI::Windows::UI::Xaml::Data;
 namespace wuxs = ABI::Windows::UI::Xaml::Shapes;
 namespace wuxi = ABI::Windows::UI::Xaml::Input;
+namespace wuxn = ABI::Windows::UI::Xaml::Navigation;
+
+// Implemented by the XBF/application adapter in factory.cpp. Custom pages
+// are process-local XAML types, so RoActivateInstance alone cannot find them.
+HRESULT ActivateXamlPage(HSTRING runtime_class, IInspectable** result);
 
 // Implemented beside ResourceDictionaryObject in factory.cpp. Keeping this
 // construction inside OpenXaml avoids sending our own XAML types back through
@@ -341,6 +346,102 @@ public:
             result.insert(result.end(), supplemental->begin(), supplemental->end());
         }
         return result;
+    }
+};
+
+// A composable custom ContentControl normally receives its visual tree from
+// an application style. Until the XBF style/template stream is materialized,
+// retain the observable ContentPresenter shape for controls such as
+// Terminal's SettingContainer: header/help text at the left, ordinary content
+// at the right, and section content below a 64-DIP header row.
+template <class Base>
+class FallbackTemplatedContent : public ChildSourced<Base> {
+public:
+    openxaml::TextBlock* fallback_header = nullptr;
+    openxaml::TextBlock* fallback_help = nullptr;
+    bool fallback_template = false;
+
+protected:
+    openxaml::Size MeasureOverride(openxaml::Size available) override {
+        if (!fallback_template)
+            return Base::MeasureOverride(available);
+
+        const auto projected = this->source ? this->source->Projected()
+                                            : std::vector<openxaml::Element*>{};
+        openxaml::Element* content = projected.empty() ? nullptr : projected.front();
+        const bool section = content &&
+            content->TypeName() == "Windows.UI.Xaml.Controls.Grid";
+        const double finite_width = std::isfinite(available.width)
+            ? available.width : 1000.0;
+        const double header_width = std::max(0.0, finite_width - 280.0);
+        if (fallback_header) fallback_header->Measure({header_width, available.height});
+        if (fallback_help) fallback_help->Measure({header_width, available.height});
+
+        openxaml::Size content_size{};
+        if (content) {
+            content->Measure(section
+                ? openxaml::Size{finite_width, available.height}
+                : openxaml::Size{std::min(240.0, finite_width), available.height});
+            content_size = content->desired_size();
+        }
+        const double text_width = std::max(
+            fallback_header ? fallback_header->desired_size().width : 0.0,
+            fallback_help ? fallback_help->desired_size().width : 0.0);
+        const double text_height =
+            (fallback_header ? fallback_header->desired_size().height : 0.0) +
+            (fallback_help ? fallback_help->desired_size().height : 0.0);
+        if (section) {
+            return {std::max(text_width + 32.0, content_size.width),
+                    68.0 + content_size.height};
+        }
+        return {std::max(text_width + content_size.width + 48.0, 320.0),
+                std::max({64.0, text_height + 24.0,
+                          content_size.height + 16.0}) + 4.0};
+    }
+
+    openxaml::Size ArrangeOverride(openxaml::Size final_size) override {
+        if (!fallback_template)
+            return Base::ArrangeOverride(final_size);
+
+        const auto projected = this->source ? this->source->Projected()
+                                            : std::vector<openxaml::Element*>{};
+        openxaml::Element* content = projected.empty() ? nullptr : projected.front();
+        const bool section = content &&
+            content->TypeName() == "Windows.UI.Xaml.Controls.Grid";
+        const double content_width = content
+            ? std::min(content->desired_size().width,
+                       std::max(0.0, final_size.width - 24.0))
+            : 0.0;
+        const double text_width = section
+            ? std::max(0.0, final_size.width - 32.0)
+            : std::max(0.0, final_size.width - content_width - 48.0);
+        if (fallback_header) {
+            fallback_header->Arrange(
+                {16.0, 12.0,
+                 std::min(text_width, fallback_header->desired_size().width),
+                 fallback_header->desired_size().height});
+        }
+        if (fallback_help) {
+            const double y = 12.0 +
+                (fallback_header ? fallback_header->desired_size().height : 0.0);
+            fallback_help->Arrange(
+                {16.0, y,
+                 std::min(text_width, fallback_help->desired_size().width),
+                 fallback_help->desired_size().height});
+        }
+        if (content) {
+            if (section) {
+                content->Arrange({0.0, 68.0, final_size.width,
+                                  std::max(0.0, final_size.height - 68.0)});
+            } else {
+                content->Arrange(
+                    {std::max(16.0, final_size.width - content_width - 8.0),
+                     std::max(0.0, (final_size.height - 4.0 -
+                                    content->desired_size().height) / 2.0),
+                     content_width, content->desired_size().height});
+            }
+        }
+        return final_size;
     }
 };
 
@@ -871,7 +972,7 @@ private:
     std::map<LONGLONG, BrushMutationObserver*> observers_;
 };
 
-enum class ProjectedBrushSlot { Background, Border, Fill, Stroke };
+enum class ProjectedBrushSlot { Background, Border, Fill, Stroke, Foreground };
 
 // Owns one element brush assignment and its optional live subscription.
 // Member declaration order is important at call sites: declare the layout
@@ -958,6 +1059,9 @@ private:
             case ProjectedBrushSlot::Stroke:
                 element_.set_stroke_brush(value);
                 break;
+            case ProjectedBrushSlot::Foreground:
+                element_.set_foreground_brush(value);
+                break;
         }
         element_.InvalidateRender(false);
     }
@@ -1024,6 +1128,7 @@ class XamlElement : public ComObject,
                     public abi::NotImpl_IUIElement10,
                     public abi::NotImpl_IFrameworkElement,
                     public abi::NotImpl_IFrameworkElement2,
+                    public abi::NotImpl_IFrameworkElement3,
                     public IWeakReferenceSource,
                     public IOpenXamlAutomationProperties,
                     public IOpenXamlNative,
@@ -1038,6 +1143,8 @@ public:
         __FITypedEventHandler_2_Windows__CUI__CXaml__CUIElement_Windows__CUI__CXaml__CInput__CGettingFocusEventArgs;
     using LosingFocusHandler =
         __FITypedEventHandler_2_Windows__CUI__CXaml__CUIElement_Windows__CUI__CXaml__CInput__CLosingFocusEventArgs;
+    using LoadingHandler =
+        __FITypedEventHandler_2_Windows__CUI__CXaml__CFrameworkElement_IInspectable;
 
     XamlElement()
         : weak_state_(std::make_shared<WeakReferenceState>(
@@ -1061,6 +1168,7 @@ public:
         weak_state_->Invalidate();
         if (owner_dispatcher_) owner_dispatcher_->Release();
         if (resources_) resources_->Release();
+        if (tag_) tag_->Release();
         if (context_flyout_) context_flyout_->Release();
         if (xaml_root_) xaml_root_->Release();
         if (shadow_) shadow_->Release();
@@ -1087,6 +1195,7 @@ public:
         for (auto& [_, handler] : tapped_handlers_) handler->Release();
         for (auto& [_, handler] : double_tapped_handlers_) handler->Release();
         for (auto& [_, handler] : loaded_handlers_) handler->Release();
+        for (auto& [_, handler] : loading_handlers_) handler->Release();
         for (auto& [_, handler] : handlers_) handler->Release();
         for (auto& [_, callback] : callbacks_) callback->Release();
     }
@@ -1851,6 +1960,18 @@ public:
         resources_ = value;
         return S_OK;
     }
+    HRESULT STDMETHODCALLTYPE get_Tag(IInspectable** value) override {
+        if (!value) return E_POINTER;
+        *value = tag_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Tag(IInspectable* value) override {
+        if (value) value->AddRef();
+        if (tag_) tag_->Release();
+        tag_ = value;
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE add_Loaded(
         wux::IRoutedEventHandler* handler, EventRegistrationToken* token) override {
         EnsureLayoutPassCallback();
@@ -1858,6 +1979,14 @@ public:
     }
     HRESULT STDMETHODCALLTYPE remove_Loaded(EventRegistrationToken token) override {
         return RemoveTypedEvent(token, loaded_handlers_);
+    }
+    HRESULT STDMETHODCALLTYPE add_Loading(
+        LoadingHandler* handler, EventRegistrationToken* token) override {
+        EnsureLayoutPassCallback();
+        return AddTypedEvent(handler, token, loading_handlers_);
+    }
+    HRESULT STDMETHODCALLTYPE remove_Loading(EventRegistrationToken token) override {
+        return RemoveTypedEvent(token, loading_handlers_);
     }
     HRESULT STDMETHODCALLTYPE get_RequestedTheme(wux::ElementTheme* value) override {
         if (!value) return E_POINTER;
@@ -2429,6 +2558,8 @@ protected:
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IFrameworkElement, wux::IFrameworkElement)
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IFrameworkElement2,
                         wux::IFrameworkElement2)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IFrameworkElement3,
+                        wux::IFrameworkElement3)
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IDependencyObject, wux::IDependencyObject)
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IDependencyObject2,
                         wux::IDependencyObject2)
@@ -2514,6 +2645,20 @@ private:
         IInspectable* sender = static_cast<IInspectable*>(
             static_cast<wux::IUIElement*>(this));
 
+        if (!loading_raised_) {
+            loading_raised_ = true;
+            std::vector<LoadingHandler*> handlers;
+            handlers.reserve(loading_handlers_.size());
+            for (const auto& [_, handler] : loading_handlers_) {
+                handler->AddRef();
+                handlers.push_back(handler);
+            }
+            auto* framework_sender = static_cast<wux::IFrameworkElement*>(this);
+            for (auto* handler : handlers) {
+                handler->Invoke(framework_sender, nullptr);
+                handler->Release();
+            }
+        }
         if (!loaded_raised_) {
             loaded_raised_ = true;
             std::vector<wux::IRoutedEventHandler*> handlers;
@@ -2535,6 +2680,7 @@ private:
     DWORD owner_thread_id_ = 0;
     ABI::Windows::UI::Core::ICoreDispatcher* owner_dispatcher_ = nullptr;
     wux::IResourceDictionary* resources_ = nullptr;
+    IInspectable* tag_ = nullptr;
     wuxcp::IFlyoutBase* context_flyout_ = nullptr;
     wux::IXamlRoot* xaml_root_ = nullptr;
     wuxm::IShadow* shadow_ = nullptr;
@@ -2587,9 +2733,11 @@ private:
     std::map<LONGLONG, wuxi::IDoubleTappedEventHandler*> double_tapped_handlers_;
     std::set<UINT32> captured_pointer_ids_;
     std::map<LONGLONG, wux::IRoutedEventHandler*> loaded_handlers_;
+    std::map<LONGLONG, LoadingHandler*> loading_handlers_;
     std::map<UINT32, HSTRING> automation_strings_;
     bool layout_callback_installed_ = false;
     bool loaded_raised_ = false;
+    bool loading_raised_ = false;
     // The delegates this element holds a reference to, by the token the
     // registration was given. The native store holds the lambda that calls
     // them; this holds the reference that keeps them alive, because a COM
@@ -3419,41 +3567,129 @@ private:
 
 // --- Wave-4 controls ----------------------------------------------------------
 
+inline constexpr GUID IID_IOpenXamlLocalizedContentTemplate = {
+    0x6f70656e, 0x7861, 0x6d6c,
+    {0x9e, 0x04, 0x6c, 0x6f, 0x63, 0x74, 0x70, 0x6c}};
+
+struct IOpenXamlLocalizedContentTemplate : IUnknown {
+    virtual HRESULT SetLocalizedTemplateText(UINT32 member, HSTRING value) = 0;
+};
+
+enum class LocalizedTemplateMember : UINT32 { Header = 0, Help = 1 };
+
+// IControl is shared by both the content-control and non-content-control
+// projections below. Keep its common state in one ABI base so generated XAML
+// can enable/disable any control without falling through to an E_NOTIMPL stub.
+class ControlAbiBase : public abi::NotImpl_IControl {
+public:
+    HRESULT STDMETHODCALLTYPE get_IsEnabled(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = is_enabled_ ? 1 : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_IsEnabled(boolean value) override {
+        is_enabled_ = value != 0;
+        return S_OK;
+    }
+
+protected:
+    bool IsControlEnabled() const { return is_enabled_; }
+
+private:
+    bool is_enabled_ = true;
+};
+
 template <class LayoutType>
 class ContentControlObjectBase : public XamlElement,
-                                 public abi::NotImpl_IControl,
-                                 public abi::NotImpl_IContentControl {
+                                 public ControlAbiBase,
+                                 public abi::NotImpl_IContentControl,
+                                 public IOpenXamlLocalizedContentTemplate {
 public:
     using PrimaryInterface = wuxc::IContentControl;
 
-    ContentControlObjectBase() { layout_.source = &content_; }
+    ContentControlObjectBase() {
+        layout_.source = &content_;
+        layout_.supplemental = &supplemental_content_;
+    }
     ~ContentControlObjectBase() override {
+        if (fallback_header_attached_)
+            layout_.DetachVisualChild(fallback_header_);
+        if (fallback_help_attached_)
+            layout_.DetachVisualChild(fallback_help_);
+        if (content_label_attached_)
+            layout_.DetachVisualChild(content_label_);
+        if (content_value_) content_value_->Release();
         if (foreground_) foreground_->Release();
     }
     openxaml::Element* Layout() override { return &layout_; }
 
     HRESULT STDMETHODCALLTYPE get_Content(IInspectable** value) override {
         if (!value) return E_POINTER;
-        *value = nullptr;
-        if (!content_.Count()) return S_OK;
-        wux::IUIElement* child = nullptr;
-        HRESULT hr = content_.GetAt(0, &child);
-        if (FAILED(hr)) return hr;
-        hr = child->QueryInterface(::openxaml::iid::IInspectable,
-                                   reinterpret_cast<void**>(value));
-        child->Release();
-        return hr;
+        *value = content_value_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE put_Content(IInspectable* value) override {
         HRESULT hr = content_.Clear();
-        if (FAILED(hr) || !value) return hr;
+        if (FAILED(hr)) return hr;
+        if (content_label_attached_ && !persistent_content_label_) {
+            layout_.DetachVisualChild(content_label_);
+            content_label_attached_ = false;
+        }
+        supplemental_content_.clear();
+        supplemental_content_.insert(supplemental_content_.end(),
+                                     persistent_supplemental_.begin(),
+                                     persistent_supplemental_.end());
+        if (fallback_header_attached_)
+            supplemental_content_.push_back(&fallback_header_);
+        if (fallback_help_attached_)
+            supplemental_content_.push_back(&fallback_help_);
+        if (content_label_attached_ && persistent_content_label_)
+            supplemental_content_.push_back(&content_label_);
+        else
+            content_label_.set_text({});
+        if (value) value->AddRef();
+        if (content_value_) content_value_->Release();
+        content_value_ = value;
+        layout_.set_content_text({});
+        if (!value) return S_OK;
+
         wux::IUIElement* child = nullptr;
         hr = value->QueryInterface(::openxaml::iid::Windows_UI_Xaml_IUIElement,
                                    reinterpret_cast<void**>(&child));
-        if (FAILED(hr)) return E_INVALIDARG;
-        hr = content_.Append(child);
-        child->Release();
-        return hr;
+        if (SUCCEEDED(hr)) {
+            hr = content_.Append(child);
+            child->Release();
+            return hr;
+        }
+
+        // Content is an object-valued property, not a UIElement-only child.
+        // A boxed string is rendered by ContentPresenter as text; other
+        // arbitrary values are retained for a template or data template.
+        wf::IPropertyValue* property = nullptr;
+        if (SUCCEEDED(value->QueryInterface(
+                ::openxaml::iid::Windows_Foundation_IPropertyValue,
+                reinterpret_cast<void**>(&property)))) {
+            wf::PropertyType type{};
+            HSTRING text = nullptr;
+            if (SUCCEEDED(property->get_Type(&type)) &&
+                type == wf::PropertyType_String &&
+                SUCCEEDED(property->GetString(&text))) {
+                layout_.set_content_text(Utf8FromHString(text));
+                content_label_.set_text(Utf8FromHString(text));
+                content_label_.set_font_size(layout_.font_size());
+                content_label_.set_foreground_brush(
+                    openxaml::BrushValue::SolidColor(
+                        {0xff, 0xf2, 0xf2, 0xf2}));
+                content_label_attached_ =
+                    layout_.AttachVisualChild(content_label_);
+                if (content_label_attached_)
+                    supplemental_content_.push_back(&content_label_);
+                WindowsDeleteString(text);
+            }
+            property->Release();
+        }
+        return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE get_FontSize(DOUBLE* value) override {
@@ -3511,7 +3747,75 @@ public:
         return S_OK;
     }
 
+    HRESULT STDMETHODCALLTYPE SetLocalizedTemplateText(
+        UINT32 member, HSTRING value) override {
+        openxaml::TextBlock* label = nullptr;
+        bool* attached = nullptr;
+        switch (static_cast<LocalizedTemplateMember>(member)) {
+            case LocalizedTemplateMember::Header:
+                label = &fallback_header_;
+                attached = &fallback_header_attached_;
+                break;
+            case LocalizedTemplateMember::Help:
+                label = &fallback_help_;
+                attached = &fallback_help_attached_;
+                break;
+            default:
+                return E_INVALIDARG;
+        }
+        label->set_text(Utf8FromHString(value));
+        label->set_font_size(member == 0 ? 14.0 : 12.0);
+        label->set_horizontal_alignment(openxaml::HorizontalAlignment::Left);
+        label->set_vertical_alignment(openxaml::VerticalAlignment::Top);
+        label->set_foreground_brush(openxaml::BrushValue::SolidColor(
+            member == 0 ? openxaml::Color{0xff, 0xf2, 0xf2, 0xf2}
+                        : openxaml::Color{0xff, 0xc5, 0xc5, 0xc5}));
+        if (!*attached) {
+            *attached = layout_.AttachVisualChild(*label);
+            if (*attached) supplemental_content_.push_back(label);
+        }
+        layout_.fallback_header = &fallback_header_;
+        layout_.fallback_help = &fallback_help_;
+        layout_.fallback_template = true;
+        layout_.set_background_brush(openxaml::BrushValue::SolidColor(
+            {0xff, 0x2d, 0x2d, 0x2d}));
+        layout_.InvalidateRender(true);
+        return S_OK;
+    }
+
 protected:
+    bool AttachFallbackVisual(openxaml::Element& element) {
+        if (!layout_.AttachVisualChild(element)) return false;
+        persistent_supplemental_.push_back(&element);
+        supplemental_content_.push_back(&element);
+        return true;
+    }
+    void DetachFallbackVisual(openxaml::Element& element) {
+        persistent_supplemental_.erase(
+            std::remove(persistent_supplemental_.begin(),
+                        persistent_supplemental_.end(), &element),
+            persistent_supplemental_.end());
+        supplemental_content_.erase(
+            std::remove(supplemental_content_.begin(),
+                        supplemental_content_.end(), &element),
+            supplemental_content_.end());
+        layout_.DetachVisualChild(element);
+    }
+    void SetFallbackContentText(const std::string& text,
+                                bool persistent = false) {
+        persistent_content_label_ = persistent_content_label_ || persistent;
+        layout_.set_content_text(text);
+        content_label_.set_text(text);
+        content_label_.set_font_size(layout_.font_size());
+        content_label_.set_foreground_brush(
+            openxaml::BrushValue::SolidColor({0xff, 0xf2, 0xf2, 0xf2}));
+        if (!content_label_attached_) {
+            content_label_attached_ = layout_.AttachVisualChild(content_label_);
+            if (content_label_attached_)
+                supplemental_content_.push_back(&content_label_);
+        }
+        layout_.InvalidateRender(true);
+    }
     static HRESULT GetBrush(wuxm::IBrush* source, wuxm::IBrush** value) {
         if (!value) return E_POINTER;
         *value = source;
@@ -3525,15 +3829,27 @@ protected:
         return S_OK;
     }
     HRESULT QueryControlInterface(REFIID iid, void** object) {
+        OPENXAML_QI_ARM(IID_IOpenXamlLocalizedContentTemplate,
+                        IOpenXamlLocalizedContentTemplate)
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IContentControl,
                         wuxc::IContentControl)
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IControl, wuxc::IControl)
         return QueryElementInterface(iid, object);
     }
 
-    ChildSourced<LayoutType> layout_;
+    FallbackTemplatedContent<LayoutType> layout_;
     BrushProjection background_{layout_, ProjectedBrushSlot::Background};
     wuxm::IBrush* foreground_ = nullptr;
+    IInspectable* content_value_ = nullptr;
+    openxaml::TextBlock fallback_header_;
+    openxaml::TextBlock fallback_help_;
+    openxaml::TextBlock content_label_;
+    std::vector<openxaml::Element*> persistent_supplemental_;
+    std::vector<openxaml::Element*> supplemental_content_;
+    bool fallback_header_attached_ = false;
+    bool fallback_help_attached_ = false;
+    bool content_label_attached_ = false;
+    bool persistent_content_label_ = false;
     ChildCollection content_{
         {::openxaml::iid::PIID_FIVector_1_Windows__CUI__CXaml__CUIElement,
          ::openxaml::iid::PIID_FIIterable_1_Windows__CUI__CXaml__CUIElement,
@@ -3549,6 +3865,25 @@ public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
         if (!object) return E_POINTER;
         return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+};
+
+class DataTemplateObject final : public ComObject,
+                                 public abi::NotImpl_IDataTemplate {
+public:
+    using PrimaryInterface = wux::IDataTemplate;
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.DataTemplate";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IUnknown, wux::IDataTemplate)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wux::IDataTemplate)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IDataTemplate,
+                        wux::IDataTemplate)
+        *object = nullptr;
+        return E_NOINTERFACE;
     }
     OPENXAML_COM_BOILERPLATE()
 };
@@ -4001,6 +4336,1031 @@ private:
 using InspectableCollection = Vector<
     __FIVector_1_IInspectable, __FIIterable_1_IInspectable,
     __FIIterator_1_IInspectable, IInspectable, __FIVectorView_1_IInspectable>;
+
+// WinUI's NavigationView family is consumed by Terminal's generated XAML and
+// settings code. The Windows SDK does not publish these WinUI interfaces, so
+// keep the exact ABI declarations beside the other hand-projected muxc types.
+inline constexpr GUID IID_IMuxcNavigationView = {
+    0xb00eb54c, 0x9174, 0x5d84,
+    {0x96, 0x78, 0x56, 0xc9, 0x80, 0x16, 0xe6, 0x89}};
+inline constexpr GUID IID_IMuxcNavigationView2 = {
+    0x5ba2eefc, 0x3736, 0x5e42,
+    {0xac, 0x56, 0x9d, 0x0b, 0xe5, 0x52, 0x3d, 0x40}};
+inline constexpr GUID IID_IMuxcNavigationViewFactory = {
+    0xffea1ada, 0x9232, 0x5507,
+    {0xa3, 0x20, 0xed, 0x2f, 0xad, 0xbe, 0x61, 0x27}};
+inline constexpr GUID IID_IMuxcNavigationViewItem = {
+    0x143324cb, 0xbb4c, 0x5261,
+    {0xad, 0x98, 0xa3, 0x1b, 0x4b, 0x57, 0xa0, 0xcc}};
+inline constexpr GUID IID_IMuxcNavigationViewItem2 = {
+    0x2d5bd889, 0x9dac, 0x5675,
+    {0xb2, 0x54, 0x68, 0x22, 0x6f, 0x07, 0x7a, 0x61}};
+inline constexpr GUID IID_IMuxcNavigationViewItem3 = {
+    0xc6aa3120, 0xd888, 0x5c32,
+    {0x8b, 0xb7, 0x49, 0x0e, 0xc9, 0x1b, 0x1a, 0xec}};
+inline constexpr GUID IID_IMuxcNavigationViewItemBase = {
+    0x33586494, 0xaf48, 0x513f,
+    {0xbe, 0x4d, 0xf6, 0x45, 0xe8, 0xc8, 0x90, 0x05}};
+inline constexpr GUID IID_IMuxcNavigationViewItemBase2 = {
+    0xd94ee683, 0xd437, 0x5523,
+    {0x9c, 0x5c, 0x11, 0xd4, 0x80, 0x4e, 0x47, 0x1e}};
+inline constexpr GUID IID_IMuxcNavigationViewItemFactory = {
+    0xde60a001, 0x9385, 0x5535,
+    {0x80, 0xe1, 0x2b, 0x68, 0xf4, 0xbf, 0xde, 0x26}};
+inline constexpr GUID IID_IMuxcNavigationViewItemHeader = {
+    0x432bc062, 0x45bc, 0x57ef,
+    {0xa2, 0xd3, 0x11, 0x85, 0x1a, 0x56, 0xa8, 0x82}};
+inline constexpr GUID IID_IMuxcNavigationViewItemHeaderFactory = {
+    0x6a5447cd, 0x2918, 0x5fe3,
+    {0x89, 0x9b, 0x93, 0xd6, 0x96, 0x12, 0x85, 0xe6}};
+inline constexpr GUID IID_IMuxcBreadcrumbBar = {
+    0x2e47b7d6, 0x5fbd, 0x54c7,
+    {0xb0, 0xb1, 0xce, 0xff, 0x4a, 0x19, 0xc7, 0x44}};
+inline constexpr GUID IID_IMuxcBreadcrumbBarFactory = {
+    0xd5b6a6d9, 0x3148, 0x5cbc,
+    {0xa6, 0xae, 0x0f, 0x44, 0xcd, 0xe4, 0x19, 0x52}};
+
+struct IMuxcComposableFactory : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE CreateInstance(void*, void**, void**) = 0;
+};
+
+// NumberBox is a WinUI control, so its ABI is described by Microsoft.UI.Xaml's
+// WinMD rather than by the Windows SDK headers. These declarations mirror the
+// 2.8.4 metadata snapshot under research/nuget/microsoft.ui.xaml.
+inline constexpr GUID IID_IMuxcNumberBox = {
+    0x22c43a67, 0xd393, 0x56a9,
+    {0x80, 0x1a, 0x2d, 0xea, 0x91, 0x87, 0x7d, 0xe6}};
+inline constexpr GUID IID_IMuxcNumberBoxFactory = {
+    0x6b81f3cb, 0x45a4, 0x5d19,
+    {0x9b, 0xbb, 0xa9, 0xfe, 0x46, 0x56, 0xac, 0x4d}};
+inline constexpr GUID IID_IMuxcNumberBoxStatics = {
+    0x7c58a821, 0x453d, 0x556d,
+    {0xa2, 0x25, 0x57, 0x50, 0x51, 0x3f, 0x71, 0x79}};
+inline constexpr GUID IID_IMuxcNumberBoxValueChangedEventArgs = {
+    0xc66cf16e, 0x7c8a, 0x532e,
+    {0x9d, 0x23, 0x05, 0x8c, 0x1c, 0x98, 0xdd, 0x50}};
+
+struct IMuxcNumberBox : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Minimum(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Minimum(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Maximum(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Maximum(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Value(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Value(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SmallChange(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_SmallChange(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_LargeChange(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_LargeChange(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Text(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Text(HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Header(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Header(IInspectable*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_HeaderTemplate(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_HeaderTemplate(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_PlaceholderText(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_PlaceholderText(HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SelectionFlyout(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_SelectionFlyout(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SelectionHighlightColor(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_SelectionHighlightColor(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_TextReadingOrder(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_TextReadingOrder(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_PreventKeyboardDisplayOnProgrammaticFocus(
+        boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_PreventKeyboardDisplayOnProgrammaticFocus(
+        boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Description(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Description(IInspectable*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ValidationMode(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ValidationMode(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SpinButtonPlacementMode(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_SpinButtonPlacementMode(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsWrapEnabled(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsWrapEnabled(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AcceptsExpression(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_AcceptsExpression(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_NumberFormatter(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_NumberFormatter(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_ValueChanged(
+        void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_ValueChanged(EventRegistrationToken) = 0;
+};
+
+struct IMuxcNumberBoxStatics : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_MinimumProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_MaximumProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ValueProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SmallChangeProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_LargeChangeProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_TextProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_HeaderProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_HeaderTemplateProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_PlaceholderTextProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SelectionFlyoutProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SelectionHighlightColorProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_TextReadingOrderProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE
+        get_PreventKeyboardDisplayOnProgrammaticFocusProperty(
+            wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_DescriptionProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ValidationModeProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SpinButtonPlacementModeProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsWrapEnabledProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AcceptsExpressionProperty(
+        wux::IDependencyProperty**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_NumberFormatterProperty(
+        wux::IDependencyProperty**) = 0;
+};
+
+struct IMuxcNumberBoxValueChangedEventArgs : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_OldValue(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_NewValue(DOUBLE*) = 0;
+};
+
+struct MuxcNumberBoxValueChangedHandlerAbi;
+struct MuxcNumberBoxValueChangedHandlerVtbl {
+    HRESULT (STDMETHODCALLTYPE* QueryInterface)(
+        MuxcNumberBoxValueChangedHandlerAbi*, REFIID, void**);
+    ULONG (STDMETHODCALLTYPE* AddRef)(MuxcNumberBoxValueChangedHandlerAbi*);
+    ULONG (STDMETHODCALLTYPE* Release)(MuxcNumberBoxValueChangedHandlerAbi*);
+    HRESULT (STDMETHODCALLTYPE* Invoke)(
+        MuxcNumberBoxValueChangedHandlerAbi*, IMuxcNumberBox*,
+        IMuxcNumberBoxValueChangedEventArgs*);
+};
+struct MuxcNumberBoxValueChangedHandlerAbi {
+    const MuxcNumberBoxValueChangedHandlerVtbl* lpVtbl;
+};
+
+class NumberBoxValueChangedEventArgsObject final
+    : public ComObject,
+      public IMuxcNumberBoxValueChangedEventArgs {
+public:
+    NumberBoxValueChangedEventArgsObject(DOUBLE old_value, DOUBLE new_value)
+        : old_value_(old_value), new_value_(new_value) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"Microsoft.UI.Xaml.Controls.NumberBoxValueChangedEventArgs";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IUnknown, IMuxcNumberBoxValueChangedEventArgs)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable,
+                        IMuxcNumberBoxValueChangedEventArgs)
+        OPENXAML_QI_ARM(IID_IMuxcNumberBoxValueChangedEventArgs,
+                        IMuxcNumberBoxValueChangedEventArgs)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_OldValue(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = old_value_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_NewValue(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = new_value_;
+        return S_OK;
+    }
+
+private:
+    DOUBLE old_value_;
+    DOUBLE new_value_;
+};
+
+#define OPENXAML_NUMBERBOX_DP(name, default_value)                         \
+    inline const openxaml::DependencyProperty& NumberBox##name##Property() { \
+        static const openxaml::DependencyProperty* property =             \
+            openxaml::RegisterProperty(                                   \
+                "NumberBox", #name, {default_value, false, false});       \
+        return *property;                                                  \
+    }
+OPENXAML_NUMBERBOX_DP(Minimum, -INFINITY)
+OPENXAML_NUMBERBOX_DP(Maximum, INFINITY)
+OPENXAML_NUMBERBOX_DP(Value, NAN)
+OPENXAML_NUMBERBOX_DP(SmallChange, 1.0)
+OPENXAML_NUMBERBOX_DP(LargeChange, 10.0)
+OPENXAML_NUMBERBOX_DP(Text, std::string())
+OPENXAML_NUMBERBOX_DP(Header, std::monostate())
+OPENXAML_NUMBERBOX_DP(HeaderTemplate, std::monostate())
+OPENXAML_NUMBERBOX_DP(PlaceholderText, std::string())
+OPENXAML_NUMBERBOX_DP(SelectionFlyout, std::monostate())
+OPENXAML_NUMBERBOX_DP(SelectionHighlightColor, std::monostate())
+OPENXAML_NUMBERBOX_DP(TextReadingOrder, 0)
+OPENXAML_NUMBERBOX_DP(PreventKeyboardDisplayOnProgrammaticFocus, false)
+OPENXAML_NUMBERBOX_DP(Description, std::monostate())
+OPENXAML_NUMBERBOX_DP(ValidationMode, 0)
+OPENXAML_NUMBERBOX_DP(SpinButtonPlacementMode, 0)
+OPENXAML_NUMBERBOX_DP(IsWrapEnabled, false)
+OPENXAML_NUMBERBOX_DP(AcceptsExpression, false)
+OPENXAML_NUMBERBOX_DP(NumberFormatter, std::monostate())
+#undef OPENXAML_NUMBERBOX_DP
+
+class NumberBoxObject final
+    : public ContentControlObjectBase<openxaml::NumberBox>,
+      public IMuxcNumberBox {
+public:
+    using PrimaryInterface = IMuxcNumberBox;
+    ~NumberBoxObject() override {
+        WindowsDeleteString(text_);
+        WindowsDeleteString(placeholder_text_);
+        ReleaseObject(header_);
+        ReleaseObject(header_template_);
+        ReleaseObject(selection_flyout_);
+        ReleaseObject(selection_highlight_color_);
+        ReleaseObject(description_);
+        ReleaseObject(number_formatter_);
+        for (auto& [_, handler] : value_changed_handlers_)
+            handler->lpVtbl->Release(handler);
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Microsoft.UI.Xaml.Controls.NumberBox";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IMuxcNumberBox, IMuxcNumberBox)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+#define OPENXAML_NUMBER_PROPERTY(name, field)                       \
+    HRESULT STDMETHODCALLTYPE get_##name(DOUBLE* value) override {  \
+        if (!value) return E_POINTER;                               \
+        *value = field;                                             \
+        return S_OK;                                                \
+    }                                                               \
+    HRESULT STDMETHODCALLTYPE put_##name(DOUBLE value) override {   \
+        field = value;                                              \
+        return S_OK;                                                \
+    }
+    OPENXAML_NUMBER_PROPERTY(Minimum, minimum_)
+    OPENXAML_NUMBER_PROPERTY(Maximum, maximum_)
+    OPENXAML_NUMBER_PROPERTY(SmallChange, small_change_)
+    OPENXAML_NUMBER_PROPERTY(LargeChange, large_change_)
+#undef OPENXAML_NUMBER_PROPERTY
+
+    HRESULT STDMETHODCALLTYPE get_Value(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = std::get<double>(layout_.GetValue(NumberBoxValueProperty()));
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Value(DOUBLE value) override {
+        const DOUBLE old_value =
+            std::get<double>(layout_.GetValue(NumberBoxValueProperty()));
+        if (value == old_value ||
+            (std::isnan(value) && std::isnan(old_value)))
+            return S_OK;
+        layout_.SetValue(NumberBoxValueProperty(), value);
+        if (!std::isnan(value)) {
+            char displayed[64]{};
+            std::snprintf(displayed, sizeof(displayed), "%g", value);
+            SetFallbackContentText(displayed, true);
+        }
+        return RaiseValueChanged(old_value, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_Text(HSTRING* value) override {
+        return DuplicateString(text_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Text(HSTRING value) override {
+        const HRESULT hr = ReplaceString(text_, value);
+        if (SUCCEEDED(hr)) SetFallbackContentText(Utf8FromHString(value), true);
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE get_Header(IInspectable** value) override {
+        return GetObject(header_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Header(IInspectable* value) override {
+        return PutObject(header_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_HeaderTemplate(void** value) override {
+        return GetOpaque(header_template_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_HeaderTemplate(void* value) override {
+        return PutOpaque(header_template_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_PlaceholderText(HSTRING* value) override {
+        return DuplicateString(placeholder_text_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_PlaceholderText(HSTRING value) override {
+        const HRESULT hr = ReplaceString(placeholder_text_, value);
+        if (SUCCEEDED(hr) && std::isnan(std::get<double>(
+                                 layout_.GetValue(NumberBoxValueProperty()))))
+            SetFallbackContentText(Utf8FromHString(value), true);
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectionFlyout(void** value) override {
+        return GetOpaque(selection_flyout_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_SelectionFlyout(void* value) override {
+        return PutOpaque(selection_flyout_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectionHighlightColor(void** value) override {
+        return GetOpaque(selection_highlight_color_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_SelectionHighlightColor(void* value) override {
+        return PutOpaque(selection_highlight_color_, value);
+    }
+#define OPENXAML_INT_PROPERTY(name, field)                         \
+    HRESULT STDMETHODCALLTYPE get_##name(INT32* value) override {  \
+        if (!value) return E_POINTER;                              \
+        *value = field;                                            \
+        return S_OK;                                               \
+    }                                                              \
+    HRESULT STDMETHODCALLTYPE put_##name(INT32 value) override {   \
+        field = value;                                             \
+        return S_OK;                                               \
+    }
+    OPENXAML_INT_PROPERTY(TextReadingOrder, text_reading_order_)
+    OPENXAML_INT_PROPERTY(ValidationMode, validation_mode_)
+    OPENXAML_INT_PROPERTY(SpinButtonPlacementMode, spin_button_placement_mode_)
+#undef OPENXAML_INT_PROPERTY
+#define OPENXAML_BOOLEAN_PROPERTY(name, field)                         \
+    HRESULT STDMETHODCALLTYPE get_##name(boolean* value) override {    \
+        if (!value) return E_POINTER;                                  \
+        *value = field;                                                \
+        return S_OK;                                                   \
+    }                                                                  \
+    HRESULT STDMETHODCALLTYPE put_##name(boolean value) override {     \
+        field = value != 0;                                            \
+        return S_OK;                                                   \
+    }
+    OPENXAML_BOOLEAN_PROPERTY(PreventKeyboardDisplayOnProgrammaticFocus,
+                              prevent_keyboard_display_)
+    OPENXAML_BOOLEAN_PROPERTY(IsWrapEnabled, is_wrap_enabled_)
+    OPENXAML_BOOLEAN_PROPERTY(AcceptsExpression, accepts_expression_)
+#undef OPENXAML_BOOLEAN_PROPERTY
+    HRESULT STDMETHODCALLTYPE get_Description(IInspectable** value) override {
+        return GetObject(description_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Description(IInspectable* value) override {
+        return PutObject(description_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_NumberFormatter(void** value) override {
+        return GetOpaque(number_formatter_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_NumberFormatter(void* value) override {
+        return PutOpaque(number_formatter_, value);
+    }
+    HRESULT STDMETHODCALLTYPE add_ValueChanged(
+        void* handler, EventRegistrationToken* token) override {
+        if (!handler || !token) return E_INVALIDARG;
+        auto* typed = static_cast<MuxcNumberBoxValueChangedHandlerAbi*>(handler);
+        token->value = InterlockedIncrement64(&next_value_changed_token_);
+        typed->lpVtbl->AddRef(typed);
+        try {
+            value_changed_handlers_.emplace(token->value, typed);
+        } catch (...) {
+            typed->lpVtbl->Release(typed);
+            token->value = 0;
+            return E_OUTOFMEMORY;
+        }
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE remove_ValueChanged(
+        EventRegistrationToken token) override {
+        const auto found = value_changed_handlers_.find(token.value);
+        if (found == value_changed_handlers_.end()) return S_OK;
+        found->second->lpVtbl->Release(found->second);
+        value_changed_handlers_.erase(found);
+        return S_OK;
+    }
+
+private:
+    template <class T>
+    static HRESULT GetObject(T* source, T** value) {
+        if (!value) return E_POINTER;
+        *value = source;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    template <class T>
+    static HRESULT PutObject(T*& target, T* value) {
+        if (value) value->AddRef();
+        if (target) target->Release();
+        target = value;
+        return S_OK;
+    }
+    static HRESULT GetOpaque(IInspectable* source, void** value) {
+        if (!value) return E_POINTER;
+        *value = source;
+        if (source) source->AddRef();
+        return S_OK;
+    }
+    static HRESULT PutOpaque(IInspectable*& target, void* value) {
+        return PutObject(target, static_cast<IInspectable*>(value));
+    }
+    template <class T>
+    static void ReleaseObject(T*& value) {
+        if (value) value->Release();
+        value = nullptr;
+    }
+    static HRESULT DuplicateString(HSTRING source, HSTRING* value) {
+        if (!value) return E_POINTER;
+        return WindowsDuplicateString(source, value);
+    }
+    static HRESULT ReplaceString(HSTRING& target, HSTRING value) {
+        HSTRING next = nullptr;
+        const HRESULT hr = WindowsDuplicateString(value, &next);
+        if (FAILED(hr)) return hr;
+        WindowsDeleteString(target);
+        target = next;
+        return S_OK;
+    }
+    HRESULT RaiseValueChanged(DOUBLE old_value, DOUBLE new_value) {
+        auto* args = new (std::nothrow)
+            NumberBoxValueChangedEventArgsObject(old_value, new_value);
+        if (!args) return E_OUTOFMEMORY;
+        std::vector<MuxcNumberBoxValueChangedHandlerAbi*> snapshot;
+        snapshot.reserve(value_changed_handlers_.size());
+        for (const auto& [_, handler] : value_changed_handlers_) {
+            handler->lpVtbl->AddRef(handler);
+            snapshot.push_back(handler);
+        }
+        HRESULT result = S_OK;
+        auto* sender = static_cast<IMuxcNumberBox*>(this);
+        auto* event_args = static_cast<IMuxcNumberBoxValueChangedEventArgs*>(args);
+        for (auto* handler : snapshot) {
+            const HRESULT invoked = handler->lpVtbl->Invoke(
+                handler, sender, event_args);
+            if (FAILED(invoked) && SUCCEEDED(result)) result = invoked;
+            handler->lpVtbl->Release(handler);
+        }
+        event_args->Release();
+        return result;
+    }
+
+    DOUBLE minimum_ = -INFINITY;
+    DOUBLE maximum_ = INFINITY;
+    DOUBLE small_change_ = 1.0;
+    DOUBLE large_change_ = 10.0;
+    HSTRING text_ = nullptr;
+    HSTRING placeholder_text_ = nullptr;
+    IInspectable* header_ = nullptr;
+    IInspectable* header_template_ = nullptr;
+    IInspectable* selection_flyout_ = nullptr;
+    IInspectable* selection_highlight_color_ = nullptr;
+    IInspectable* description_ = nullptr;
+    IInspectable* number_formatter_ = nullptr;
+    INT32 text_reading_order_ = 0;
+    INT32 validation_mode_ = 0;
+    INT32 spin_button_placement_mode_ = 0;
+    boolean prevent_keyboard_display_ = 0;
+    boolean is_wrap_enabled_ = 0;
+    boolean accepts_expression_ = 0;
+    LONGLONG next_value_changed_token_ = 0;
+    std::map<LONGLONG, MuxcNumberBoxValueChangedHandlerAbi*>
+        value_changed_handlers_;
+};
+
+struct IMuxcNavigationView : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_IsPaneOpen(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsPaneOpen(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_CompactModeThresholdWidth(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_CompactModeThresholdWidth(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ExpandedModeThresholdWidth(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ExpandedModeThresholdWidth(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_FooterMenuItems(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_FooterMenuItemsSource(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_FooterMenuItemsSource(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_PaneFooter(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_PaneFooter(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Header(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Header(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_HeaderTemplate(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_HeaderTemplate(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_DisplayMode(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsSettingsVisible(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsSettingsVisible(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsPaneToggleButtonVisible(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsPaneToggleButtonVisible(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AlwaysShowHeader(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_AlwaysShowHeader(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_CompactPaneLength(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_CompactPaneLength(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_OpenPaneLength(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_OpenPaneLength(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_PaneToggleButtonStyle(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_PaneToggleButtonStyle(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SelectedItem(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_SelectedItem(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_MenuItems(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_MenuItemsSource(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_MenuItemsSource(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SettingsItem(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AutoSuggestBox(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_AutoSuggestBox(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_MenuItemTemplate(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_MenuItemTemplate(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_MenuItemTemplateSelector(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_MenuItemTemplateSelector(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_MenuItemContainerStyle(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_MenuItemContainerStyle(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_MenuItemContainerStyleSelector(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_MenuItemContainerStyleSelector(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE MenuItemFromContainer(void*, void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE ContainerFromMenuItem(void*, void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_SelectionChanged(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_SelectionChanged(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_ItemInvoked(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_ItemInvoked(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_DisplayModeChanged(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_DisplayModeChanged(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsTitleBarAutoPaddingEnabled(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsTitleBarAutoPaddingEnabled(boolean) = 0;
+};
+
+struct IMuxcNavigationView2 : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_IsBackButtonVisible(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsBackButtonVisible(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsBackEnabled(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsBackEnabled(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_PaneTitle(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_PaneTitle(HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_BackRequested(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_BackRequested(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_PaneClosed(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_PaneClosed(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_PaneClosing(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_PaneClosing(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_PaneOpened(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_PaneOpened(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_PaneOpening(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_PaneOpening(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_PaneDisplayMode(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_PaneDisplayMode(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_PaneHeader(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_PaneHeader(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_PaneCustomContent(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_PaneCustomContent(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ContentOverlay(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ContentOverlay(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsPaneVisible(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsPaneVisible(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SelectionFollowsFocus(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_SelectionFollowsFocus(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_TemplateSettings(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ShoulderNavigationEnabled(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ShoulderNavigationEnabled(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_OverflowLabelMode(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_OverflowLabelMode(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Expanding(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_Expanding(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Collapsed(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_Collapsed(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE Expand(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE Collapse(void*) = 0;
+};
+
+struct IMuxcNavigationViewItem : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Icon(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Icon(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_CompactPaneLength(DOUBLE*) = 0;
+};
+struct IMuxcNavigationViewItem2 : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_SelectsOnInvoked(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_SelectsOnInvoked(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsExpanded(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsExpanded(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_HasUnrealizedChildren(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_HasUnrealizedChildren(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsChildSelected(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsChildSelected(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_MenuItems(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_MenuItemsSource(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_MenuItemsSource(void*) = 0;
+};
+struct IMuxcNavigationViewItem3 : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_InfoBadge(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_InfoBadge(void*) = 0;
+};
+struct IMuxcNavigationViewItemBase : IInspectable {};
+struct IMuxcNavigationViewItemBase2 : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_IsSelected(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsSelected(boolean) = 0;
+};
+struct IMuxcNavigationViewItemHeader : IInspectable {};
+
+struct IMuxcBreadcrumbBar : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_ItemsSource(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ItemsSource(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ItemTemplate(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ItemTemplate(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_ItemClicked(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_ItemClicked(EventRegistrationToken) = 0;
+};
+
+class NavigationViewObject final
+    : public ContentControlObjectBase<openxaml::NavigationView>,
+      public IMuxcNavigationView,
+      public IMuxcNavigationView2 {
+public:
+    using PrimaryInterface = IMuxcNavigationView;
+    NavigationViewObject()
+        : menu_items_({::openxaml::iid::PIID_FIVector_1_IInspectable,
+                       ::openxaml::iid::PIID_FIIterable_1_IInspectable,
+                       ::openxaml::iid::PIID_FIIterator_1_IInspectable},
+                      L"Microsoft.UI.Xaml.Controls.NavigationView.MenuItems", this),
+          footer_items_({::openxaml::iid::PIID_FIVector_1_IInspectable,
+                         ::openxaml::iid::PIID_FIIterable_1_IInspectable,
+                         ::openxaml::iid::PIID_FIIterator_1_IInspectable},
+                        L"Microsoft.UI.Xaml.Controls.NavigationView.FooterMenuItems", this) {}
+    ~NavigationViewObject() override {
+        WindowsDeleteString(pane_title_);
+        for (auto* value : {footer_source_, pane_footer_, header_, header_template_,
+                            pane_toggle_style_, selected_item_, menu_source_,
+                            auto_suggest_box_, item_template_, item_template_selector_,
+                            item_container_style_, item_container_style_selector_,
+                            pane_header_, pane_custom_content_, content_overlay_}) {
+            if (value) value->Release();
+        }
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Microsoft.UI.Xaml.Controls.NavigationView";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IMuxcNavigationView, IMuxcNavigationView)
+        OPENXAML_QI_ARM(IID_IMuxcNavigationView2, IMuxcNavigationView2)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT AppendMenuItem(IInspectable* value, bool footer) {
+        return footer ? footer_items_.Append(value) : menu_items_.Append(value);
+    }
+
+#define OPENXAML_NAV_BOOL(name, field)                                    \
+    HRESULT STDMETHODCALLTYPE get_##name(boolean* value) override {       \
+        if (!value) return E_POINTER; *value = field; return S_OK;         \
+    }                                                                      \
+    HRESULT STDMETHODCALLTYPE put_##name(boolean value) override {         \
+        field = value != 0; return S_OK;                                   \
+    }
+    OPENXAML_NAV_BOOL(IsPaneOpen, is_pane_open_)
+    OPENXAML_NAV_BOOL(IsSettingsVisible, is_settings_visible_)
+    OPENXAML_NAV_BOOL(IsPaneToggleButtonVisible, is_pane_toggle_visible_)
+    OPENXAML_NAV_BOOL(AlwaysShowHeader, always_show_header_)
+    OPENXAML_NAV_BOOL(IsTitleBarAutoPaddingEnabled, title_bar_padding_)
+    OPENXAML_NAV_BOOL(IsBackEnabled, is_back_enabled_)
+    OPENXAML_NAV_BOOL(IsPaneVisible, is_pane_visible_)
+#undef OPENXAML_NAV_BOOL
+
+#define OPENXAML_NAV_DOUBLE(name, field)                                  \
+    HRESULT STDMETHODCALLTYPE get_##name(DOUBLE* value) override {        \
+        if (!value) return E_POINTER; *value = field; return S_OK;         \
+    }                                                                      \
+    HRESULT STDMETHODCALLTYPE put_##name(DOUBLE value) override {          \
+        field = value; return S_OK;                                        \
+    }
+    OPENXAML_NAV_DOUBLE(CompactModeThresholdWidth, compact_threshold_)
+    OPENXAML_NAV_DOUBLE(ExpandedModeThresholdWidth, expanded_threshold_)
+    OPENXAML_NAV_DOUBLE(CompactPaneLength, compact_pane_length_)
+    OPENXAML_NAV_DOUBLE(OpenPaneLength, open_pane_length_)
+#undef OPENXAML_NAV_DOUBLE
+
+#define OPENXAML_NAV_INT(name, field)                                     \
+    HRESULT STDMETHODCALLTYPE get_##name(INT32* value) override {         \
+        if (!value) return E_POINTER; *value = field; return S_OK;         \
+    }                                                                      \
+    HRESULT STDMETHODCALLTYPE put_##name(INT32 value) override {           \
+        field = value; return S_OK;                                        \
+    }
+    OPENXAML_NAV_INT(IsBackButtonVisible, back_button_visible_)
+    OPENXAML_NAV_INT(PaneDisplayMode, pane_display_mode_)
+    OPENXAML_NAV_INT(SelectionFollowsFocus, selection_follows_focus_)
+    OPENXAML_NAV_INT(ShoulderNavigationEnabled, shoulder_navigation_)
+    OPENXAML_NAV_INT(OverflowLabelMode, overflow_label_mode_)
+#undef OPENXAML_NAV_INT
+
+    HRESULT STDMETHODCALLTYPE get_DisplayMode(INT32* value) override {
+        if (!value) return E_POINTER; *value = display_mode_; return S_OK;
+    }
+
+#define OPENXAML_NAV_OBJECT(name, field)                                  \
+    HRESULT STDMETHODCALLTYPE get_##name(void** value) override {         \
+        return GetObject(field, value);                                    \
+    }                                                                      \
+    HRESULT STDMETHODCALLTYPE put_##name(void* value) override {           \
+        return PutObject(field, static_cast<IInspectable*>(value));        \
+    }
+    OPENXAML_NAV_OBJECT(FooterMenuItemsSource, footer_source_)
+    OPENXAML_NAV_OBJECT(PaneFooter, pane_footer_)
+    OPENXAML_NAV_OBJECT(Header, header_)
+    OPENXAML_NAV_OBJECT(HeaderTemplate, header_template_)
+    OPENXAML_NAV_OBJECT(PaneToggleButtonStyle, pane_toggle_style_)
+    OPENXAML_NAV_OBJECT(MenuItemsSource, menu_source_)
+    OPENXAML_NAV_OBJECT(AutoSuggestBox, auto_suggest_box_)
+    OPENXAML_NAV_OBJECT(MenuItemTemplate, item_template_)
+    OPENXAML_NAV_OBJECT(MenuItemTemplateSelector, item_template_selector_)
+    OPENXAML_NAV_OBJECT(MenuItemContainerStyle, item_container_style_)
+    OPENXAML_NAV_OBJECT(MenuItemContainerStyleSelector,
+                        item_container_style_selector_)
+    OPENXAML_NAV_OBJECT(PaneHeader, pane_header_)
+    OPENXAML_NAV_OBJECT(PaneCustomContent, pane_custom_content_)
+    OPENXAML_NAV_OBJECT(ContentOverlay, content_overlay_)
+#undef OPENXAML_NAV_OBJECT
+
+    HRESULT STDMETHODCALLTYPE get_SelectedItem(void** value) override {
+        return GetObject(selected_item_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_SelectedItem(void* value) override {
+        auto* next = static_cast<IInspectable*>(value);
+        if (selected_item_) {
+            IMuxcNavigationViewItemBase2* item = nullptr;
+            if (SUCCEEDED(selected_item_->QueryInterface(
+                    IID_IMuxcNavigationViewItemBase2,
+                    reinterpret_cast<void**>(&item)))) {
+                (void)item->put_IsSelected(0);
+                item->Release();
+            }
+        }
+        const HRESULT hr = PutObject(selected_item_, next);
+        if (SUCCEEDED(hr) && selected_item_) {
+            IMuxcNavigationViewItemBase2* item = nullptr;
+            if (SUCCEEDED(selected_item_->QueryInterface(
+                    IID_IMuxcNavigationViewItemBase2,
+                    reinterpret_cast<void**>(&item)))) {
+                (void)item->put_IsSelected(1);
+                item->Release();
+            }
+        }
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE get_MenuItems(void** value) override {
+        return GetCollection(menu_items_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_FooterMenuItems(void** value) override {
+        return GetCollection(footer_items_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_SettingsItem(void** value) override {
+        if (!value) return E_POINTER; *value = nullptr; return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE MenuItemFromContainer(void* item, void** value) override {
+        return CopyObject(item, value);
+    }
+    HRESULT STDMETHODCALLTYPE ContainerFromMenuItem(void* item, void** value) override {
+        return CopyObject(item, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_PaneTitle(HSTRING* value) override {
+        if (!value) return E_POINTER;
+        return WindowsDuplicateString(pane_title_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_PaneTitle(HSTRING value) override {
+        HSTRING next = nullptr;
+        HRESULT hr = WindowsDuplicateString(value, &next);
+        if (FAILED(hr)) return hr;
+        WindowsDeleteString(pane_title_);
+        pane_title_ = next;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_TemplateSettings(void** value) override {
+        if (!value) return E_POINTER; *value = nullptr; return S_OK;
+    }
+
+#define OPENXAML_NAV_EVENT(name)                                          \
+    HRESULT STDMETHODCALLTYPE add_##name(void* handler,                   \
+                                          EventRegistrationToken* token) override { \
+        return AddEvent(static_cast<IUnknown*>(handler), token);           \
+    }                                                                      \
+    HRESULT STDMETHODCALLTYPE remove_##name(EventRegistrationToken token) override { \
+        return RemoveEvent(token);                                         \
+    }
+    OPENXAML_NAV_EVENT(SelectionChanged)
+    OPENXAML_NAV_EVENT(ItemInvoked)
+    OPENXAML_NAV_EVENT(DisplayModeChanged)
+    OPENXAML_NAV_EVENT(BackRequested)
+    OPENXAML_NAV_EVENT(PaneClosed)
+    OPENXAML_NAV_EVENT(PaneClosing)
+    OPENXAML_NAV_EVENT(PaneOpened)
+    OPENXAML_NAV_EVENT(PaneOpening)
+    OPENXAML_NAV_EVENT(Expanding)
+    OPENXAML_NAV_EVENT(Collapsed)
+#undef OPENXAML_NAV_EVENT
+    HRESULT STDMETHODCALLTYPE Expand(void*) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE Collapse(void*) override { return S_OK; }
+
+private:
+    static HRESULT GetObject(IInspectable* object, void** value) {
+        if (!value) return E_POINTER;
+        *value = object;
+        if (object) object->AddRef();
+        return S_OK;
+    }
+    static HRESULT PutObject(IInspectable*& target, IInspectable* value) {
+        if (value) value->AddRef();
+        if (target) target->Release();
+        target = value;
+        return S_OK;
+    }
+    static HRESULT CopyObject(void* source, void** value) {
+        if (!value) return E_POINTER;
+        *value = source;
+        if (source) static_cast<IInspectable*>(source)->AddRef();
+        return S_OK;
+    }
+    static HRESULT GetCollection(InspectableCollection& source, void** value) {
+        if (!value) return E_POINTER;
+        source.AddRef();
+        *value = static_cast<__FIVector_1_IInspectable*>(&source);
+        return S_OK;
+    }
+
+    InspectableCollection menu_items_;
+    InspectableCollection footer_items_;
+    IInspectable* footer_source_ = nullptr;
+    IInspectable* pane_footer_ = nullptr;
+    IInspectable* header_ = nullptr;
+    IInspectable* header_template_ = nullptr;
+    IInspectable* pane_toggle_style_ = nullptr;
+    IInspectable* selected_item_ = nullptr;
+    IInspectable* menu_source_ = nullptr;
+    IInspectable* auto_suggest_box_ = nullptr;
+    IInspectable* item_template_ = nullptr;
+    IInspectable* item_template_selector_ = nullptr;
+    IInspectable* item_container_style_ = nullptr;
+    IInspectable* item_container_style_selector_ = nullptr;
+    IInspectable* pane_header_ = nullptr;
+    IInspectable* pane_custom_content_ = nullptr;
+    IInspectable* content_overlay_ = nullptr;
+    HSTRING pane_title_ = nullptr;
+    DOUBLE compact_threshold_ = 641.0;
+    DOUBLE expanded_threshold_ = 1008.0;
+    DOUBLE compact_pane_length_ = 48.0;
+    DOUBLE open_pane_length_ = 320.0;
+    INT32 display_mode_ = 0;
+    INT32 back_button_visible_ = 0;
+    INT32 pane_display_mode_ = 0;
+    INT32 selection_follows_focus_ = 0;
+    INT32 shoulder_navigation_ = 0;
+    INT32 overflow_label_mode_ = 0;
+    boolean is_pane_open_ = 1;
+    boolean is_settings_visible_ = 1;
+    boolean is_pane_toggle_visible_ = 1;
+    boolean always_show_header_ = 1;
+    boolean title_bar_padding_ = 1;
+    boolean is_back_enabled_ = 0;
+    boolean is_pane_visible_ = 1;
+};
+
+class NavigationViewItemObject final
+    : public ContentControlObjectBase<openxaml::NavigationViewItem>,
+      public IMuxcNavigationViewItem,
+      public IMuxcNavigationViewItem2,
+      public IMuxcNavigationViewItem3,
+      public IMuxcNavigationViewItemBase,
+      public IMuxcNavigationViewItemBase2 {
+public:
+    using PrimaryInterface = IMuxcNavigationViewItem;
+    NavigationViewItemObject()
+        : menu_items_({::openxaml::iid::PIID_FIVector_1_IInspectable,
+                       ::openxaml::iid::PIID_FIIterable_1_IInspectable,
+                       ::openxaml::iid::PIID_FIIterator_1_IInspectable},
+                      L"Microsoft.UI.Xaml.Controls.NavigationViewItem.MenuItems", this) {}
+    ~NavigationViewItemObject() override {
+        if (icon_) icon_->Release();
+        if (menu_source_) menu_source_->Release();
+        if (info_badge_) info_badge_->Release();
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Microsoft.UI.Xaml.Controls.NavigationViewItem";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IMuxcNavigationViewItem, IMuxcNavigationViewItem)
+        OPENXAML_QI_ARM(IID_IMuxcNavigationViewItem2, IMuxcNavigationViewItem2)
+        OPENXAML_QI_ARM(IID_IMuxcNavigationViewItem3, IMuxcNavigationViewItem3)
+        OPENXAML_QI_ARM(IID_IMuxcNavigationViewItemBase, IMuxcNavigationViewItemBase)
+        OPENXAML_QI_ARM(IID_IMuxcNavigationViewItemBase2, IMuxcNavigationViewItemBase2)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT AppendMenuItem(IInspectable* value) { return menu_items_.Append(value); }
+
+#define OPENXAML_NAV_ITEM_OBJECT(name, field)                              \
+    HRESULT STDMETHODCALLTYPE get_##name(void** value) override {          \
+        if (!value) return E_POINTER; *value = field;                      \
+        if (field) field->AddRef(); return S_OK;                           \
+    }                                                                       \
+    HRESULT STDMETHODCALLTYPE put_##name(void* value) override {            \
+        auto* next = static_cast<IInspectable*>(value);                    \
+        if (next) next->AddRef(); if (field) field->Release();             \
+        field = next; return S_OK;                                          \
+    }
+    OPENXAML_NAV_ITEM_OBJECT(Icon, icon_)
+    OPENXAML_NAV_ITEM_OBJECT(MenuItemsSource, menu_source_)
+    OPENXAML_NAV_ITEM_OBJECT(InfoBadge, info_badge_)
+#undef OPENXAML_NAV_ITEM_OBJECT
+#define OPENXAML_NAV_ITEM_BOOL(name, field)                                \
+    HRESULT STDMETHODCALLTYPE get_##name(boolean* value) override {        \
+        if (!value) return E_POINTER; *value = field; return S_OK;          \
+    }                                                                       \
+    HRESULT STDMETHODCALLTYPE put_##name(boolean value) override {          \
+        field = value != 0; return S_OK;                                    \
+    }
+    OPENXAML_NAV_ITEM_BOOL(SelectsOnInvoked, selects_on_invoked_)
+    OPENXAML_NAV_ITEM_BOOL(IsExpanded, is_expanded_)
+    OPENXAML_NAV_ITEM_BOOL(HasUnrealizedChildren, unrealized_children_)
+    OPENXAML_NAV_ITEM_BOOL(IsChildSelected, child_selected_)
+    OPENXAML_NAV_ITEM_BOOL(IsSelected, is_selected_)
+#undef OPENXAML_NAV_ITEM_BOOL
+    HRESULT STDMETHODCALLTYPE get_CompactPaneLength(DOUBLE* value) override {
+        if (!value) return E_POINTER; *value = 48.0; return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_MenuItems(void** value) override {
+        if (!value) return E_POINTER;
+        menu_items_.AddRef();
+        *value = static_cast<__FIVector_1_IInspectable*>(&menu_items_);
+        return S_OK;
+    }
+
+private:
+    InspectableCollection menu_items_;
+    IInspectable* icon_ = nullptr;
+    IInspectable* menu_source_ = nullptr;
+    IInspectable* info_badge_ = nullptr;
+    boolean selects_on_invoked_ = 1;
+    boolean is_expanded_ = 0;
+    boolean unrealized_children_ = 0;
+    boolean child_selected_ = 0;
+    boolean is_selected_ = 0;
+};
+
+class NavigationViewItemHeaderObject final
+    : public ContentControlObjectBase<openxaml::ContentControl>,
+      public IMuxcNavigationViewItemHeader {
+public:
+    using PrimaryInterface = IMuxcNavigationViewItemHeader;
+    const wchar_t* RuntimeClassName() const override {
+        return L"Microsoft.UI.Xaml.Controls.NavigationViewItemHeader";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IMuxcNavigationViewItemHeader,
+                        IMuxcNavigationViewItemHeader)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+};
+
+class BreadcrumbBarObject final
+    : public ContentControlObjectBase<openxaml::BreadcrumbBar>,
+      public IMuxcBreadcrumbBar {
+public:
+    using PrimaryInterface = IMuxcBreadcrumbBar;
+    ~BreadcrumbBarObject() override {
+        if (items_source_) items_source_->Release();
+        if (item_template_) item_template_->Release();
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Microsoft.UI.Xaml.Controls.BreadcrumbBar";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IMuxcBreadcrumbBar, IMuxcBreadcrumbBar)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+#define OPENXAML_BREADCRUMB_OBJECT(name, field)                            \
+    HRESULT STDMETHODCALLTYPE get_##name(void** value) override {          \
+        if (!value) return E_POINTER; *value = field;                      \
+        if (field) field->AddRef(); return S_OK;                           \
+    }                                                                       \
+    HRESULT STDMETHODCALLTYPE put_##name(void* value) override {            \
+        auto* next = static_cast<IInspectable*>(value);                    \
+        if (next) next->AddRef(); if (field) field->Release();             \
+        field = next; return S_OK;                                          \
+    }
+    OPENXAML_BREADCRUMB_OBJECT(ItemsSource, items_source_)
+    OPENXAML_BREADCRUMB_OBJECT(ItemTemplate, item_template_)
+#undef OPENXAML_BREADCRUMB_OBJECT
+    HRESULT STDMETHODCALLTYPE add_ItemClicked(
+        void* handler, EventRegistrationToken* token) override {
+        return AddEvent(static_cast<IUnknown*>(handler), token);
+    }
+    HRESULT STDMETHODCALLTYPE remove_ItemClicked(
+        EventRegistrationToken token) override {
+        return RemoveEvent(token);
+    }
+
+private:
+    IInspectable* items_source_ = nullptr;
+    IInspectable* item_template_ = nullptr;
+};
 
 inline constexpr GUID IID_OpenXamlSelectionChangedEventArgs = {
     0xc972d2dc, 0xb609, 0x4758,
@@ -4910,6 +6270,72 @@ inline constexpr GUID IID_IMuxcInfoBar = {
 inline constexpr GUID IID_IMuxcInfoBarFactory = {
     0x60618a60, 0x9be7, 0x5df5,
     {0xbe, 0x0d, 0x93, 0x3d, 0x34, 0xdd, 0xb4, 0x4c}};
+inline constexpr GUID IID_IMuxcInfoBadge = {
+    0x82104d7f, 0x03d4, 0x5ea4,
+    {0x87, 0x2e, 0xf9, 0xec, 0xab, 0x75, 0x86, 0x01}};
+
+struct IMuxcInfoBadge : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Value(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Value(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IconSource(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IconSource(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_TemplateSettings(void**) = 0;
+};
+
+class InfoBadgeObject final
+    : public ContentControlObjectBase<openxaml::InfoBadge>,
+      public IMuxcInfoBadge {
+public:
+    using Base = ContentControlObjectBase<openxaml::InfoBadge>;
+    using PrimaryInterface = IMuxcInfoBadge;
+
+    ~InfoBadgeObject() override {
+        if (icon_source_) icon_source_->Release();
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Microsoft.UI.Xaml.Controls.InfoBadge";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IMuxcInfoBadge, IMuxcInfoBadge)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_Value(INT32* value) override {
+        if (!value) return E_POINTER;
+        *value = value_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Value(INT32 value) override {
+        value_ = value;
+        layout_.InvalidateRender(true);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_IconSource(void** value) override {
+        if (!value) return E_POINTER;
+        *value = icon_source_;
+        if (icon_source_) icon_source_->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_IconSource(void* value) override {
+        auto* next = static_cast<IInspectable*>(value);
+        if (next) next->AddRef();
+        if (icon_source_) icon_source_->Release();
+        icon_source_ = next;
+        layout_.InvalidateRender(true);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_TemplateSettings(void** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        return S_OK;
+    }
+
+private:
+    INT32 value_ = -1;
+    IInspectable* icon_source_ = nullptr;
+};
 
 // Handwritten from the pinned Microsoft.UI.Xaml WinMD projection. WinUI's
 // interfaces are not part of the Windows SDK headers used to build this DLL,
@@ -5228,10 +6654,87 @@ public:
     OPENXAML_COM_BOILERPLATE()
 };
 
+class NavigationEventArgsObject final : public ComObject,
+                                        public wuxn::INavigationEventArgs {
+public:
+    NavigationEventArgsObject(IInspectable* content, IInspectable* parameter,
+                              ABI::Windows::UI::Xaml::Interop::TypeName source,
+                              wuxn::NavigationMode mode)
+        : content_(content), parameter_(parameter), source_kind_(source.Kind), mode_(mode) {
+        if (content_) content_->AddRef();
+        if (parameter_) parameter_->AddRef();
+        (void)WindowsDuplicateString(source.Name, &source_name_);
+    }
+    ~NavigationEventArgsObject() override {
+        if (uri_) uri_->Release();
+        if (parameter_) parameter_->Release();
+        if (content_) content_->Release();
+        WindowsDeleteString(source_name_);
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Navigation.NavigationEventArgs";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IUnknown, wuxn::INavigationEventArgs)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wuxn::INavigationEventArgs)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Navigation_INavigationEventArgs,
+                        wuxn::INavigationEventArgs)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_Content(IInspectable** value) override {
+        return CopyObject(content_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_Parameter(IInspectable** value) override {
+        return CopyObject(parameter_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_SourcePageType(
+        ABI::Windows::UI::Xaml::Interop::TypeName* value) override {
+        if (!value) return E_POINTER;
+        value->Name = nullptr;
+        value->Kind = source_kind_;
+        return WindowsDuplicateString(source_name_, &value->Name);
+    }
+    HRESULT STDMETHODCALLTYPE get_NavigationMode(wuxn::NavigationMode* value) override {
+        if (!value) return E_POINTER;
+        *value = mode_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Uri(wf::IUriRuntimeClass** value) override {
+        return CopyObject(uri_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Uri(wf::IUriRuntimeClass* value) override {
+        if (value) value->AddRef();
+        if (uri_) uri_->Release();
+        uri_ = value;
+        return S_OK;
+    }
+
+private:
+    template <class T>
+    static HRESULT CopyObject(T* source, T** value) {
+        if (!value) return E_POINTER;
+        *value = source;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+
+    IInspectable* content_ = nullptr;
+    IInspectable* parameter_ = nullptr;
+    wf::IUriRuntimeClass* uri_ = nullptr;
+    HSTRING source_name_ = nullptr;
+    ABI::Windows::UI::Xaml::Interop::TypeKind source_kind_{};
+    wuxn::NavigationMode mode_ = wuxn::NavigationMode_New;
+};
+
 class FrameObject final : public ContentControlObjectBase<openxaml::Frame>,
                           public abi::NotImpl_IFrame {
 public:
     using PrimaryInterface = wuxc::IFrame;
+    ~FrameObject() override { WindowsDeleteString(source_page_name_); }
     const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.Frame"; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
         if (!object) return E_POINTER;
@@ -5239,6 +6742,17 @@ public:
         return QueryControlInterface(iid, object);
     }
     OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_CacheSize(INT32* value) override {
+        if (!value) return E_POINTER;
+        *value = cache_size_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_CacheSize(INT32 value) override {
+        if (value < 0) return E_INVALIDARG;
+        cache_size_ = value;
+        return S_OK;
+    }
 
     HRESULT STDMETHODCALLTYPE get_CanGoBack(boolean* value) override {
         if (!value) return E_POINTER;
@@ -5261,13 +6775,553 @@ public:
     HRESULT STDMETHODCALLTYPE GoForward() override {
         return layout_.GoForward() ? S_OK : E_BOUNDS;
     }
+    HRESULT STDMETHODCALLTYPE get_CurrentSourcePageType(
+        ABI::Windows::UI::Xaml::Interop::TypeName* value) override {
+        return GetSourcePageType(value);
+    }
+    HRESULT STDMETHODCALLTYPE get_SourcePageType(
+        ABI::Windows::UI::Xaml::Interop::TypeName* value) override {
+        return GetSourcePageType(value);
+    }
+    HRESULT STDMETHODCALLTYPE put_SourcePageType(
+        ABI::Windows::UI::Xaml::Interop::TypeName value) override {
+        boolean navigated = 0;
+        return Navigate(value, nullptr, &navigated);
+    }
+    HRESULT STDMETHODCALLTYPE Navigate(
+        ABI::Windows::UI::Xaml::Interop::TypeName source_page_type,
+        IInspectable* parameter, boolean* result) override {
+        if (!result) return E_POINTER;
+        *result = 0;
+        if (!source_page_type.Name ||
+            WindowsGetStringLen(source_page_type.Name) == 0) {
+            return E_INVALIDARG;
+        }
+
+        IInspectable* page = nullptr;
+        HRESULT hr = ActivateXamlPage(source_page_type.Name, &page);
+        if (FAILED(hr)) return hr;
+
+        wux::IUIElement* element = nullptr;
+        hr = page->QueryInterface(::openxaml::iid::Windows_UI_Xaml_IUIElement,
+                                  reinterpret_cast<void**>(&element));
+        if (FAILED(hr)) {
+            page->Release();
+            return E_INVALIDARG;
+        }
+        element->Release();
+
+        auto* args = new (std::nothrow) NavigationEventArgsObject(
+            page, parameter, source_page_type, wuxn::NavigationMode_New);
+        if (!args) {
+            page->Release();
+            return E_OUTOFMEMORY;
+        }
+
+        hr = put_Content(page);
+        if (SUCCEEDED(hr)) {
+            wuxc::IPageOverrides* overrides = nullptr;
+            if (SUCCEEDED(page->QueryInterface(
+                    ::openxaml::iid::Windows_UI_Xaml_Controls_IPageOverrides,
+                    reinterpret_cast<void**>(&overrides)))) {
+                hr = overrides->OnNavigatedTo(args);
+                overrides->Release();
+            }
+        }
+        if (SUCCEEDED(hr)) {
+            HSTRING next = nullptr;
+            hr = WindowsDuplicateString(source_page_type.Name, &next);
+            if (SUCCEEDED(hr)) {
+                WindowsDeleteString(source_page_name_);
+                source_page_name_ = next;
+                source_page_kind_ = source_page_type.Kind;
+                *result = 1;
+            }
+        }
+        args->Release();
+        page->Release();
+        return hr;
+    }
+
+private:
+    HRESULT GetSourcePageType(
+        ABI::Windows::UI::Xaml::Interop::TypeName* value) const {
+        if (!value) return E_POINTER;
+        value->Name = nullptr;
+        value->Kind = source_page_kind_;
+        return WindowsDuplicateString(source_page_name_, &value->Name);
+    }
+
+    HSTRING source_page_name_ = nullptr;
+    ABI::Windows::UI::Xaml::Interop::TypeKind source_page_kind_{};
+    INT32 cache_size_ = 10;
+};
+
+class ComboBoxObject final
+    : public ContentControlObjectBase<openxaml::ComboBox>,
+      public abi::NotImpl_IComboBox,
+      public abi::NotImpl_IItemsControl,
+      public abi::NotImpl_ISelector {
+public:
+    using PrimaryInterface = wuxc::IComboBox;
+    ~ComboBoxObject() override {
+        if (item_template_) item_template_->Release();
+        if (items_source_) items_source_->Release();
+        if (selected_value_) selected_value_->Release();
+        if (selected_item_) selected_item_->Release();
+        WindowsDeleteString(selected_value_path_);
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.ComboBox";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IComboBox,
+                        wuxc::IComboBox)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IItemsControl,
+                        wuxc::IItemsControl)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_Primitives_ISelector,
+                        wuxcp::ISelector)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_ItemsSource(IInspectable** value) override {
+        return GetObject(items_source_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_ItemsSource(IInspectable* value) override {
+        return PutObject(items_source_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_ItemTemplate(wux::IDataTemplate** value) override {
+        return GetObject(item_template_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_ItemTemplate(wux::IDataTemplate* value) override {
+        return PutObject(item_template_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectedIndex(INT32* value) override {
+        if (!value) return E_POINTER;
+        *value = selected_index_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_SelectedIndex(INT32 value) override {
+        selected_index_ = value;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectedItem(IInspectable** value) override {
+        return GetObject(selected_item_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_SelectedItem(IInspectable* value) override {
+        const HRESULT hr = PutObject(selected_item_, value);
+        if (SUCCEEDED(hr)) {
+            const std::string text = SelectedDisplayText(value);
+            SetFallbackContentText(text.empty() ? "▼" : text + "  ▼", true);
+        }
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectedValue(IInspectable** value) override {
+        return GetObject(selected_value_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_SelectedValue(IInspectable* value) override {
+        return PutObject(selected_value_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_SelectedValuePath(HSTRING* value) override {
+        if (!value) return E_POINTER;
+        return WindowsDuplicateString(selected_value_path_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_SelectedValuePath(HSTRING value) override {
+        HSTRING next = nullptr;
+        HRESULT hr = WindowsDuplicateString(value, &next);
+        if (FAILED(hr)) return hr;
+        WindowsDeleteString(selected_value_path_);
+        selected_value_path_ = next;
+        return S_OK;
+    }
+
+private:
+    std::string SelectedDisplayText(IInspectable* value) {
+        if (!value) return {};
+        wf::IPropertyValue* property = nullptr;
+        if (SUCCEEDED(value->QueryInterface(
+                ::openxaml::iid::Windows_Foundation_IPropertyValue,
+                reinterpret_cast<void**>(&property)))) {
+            wf::PropertyType type{};
+            HSTRING text = nullptr;
+            if (SUCCEEDED(property->get_Type(&type)) &&
+                type == wf::PropertyType_String &&
+                SUCCEEDED(property->GetString(&text))) {
+                const std::string result = Utf8FromHString(text);
+                WindowsDeleteString(text);
+                property->Release();
+                return result;
+            }
+            WindowsDeleteString(text);
+            property->Release();
+        }
+        static constexpr GUID stringable_iid = {
+            0x96369f54, 0x8eb6, 0x48f0,
+            {0xab, 0xce, 0xc1, 0xb2, 0x11, 0xe6, 0x27, 0xc3}};
+        wf::IStringable* stringable = nullptr;
+        if (FAILED(value->QueryInterface(
+                stringable_iid, reinterpret_cast<void**>(&stringable)))) return {};
+        HSTRING text = nullptr;
+        const HRESULT hr = stringable->ToString(&text);
+        stringable->Release();
+        if (FAILED(hr)) return {};
+        const std::string result = Utf8FromHString(text);
+        WindowsDeleteString(text);
+        return result;
+    }
+    template <class T>
+    static HRESULT GetObject(T* source, T** value) {
+        if (!value) return E_POINTER;
+        *value = source;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    template <class T>
+    static HRESULT PutObject(T*& target, T* value) {
+        if (value) value->AddRef();
+        if (target) target->Release();
+        target = value;
+        return S_OK;
+    }
+
+    IInspectable* items_source_ = nullptr;
+    wux::IDataTemplate* item_template_ = nullptr;
+    IInspectable* selected_item_ = nullptr;
+    IInspectable* selected_value_ = nullptr;
+    HSTRING selected_value_path_ = nullptr;
+    INT32 selected_index_ = -1;
+};
+
+inline const openxaml::DependencyProperty& ToggleSwitchIsOnProperty() {
+    static const openxaml::DependencyProperty* property =
+        openxaml::RegisterProperty("ToggleSwitch", "IsOn", {false, false, false});
+    return *property;
+}
+
+class ToggleSwitchObject final
+    : public ContentControlObjectBase<openxaml::ToggleSwitch>,
+      public abi::NotImpl_IToggleSwitch {
+public:
+    using PrimaryInterface = wuxc::IToggleSwitch;
+    ToggleSwitchObject() {
+        thumb_.set_min_width(16.0);
+        thumb_.set_min_height(16.0);
+        thumb_.set_corner_radius({8.0, 8.0, 8.0, 8.0});
+        thumb_.set_background_brush(openxaml::BrushValue::SolidColor(
+            {0xff, 0xf2, 0xf2, 0xf2}));
+        if (AttachFallbackVisual(thumb_)) layout_.set_thumb(&thumb_);
+    }
+    ~ToggleSwitchObject() override {
+        DetachFallbackVisual(thumb_);
+        ReleaseObject(header_);
+        ReleaseObject(header_template_);
+        ReleaseObject(on_content_);
+        ReleaseObject(on_content_template_);
+        ReleaseObject(off_content_);
+        ReleaseObject(off_content_template_);
+        for (auto& [_, handler] : toggled_handlers_) handler->Release();
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.ToggleSwitch";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IToggleSwitch,
+                        wuxc::IToggleSwitch)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_IsOn(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = std::get<bool>(layout_.GetValue(ToggleSwitchIsOnProperty()));
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_IsOn(boolean value) override {
+        const boolean next = value != 0;
+        const bool current =
+            std::get<bool>(layout_.GetValue(ToggleSwitchIsOnProperty()));
+        if ((next != 0) == current) return S_OK;
+        layout_.SetValue(ToggleSwitchIsOnProperty(), next != 0);
+        layout_.set_is_on(next != 0);
+        layout_.set_background_brush(openxaml::BrushValue::SolidColor(
+            next ? openxaml::Color{0xff, 0x00, 0x78, 0xd4}
+                 : openxaml::Color{0xff, 0x55, 0x55, 0x55}));
+
+        std::vector<wux::IRoutedEventHandler*> snapshot;
+        snapshot.reserve(toggled_handlers_.size());
+        for (const auto& [_, handler] : toggled_handlers_) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+        auto* const sender = static_cast<IInspectable*>(
+            static_cast<wuxc::IToggleSwitch*>(this));
+        HRESULT result = S_OK;
+        for (auto* handler : snapshot) {
+            const HRESULT invoked = handler->Invoke(sender, nullptr);
+            if (FAILED(invoked) && SUCCEEDED(result)) result = invoked;
+            handler->Release();
+        }
+        return result;
+    }
+    void InvokeIslandTapEvent(
+        IslandTapEventKind kind,
+        wuxi::ITappedRoutedEventArgs* args) noexcept override {
+        ContentControlObjectBase<openxaml::ToggleSwitch>::InvokeIslandTapEvent(
+            kind, args);
+        if (kind != IslandTapEventKind::Tapped || !args) return;
+        boolean current = 0;
+        (void)get_IsOn(&current);
+        (void)put_IsOn(!current);
+        (void)args->put_Handled(1);
+    }
+    HRESULT STDMETHODCALLTYPE get_Header(IInspectable** value) override {
+        return GetObject(header_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Header(IInspectable* value) override {
+        return PutObject(header_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_HeaderTemplate(wux::IDataTemplate** value) override {
+        return GetObject(header_template_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_HeaderTemplate(wux::IDataTemplate* value) override {
+        return PutObject(header_template_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_OnContent(IInspectable** value) override {
+        return GetObject(on_content_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_OnContent(IInspectable* value) override {
+        return PutObject(on_content_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_OnContentTemplate(wux::IDataTemplate** value) override {
+        return GetObject(on_content_template_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_OnContentTemplate(wux::IDataTemplate* value) override {
+        return PutObject(on_content_template_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_OffContent(IInspectable** value) override {
+        return GetObject(off_content_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_OffContent(IInspectable* value) override {
+        return PutObject(off_content_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_OffContentTemplate(wux::IDataTemplate** value) override {
+        return GetObject(off_content_template_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_OffContentTemplate(wux::IDataTemplate* value) override {
+        return PutObject(off_content_template_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_TemplateSettings(
+        wuxcp::IToggleSwitchTemplateSettings** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE add_Toggled(wux::IRoutedEventHandler* handler,
+                                          EventRegistrationToken* token) override {
+        return AddTypedEvent(handler, token, toggled_handlers_);
+    }
+    HRESULT STDMETHODCALLTYPE remove_Toggled(EventRegistrationToken token) override {
+        return RemoveTypedEvent(token, toggled_handlers_);
+    }
+
+private:
+    template <class T>
+    static HRESULT GetObject(T* source, T** value) {
+        if (!value) return E_POINTER;
+        *value = source;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    template <class T>
+    static HRESULT PutObject(T*& target, T* value) {
+        if (value) value->AddRef();
+        if (target) target->Release();
+        target = value;
+        return S_OK;
+    }
+    template <class T>
+    static void ReleaseObject(T*& value) {
+        if (value) value->Release();
+        value = nullptr;
+    }
+
+    openxaml::Border thumb_;
+    IInspectable* header_ = nullptr;
+    wux::IDataTemplate* header_template_ = nullptr;
+    IInspectable* on_content_ = nullptr;
+    wux::IDataTemplate* on_content_template_ = nullptr;
+    IInspectable* off_content_ = nullptr;
+    wux::IDataTemplate* off_content_template_ = nullptr;
+    std::map<LONGLONG, wux::IRoutedEventHandler*> toggled_handlers_;
+};
+
+inline constexpr GUID IID_OpenXamlBooleanReference = {
+    0x3c00fd60, 0x2950, 0x5939,
+    {0xa2, 0x1a, 0x2d, 0x12, 0xc5, 0xa0, 0x1b, 0x8a}};
+
+class CheckBoxObject final
+    : public ContentControlObjectBase<openxaml::CheckBox>,
+      public abi::NotImpl_ICheckBox,
+      public abi::NotImpl_IToggleButton,
+      public abi::NotImpl_IButtonBase {
+public:
+    using PrimaryInterface = wuxc::ICheckBox;
+    CheckBoxObject() {
+        indicator_.set_min_width(18.0);
+        indicator_.set_min_height(18.0);
+        indicator_.set_border_thickness({1.0, 1.0, 1.0, 1.0});
+        indicator_.set_border_brush(openxaml::BrushValue::SolidColor(
+            {0xff, 0xc8, 0xc8, 0xc8}));
+        indicator_.set_background_brush(openxaml::BrushValue::SolidColor(
+            {0xff, 0x2d, 0x2d, 0x2d}));
+        if (AttachFallbackVisual(indicator_)) layout_.set_indicator(&indicator_);
+    }
+    ~CheckBoxObject() override {
+        DetachFallbackVisual(indicator_);
+        ReleaseHandlers(checked_handlers_);
+        ReleaseHandlers(unchecked_handlers_);
+        ReleaseHandlers(indeterminate_handlers_);
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.CheckBox";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_ICheckBox,
+                        wuxc::ICheckBox)
+        OPENXAML_QI_ARM(
+            ::openxaml::iid::Windows_UI_Xaml_Controls_Primitives_IToggleButton,
+            wuxcp::IToggleButton)
+        OPENXAML_QI_ARM(
+            ::openxaml::iid::Windows_UI_Xaml_Controls_Primitives_IButtonBase,
+            wuxcp::IButtonBase)
+        return QueryControlInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_IsChecked(
+        __FIReference_1_boolean** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (checked_state_ < 0) return S_OK;
+        wf::IPropertyValueStatics* statics = BoxingStatics();
+        if (!statics) return E_NOINTERFACE;
+        IInspectable* boxed = nullptr;
+        HRESULT hr = statics->CreateBoolean(checked_state_ != 0, &boxed);
+        if (SUCCEEDED(hr)) {
+            hr = boxed->QueryInterface(
+                IID_OpenXamlBooleanReference,
+                reinterpret_cast<void**>(value));
+            boxed->Release();
+        }
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE put_IsChecked(
+        __FIReference_1_boolean* value) override {
+        INT32 next = -1;
+        if (value) {
+            boolean flag = 0;
+            const HRESULT hr = value->get_Value(&flag);
+            if (FAILED(hr)) return hr;
+            next = flag ? 1 : 0;
+        }
+        if (next == checked_state_) return S_OK;
+        checked_state_ = next;
+        indicator_.set_background_brush(openxaml::BrushValue::SolidColor(
+            next > 0 ? openxaml::Color{0xff, 0x00, 0x78, 0xd4}
+                     : openxaml::Color{0xff, 0x2d, 0x2d, 0x2d}));
+        indicator_.InvalidateRender(false);
+        auto& handlers = next < 0 ? indeterminate_handlers_
+                                  : (next ? checked_handlers_ : unchecked_handlers_);
+        return InvokeHandlers(handlers);
+    }
+    void InvokeIslandTapEvent(
+        IslandTapEventKind kind,
+        wuxi::ITappedRoutedEventArgs* args) noexcept override {
+        ContentControlObjectBase<openxaml::CheckBox>::InvokeIslandTapEvent(
+            kind, args);
+        if (kind != IslandTapEventKind::Tapped || !args) return;
+        checked_state_ = checked_state_ > 0 ? 0 : 1;
+        indicator_.set_background_brush(openxaml::BrushValue::SolidColor(
+            checked_state_ ? openxaml::Color{0xff, 0x00, 0x78, 0xd4}
+                           : openxaml::Color{0xff, 0x2d, 0x2d, 0x2d}));
+        indicator_.InvalidateRender(false);
+        auto& handlers = checked_state_ ? checked_handlers_ : unchecked_handlers_;
+        (void)InvokeHandlers(handlers);
+        (void)args->put_Handled(1);
+    }
+    HRESULT STDMETHODCALLTYPE get_IsThreeState(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = is_three_state_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_IsThreeState(boolean value) override {
+        is_three_state_ = value != 0;
+        return S_OK;
+    }
+#define OPENXAML_CHECKBOX_EVENT(name, field)                            \
+    HRESULT STDMETHODCALLTYPE add_##name(                               \
+        wux::IRoutedEventHandler* handler,                              \
+        EventRegistrationToken* token) override {                       \
+        return AddTypedEvent(handler, token, field);                    \
+    }                                                                   \
+    HRESULT STDMETHODCALLTYPE remove_##name(                            \
+        EventRegistrationToken token) override {                        \
+        return RemoveTypedEvent(token, field);                          \
+    }
+    OPENXAML_CHECKBOX_EVENT(Checked, checked_handlers_)
+    OPENXAML_CHECKBOX_EVENT(Unchecked, unchecked_handlers_)
+    OPENXAML_CHECKBOX_EVENT(Indeterminate, indeterminate_handlers_)
+#undef OPENXAML_CHECKBOX_EVENT
+
+    HRESULT STDMETHODCALLTYPE add_Click(wux::IRoutedEventHandler* handler,
+                                        EventRegistrationToken* token) override {
+        return AddEvent(handler, token);
+    }
+    HRESULT STDMETHODCALLTYPE remove_Click(EventRegistrationToken token) override {
+        return RemoveEvent(token);
+    }
+
+private:
+    static void ReleaseHandlers(
+        std::map<LONGLONG, wux::IRoutedEventHandler*>& handlers) {
+        for (auto& [_, handler] : handlers) handler->Release();
+    }
+    HRESULT InvokeHandlers(
+        std::map<LONGLONG, wux::IRoutedEventHandler*>& handlers) {
+        std::vector<wux::IRoutedEventHandler*> snapshot;
+        snapshot.reserve(handlers.size());
+        for (const auto& [_, handler] : handlers) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+        auto* sender = static_cast<IInspectable*>(
+            static_cast<wuxc::ICheckBox*>(this));
+        HRESULT result = S_OK;
+        for (auto* handler : snapshot) {
+            const HRESULT invoked = handler->Invoke(sender, nullptr);
+            if (FAILED(invoked) && SUCCEEDED(result)) result = invoked;
+            handler->Release();
+        }
+        return result;
+    }
+
+    INT32 checked_state_ = 0;
+    openxaml::Border indicator_;
+    boolean is_three_state_ = 0;
+    std::map<LONGLONG, wux::IRoutedEventHandler*> checked_handlers_;
+    std::map<LONGLONG, wux::IRoutedEventHandler*> unchecked_handlers_;
+    std::map<LONGLONG, wux::IRoutedEventHandler*> indeterminate_handlers_;
 };
 
 struct NoAdditionalInterface {};
 
 template <class LayoutType, class InterfaceType, class StubType>
 class ItemsControlObjectBase : public XamlElement,
-                               public abi::NotImpl_IControl,
+                               public ControlAbiBase,
                                public abi::NotImpl_IItemsControl,
                                public StubType {
 public:
@@ -6744,11 +8798,22 @@ public:
         }
         auto* sender = static_cast<IInspectable*>(
             static_cast<wuxc::IMenuFlyoutItem*>(this));
+        HRESULT result = S_OK;
         for (auto* handler : snapshot) {
-            (void)handler->Invoke(sender, nullptr);
+            const HRESULT invoked = handler->Invoke(sender, nullptr);
+            if (FAILED(invoked) && SUCCEEDED(result)) result = invoked;
             handler->Release();
         }
-        return S_OK;
+        if (GetEnvironmentVariableW(L"OPENXAML_TRACE_EVENTS", nullptr, 0)) {
+            char diagnostic[160]{};
+            std::snprintf(diagnostic, sizeof(diagnostic),
+                          "OpenXaml: MenuFlyoutItem.InvokeClick handlers=%u "
+                          "result=0x%08lx\n",
+                          static_cast<unsigned>(snapshot.size()),
+                          static_cast<unsigned long>(result));
+            OutputDebugStringA(diagnostic);
+        }
+        return result;
     }
     HRESULT STDMETHODCALLTYPE get_Icon(wuxc::IIconElement** value) override {
         return Get(icon_, value);
@@ -7166,7 +9231,7 @@ public:
     }
 };
 
-class TextBoxObject final : public XamlElement, public abi::NotImpl_IControl,
+class TextBoxObject final : public XamlElement, public ControlAbiBase,
                             public abi::NotImpl_ITextBox {
 public:
     using PrimaryInterface = wuxc::ITextBox;
@@ -7190,7 +9255,186 @@ private:
     openxaml::TextBox layout_;
 };
 
-class ThumbObject final : public XamlElement, public abi::NotImpl_IControl,
+class AutoSuggestBoxObject final
+    : public XamlElement,
+      public ControlAbiBase,
+      public wuxc::IAutoSuggestBox,
+      public wuxc::IAutoSuggestBox2 {
+public:
+    using PrimaryInterface = wuxc::IAutoSuggestBox;
+    ~AutoSuggestBoxObject() override {
+        WindowsDeleteString(text_member_path_);
+        WindowsDeleteString(placeholder_text_);
+        if (header_) header_->Release();
+        if (text_box_style_) text_box_style_->Release();
+        if (query_icon_) query_icon_->Release();
+    }
+    openxaml::Element* Layout() override { return &layout_; }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.AutoSuggestBox";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(
+            ::openxaml::iid::Windows_UI_Xaml_Controls_IAutoSuggestBox,
+            wuxc::IAutoSuggestBox)
+        OPENXAML_QI_ARM(
+            ::openxaml::iid::Windows_UI_Xaml_Controls_IAutoSuggestBox2,
+            wuxc::IAutoSuggestBox2)
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IControl,
+                        wuxc::IControl)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE ApplyTemplate(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = layout_.ApplyTemplate() ? 1 : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_MaxSuggestionListHeight(DOUBLE* value) override {
+        if (!value) return E_POINTER;
+        *value = max_suggestion_height_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_MaxSuggestionListHeight(DOUBLE value) override {
+        max_suggestion_height_ = value;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_IsSuggestionListOpen(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = suggestion_list_open_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_IsSuggestionListOpen(boolean value) override {
+        suggestion_list_open_ = value != 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_TextMemberPath(HSTRING* value) override {
+        return DuplicateString(text_member_path_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_TextMemberPath(HSTRING value) override {
+        return ReplaceString(text_member_path_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_Text(HSTRING* value) override {
+        return HStringFromUtf8(layout_.text(), value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Text(HSTRING value) override {
+        layout_.set_text(Utf8FromHString(value));
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_UpdateTextOnSelect(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = update_text_on_select_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_UpdateTextOnSelect(boolean value) override {
+        update_text_on_select_ = value != 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_PlaceholderText(HSTRING* value) override {
+        return DuplicateString(placeholder_text_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_PlaceholderText(HSTRING value) override {
+        return ReplaceString(placeholder_text_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_Header(IInspectable** value) override {
+        return GetObject(header_, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Header(IInspectable* value) override {
+        return PutObject(header_, value);
+    }
+    HRESULT STDMETHODCALLTYPE get_AutoMaximizeSuggestionArea(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = auto_maximize_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_AutoMaximizeSuggestionArea(boolean value) override {
+        auto_maximize_ = value != 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_TextBoxStyle(wux::IStyle** value) override {
+        if (!value) return E_POINTER;
+        *value = text_box_style_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_TextBoxStyle(wux::IStyle* value) override {
+        if (value) value->AddRef();
+        if (text_box_style_) text_box_style_->Release();
+        text_box_style_ = value;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_QueryIcon(wuxc::IIconElement** value) override {
+        if (!value) return E_POINTER;
+        *value = query_icon_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_QueryIcon(wuxc::IIconElement* value) override {
+        if (value) value->AddRef();
+        if (query_icon_) query_icon_->Release();
+        query_icon_ = value;
+        return S_OK;
+    }
+
+#define OPENXAML_AUTOSUGGEST_EVENT(name, type)                             \
+    HRESULT STDMETHODCALLTYPE add_##name(type* handler,                    \
+                                          EventRegistrationToken* token) override { \
+        return AddEvent(handler, token);                                    \
+    }                                                                       \
+    HRESULT STDMETHODCALLTYPE remove_##name(EventRegistrationToken token) override { \
+        return RemoveEvent(token);                                          \
+    }
+    OPENXAML_AUTOSUGGEST_EVENT(
+        SuggestionChosen,
+        __FITypedEventHandler_2_Windows__CUI__CXaml__CControls__CAutoSuggestBox_Windows__CUI__CXaml__CControls__CAutoSuggestBoxSuggestionChosenEventArgs)
+    OPENXAML_AUTOSUGGEST_EVENT(
+        TextChanged,
+        __FITypedEventHandler_2_Windows__CUI__CXaml__CControls__CAutoSuggestBox_Windows__CUI__CXaml__CControls__CAutoSuggestBoxTextChangedEventArgs)
+    OPENXAML_AUTOSUGGEST_EVENT(
+        QuerySubmitted,
+        __FITypedEventHandler_2_Windows__CUI__CXaml__CControls__CAutoSuggestBox_Windows__CUI__CXaml__CControls__CAutoSuggestBoxQuerySubmittedEventArgs)
+#undef OPENXAML_AUTOSUGGEST_EVENT
+
+private:
+    static HRESULT DuplicateString(HSTRING source, HSTRING* value) {
+        if (!value) return E_POINTER;
+        return WindowsDuplicateString(source, value);
+    }
+    static HRESULT ReplaceString(HSTRING& target, HSTRING value) {
+        HSTRING next = nullptr;
+        HRESULT hr = WindowsDuplicateString(value, &next);
+        if (FAILED(hr)) return hr;
+        WindowsDeleteString(target);
+        target = next;
+        return S_OK;
+    }
+    static HRESULT GetObject(IInspectable* source, IInspectable** value) {
+        if (!value) return E_POINTER;
+        *value = source;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    static HRESULT PutObject(IInspectable*& target, IInspectable* value) {
+        if (value) value->AddRef();
+        if (target) target->Release();
+        target = value;
+        return S_OK;
+    }
+
+    openxaml::TextBox layout_;
+    HSTRING text_member_path_ = nullptr;
+    HSTRING placeholder_text_ = nullptr;
+    IInspectable* header_ = nullptr;
+    wux::IStyle* text_box_style_ = nullptr;
+    wuxc::IIconElement* query_icon_ = nullptr;
+    DOUBLE max_suggestion_height_ = 0.0;
+    boolean suggestion_list_open_ = 0;
+    boolean update_text_on_select_ = 1;
+    boolean auto_maximize_ = 0;
+};
+
+class ThumbObject final : public XamlElement, public ControlAbiBase,
                           public abi::NotImpl_IThumb {
 public:
     using PrimaryInterface = wuxcp::IThumb;
@@ -7824,8 +10068,13 @@ private:
 
 class TextBlockObject final : public XamlElement, public abi::NotImpl_ITextBlock {
 public:
-    ~TextBlockObject() override {
-        if (foreground_) foreground_->Release();
+    TextBlockObject() : foreground_(text_, ProjectedBrushSlot::Foreground) {
+        // Runtime TextBlocks inherit the active theme foreground. The layout
+        // oracle deliberately keeps its probe ink when no brush is present,
+        // but ABI-created app controls need the dark-theme default rather than
+        // exposing that diagnostic colour on screen.
+        text_.set_foreground_brush(openxaml::BrushValue::SolidColor(
+            {0xff, 0xf2, 0xf2, 0xf2}));
     }
     openxaml::Element* Layout() override { return &text_; }
     const wchar_t* RuntimeClassName() const override {
@@ -7942,16 +10191,10 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_Foreground(wuxm::IBrush** value) override {
-        if (!value) return E_POINTER;
-        *value = foreground_;
-        if (*value) (*value)->AddRef();
-        return S_OK;
+        return foreground_.Get(value);
     }
     HRESULT STDMETHODCALLTYPE put_Foreground(wuxm::IBrush* value) override {
-        if (value) value->AddRef();
-        if (foreground_) foreground_->Release();
-        foreground_ = value;
-        return S_OK;
+        return foreground_.Assign(value);
     }
 #define OPENXAML_TEXT_ENUM_PROPERTY(type, name, field)                  \
     HRESULT STDMETHODCALLTYPE get_##name(type* value) override {       \
@@ -8059,6 +10302,7 @@ public:
 
 private:
     openxaml::TextBlock text_;
+    BrushProjection foreground_;
     boolean is_text_selection_enabled_ = false;
     ABI::Windows::UI::Text::FontWeight font_weight_{400};
     ABI::Windows::UI::Text::FontStyle font_style_ =
@@ -8066,7 +10310,6 @@ private:
     ABI::Windows::UI::Text::FontStretch font_stretch_ =
         ABI::Windows::UI::Text::FontStretch_Normal;
     INT32 character_spacing_ = 0;
-    wuxm::IBrush* foreground_ = nullptr;
     wux::TextTrimming text_trimming_ = wux::TextTrimming_None;
     wux::TextAlignment text_alignment_ = wux::TextAlignment_Left;
     wux::Thickness padding_{};

@@ -785,6 +785,21 @@ __CRT_UUID_DECL(IPathlessMediaResourceContainer,
                         )
                     content = content.replace(call_argument, ", KF_FLAG_DEFAULT,")
 
+            if path.name == "ActionArgs.h":
+                # This name appears inside the implementation namespace, where
+                # GCC resolves it to implementation::NewTerminalArgs. A failed
+                # try_as then forms a com_ptr to the implementation by applying
+                # its interface offset to a null ABI pointer. Query the public
+                # projected runtime class instead, which is what this type test
+                # is intended to express and which preserves null on failure.
+                old = "_ContentArgs.try_as<NewTerminalArgs>()"
+                new = "_ContentArgs.try_as<Model::NewTerminalArgs>()"
+                if content.count(old) != 1:
+                    raise RuntimeError(
+                        "expected one SplitPane NewTerminalArgs projected cast"
+                    )
+                content = content.replace(old, new)
+
             if path.name == "CascadiaSettingsSerialization.cpp":
                 extension_start = "    // Search through app extensions.\n"
                 extension_end = (
@@ -803,6 +818,34 @@ __CRT_UUID_DECL(IPathlessMediaResourceContainer,
                     "    }\n#endif\n}\n\n"
                     "// See FindFragmentsAndMergeIntoUserSettings.\n",
                 )
+
+            if path.name == "CascadiaSettings.cpp":
+                # A coroutine lambda retains a pointer to its closure, not a
+                # copy of that closure. MSVC extends the lifetime of the
+                # immediately-invoked temporary used upstream; GCC follows
+                # the standard lifetime and resumes through a dangling `this`
+                # after resume_background(). Give the closure a named lifetime
+                # through latch.wait() without changing Terminal behavior.
+                old = """    std::ignore = [&]() -> safe_void_coroutine {
+        const auto cleanup = wil::scope_exit([&]() {
+            latch.count_down();
+        });
+        co_await winrt::resume_background();
+        result = DefaultTerminal::Available();
+    }();"""
+                new = """    auto refresh = [&]() -> safe_void_coroutine {
+        const auto cleanup = wil::scope_exit([&]() {
+            latch.count_down();
+        });
+        co_await winrt::resume_background();
+        result = DefaultTerminal::Available();
+    };
+    std::ignore = refresh();"""
+                if content.count(old) != 1:
+                    raise RuntimeError(
+                        "expected one default-terminal coroutine lambda"
+                    )
+                content = content.replace(old, new)
 
             write_if_changed(destination / path.name, content)
 

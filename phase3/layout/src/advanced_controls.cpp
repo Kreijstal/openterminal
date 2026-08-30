@@ -394,4 +394,20 @@ MuxContentControl::MuxContentControl(std::string name) : type_name_(std::move(na
                "ContentControl", "Control", kTextPropertyOwner, "FrameworkElement", "UIElement"};
 }
 
+NumberBox::NumberBox() : MuxContentControl("Microsoft.UI.Xaml.Controls.NumberBox") {
+    set_background_brush(BrushValue::SolidColor(
+        Color{0xff, 0x33, 0x33, 0x33}));
+}
+
+Size NumberBox::MeasureOverride(Size available) {
+    const Size content = ContentControl::MeasureOverride(available);
+    return {std::max(64.0, content.width + 24.0),
+            std::max(32.0, content.height)};
+}
+
+Size NumberBox::ArrangeOverride(Size final_size) {
+    ContentControl::ArrangeOverride(final_size);
+    return final_size;
+}
+
 }  // namespace openxaml

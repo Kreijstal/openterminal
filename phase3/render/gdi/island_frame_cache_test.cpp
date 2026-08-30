@@ -634,11 +634,9 @@ bool MeasureTransparencyProbeRun(TextOp& run) {
 }
 
 void TransparentClearAndTextAreHandledWithoutInventingAlpha() {
-    // ClearType coverage is measured against the destination, so a run that
-    // lands on non-opaque pixels has to be refused by name and leave them
-    // exactly as they were. Inventing alpha there is the one thing a layered
-    // island frame cannot survive: it would put opaque glyph pixels into a
-    // region the frame declared transparent.
+    // ClearType coverage requires an opaque destination. A transparent run
+    // uses one grayscale coverage value and premultiplied source-over, keeping
+    // transparency outside the glyph without an opaque backing rectangle.
     TextOp probe;
     if (!MeasureTransparencyProbeRun(probe)) {
         std::cerr << "island_frame_cache_test.cpp: SKIP: transparent-destination text "
@@ -654,10 +652,12 @@ void TransparentClearAndTextAreHandledWithoutInventingAlpha() {
         const std::vector<std::uint32_t> before = transparent.pixels();
         std::vector<std::string> failures;
         backend.DrawRuns(transparent, {probe}, Color{0xff, 0xff, 0xff, 0xff}, failures);
-        CHECK(failures.size() == 1);
-        if (failures.size() == 1)
-            CHECK(failures[0].find("non-opaque pixels") != std::string::npos);
-        CHECK(transparent.pixels() == before);
+        CHECK(failures.empty());
+        CHECK(transparent.pixels() != before);
+        bool retained_transparency = false;
+        for (std::uint32_t pixel : transparent.pixels())
+            retained_transparency |= (pixel >> 24) != 0xffu;
+        CHECK(retained_transparency);
     }
 
     IslandFrameCache cache;

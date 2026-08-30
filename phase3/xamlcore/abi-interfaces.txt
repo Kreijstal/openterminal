@@ -19,6 +19,11 @@ ABI::Windows::UI::Xaml::IUIElement4
 ABI::Windows::UI::Xaml::IUIElement5
 ABI::Windows::UI::Xaml::IFrameworkElement
 ABI::Windows::UI::Xaml::IFrameworkElement2
+ABI::Windows::UI::Xaml::IFrameworkElement3
+ABI::Windows::UI::Xaml::ISetter
+ABI::Windows::UI::Xaml::IVisualState
+ABI::Windows::UI::Xaml::IVisualStateGroup
+ABI::Windows::UI::Xaml::Controls::IToggleSwitchStatics
 ABI::Windows::UI::Xaml::IRoutedEventArgs
 ABI::Windows::UI::Xaml::Media::IBrush
 ABI::Windows::UI::Xaml::Media::IImageBrush
@@ -31,6 +36,7 @@ ABI::Windows::UI::Xaml::Media::ISolidColorBrushFactory
 ABI::Windows::UI::Xaml::IDependencyProperty
 ABI::Windows::UI::Xaml::IDependencyPropertyStatics
 ABI::Windows::UI::Xaml::IPropertyMetadata
+ABI::Windows::UI::Xaml::IDataTemplate
 ABI::Windows::UI::Xaml::IPropertyMetadataFactory
 ABI::Windows::UI::Xaml::IPropertyMetadataStatics
 
@@ -61,6 +67,11 @@ ABI::Windows::UI::Xaml::Controls::IPage
 ABI::Windows::UI::Xaml::Controls::IUserControl
 ABI::Windows::UI::Xaml::Controls::IFrame
 ABI::Windows::UI::Xaml::Controls::IItemsControl
+ABI::Windows::UI::Xaml::Controls::IComboBox
+ABI::Windows::UI::Xaml::Controls::Primitives::ISelector
+ABI::Windows::UI::Xaml::Controls::IToggleSwitch
+ABI::Windows::UI::Xaml::Controls::ICheckBox
+ABI::Windows::UI::Xaml::Controls::Primitives::IToggleButton
 ABI::Windows::UI::Xaml::Controls::IListView
 ABI::Windows::UI::Xaml::Controls::IListViewBase
 ABI::Windows::UI::Xaml::Controls::Primitives::IPopup

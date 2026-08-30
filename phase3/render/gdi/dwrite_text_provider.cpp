@@ -621,6 +621,7 @@ public:
                                           texture.data(),
                                           static_cast<UINT32>(texture.size()));
         if (FAILED(hr)) return hr;
+        bool needs_grayscale = false;
         for (int row = 0; row < height; ++row) {
             const int sy = bounds.top + row;
             if (sy < 0 || sy >= surface_.height()) continue;
@@ -633,11 +634,19 @@ public:
                     (static_cast<std::size_t>(row) * width + column) * 3;
                 if ((texture[index] || texture[index + 1] || texture[index + 2]) &&
                     (surface_.At(sx, sy) >> 24) != 0xffu) {
-                    touched_nonopaque_ = true;
-                    return E_ABORT;
+                    needs_grayscale = true;
+                    break;
                 }
             }
+            if (needs_grayscale) break;
         }
+        // ClearType's independent colour coverages require an opaque
+        // destination. Text in a transparent DirectComposition stratum uses
+        // one grayscale coverage value, which is valid premultiplied
+        // source-over and needs no invented backing rectangle. Keep the whole
+        // run in one mode across opaque/non-opaque boundaries.
+        if (needs_grayscale)
+            return BlendGrayscale(run, measuring, x, y);
         for (int row = 0; row < height; ++row) {
             const int sy = bounds.top + row;
             if (sy < 0 || sy >= surface_.height()) continue;
@@ -654,7 +663,6 @@ public:
         }
         return S_OK;
     }
-    bool touched_nonopaque() const { return touched_nonopaque_; }
     HRESULT STDMETHODCALLTYPE DrawUnderline(void*, FLOAT, FLOAT,
                                              const DWRITE_UNDERLINE*, IUnknown*) override {
         return E_NOTIMPL;
@@ -670,6 +678,53 @@ public:
     }
 
 private:
+    HRESULT BlendGrayscale(const DWRITE_GLYPH_RUN* run,
+                           DWRITE_MEASURING_MODE measuring,
+                           FLOAT x, FLOAT y) {
+        ComPtr<IDWriteFactory2> factory2;
+        HRESULT hr = factory_.QueryInterface(
+            __uuidof(IDWriteFactory2),
+            reinterpret_cast<void**>(factory2.put()));
+        if (FAILED(hr)) return hr;
+        ComPtr<IDWriteGlyphRunAnalysis> grayscale_analysis;
+        hr = factory2->CreateGlyphRunAnalysis(
+            run, nullptr, DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
+            measuring, DWRITE_GRID_FIT_MODE_DEFAULT,
+            DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE, x, y,
+            grayscale_analysis.put());
+        if (FAILED(hr)) return hr;
+
+        RECT bounds{};
+        hr = grayscale_analysis->GetAlphaTextureBounds(
+            DWRITE_TEXTURE_ALIASED_1x1, &bounds);
+        if (FAILED(hr) || bounds.right <= bounds.left ||
+            bounds.bottom <= bounds.top)
+            return hr;
+        const int width = bounds.right - bounds.left;
+        const int height = bounds.bottom - bounds.top;
+        std::vector<BYTE> texture(static_cast<std::size_t>(width) * height);
+        hr = grayscale_analysis->CreateAlphaTexture(
+            DWRITE_TEXTURE_ALIASED_1x1, &bounds, texture.data(),
+            static_cast<UINT32>(texture.size()));
+        if (FAILED(hr)) return hr;
+        for (int row = 0; row < height; ++row) {
+            const int sy = bounds.top + row;
+            if (sy < 0 || sy >= surface_.height()) continue;
+            for (int column = 0; column < width; ++column) {
+                const int sx = bounds.left + column;
+                if (sx < 0 || sx >= surface_.width()) continue;
+                if (sx < effective_clip_.left || sx >= effective_clip_.right ||
+                    sy < effective_clip_.top || sy >= effective_clip_.bottom)
+                    continue;
+                const unsigned coverage =
+                    texture[static_cast<std::size_t>(row) * width + column];
+                if (coverage)
+                    surface_.BlendPixel(sx, sy, ink_, coverage / 255.0);
+            }
+        }
+        return S_OK;
+    }
+
     void BlendClearType(int x, int y, unsigned red_coverage,
                         unsigned green_coverage, unsigned blue_coverage) {
         const std::uint32_t destination = surface_.At(x, y);
@@ -694,7 +749,6 @@ private:
     Surface& surface_;
     Color ink_;
     PixelRect effective_clip_;
-    bool touched_nonopaque_ = false;
 };
 
 bool DirectWriteProvider::Draw(Surface& surface, const TextOp& run, Color ink,
@@ -803,11 +857,6 @@ bool DirectWriteProvider::Draw(Surface& surface, const TextOp& run, Color ink,
             nullptr, static_cast<FLOAT>(run.bounds.x),
             static_cast<FLOAT>(run.bounds.y + run.baseline),
             DWRITE_MEASURING_MODE_NATURAL, &glyph_run, nullptr, nullptr);
-        if (renderer.touched_nonopaque()) {
-            diagnostic = "the DirectWrite ClearType run touches non-opaque pixels; "
-                         "grayscale fallback would change its documented coverage";
-            return false;
-        }
         if (FAILED(draw_hr)) {
             diagnostic = HrMessage("IDWriteGlyphRunAnalysis", draw_hr);
             return false;
@@ -903,14 +952,6 @@ bool DirectWriteProvider::Draw(Surface& surface, const TextOp& run, Color ink,
     GlyphRenderer renderer(*factory_.get(), candidate, ink, bounds);
     hr = layout->Draw(nullptr, &renderer, static_cast<FLOAT>(run.bounds.x),
                       static_cast<FLOAT>(run.bounds.y));
-    // Some platform implementations propagate the callback HRESULT and some
-    // finish Draw after the callback refused. The renderer's explicit state is
-    // authoritative in both cases; the candidate surface is discarded.
-    if (renderer.touched_nonopaque()) {
-        diagnostic = "the DirectWrite ClearType run touches non-opaque pixels; "
-                     "grayscale fallback would change its documented coverage";
-        return false;
-    }
     if (FAILED(hr)) {
         diagnostic = HrMessage("IDWriteTextLayout::Draw", hr);
         return false;

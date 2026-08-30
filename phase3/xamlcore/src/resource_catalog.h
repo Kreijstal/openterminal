@@ -16,6 +16,7 @@ public:
 
     const std::string* Find(const std::string& scope,
                             const std::string& key) const noexcept;
+    const std::string* FindAny(const std::string& key) const noexcept;
     bool Has(const std::string& scope, const std::string& key) const noexcept {
         return Find(scope, key) != nullptr;
     }

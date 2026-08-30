@@ -12,6 +12,40 @@ public:
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
 };
 
+class ComboBox : public ContentControl {
+public:
+    ComboBox();
+    std::string TypeName() const override { return "Windows.UI.Xaml.Controls.ComboBox"; }
+protected:
+    Size MeasureOverride(Size available) override;
+    Size ArrangeOverride(Size final_size) override;
+};
+
+class ToggleSwitch : public ContentControl {
+public:
+    ToggleSwitch();
+    std::string TypeName() const override { return "Windows.UI.Xaml.Controls.ToggleSwitch"; }
+    void set_thumb(Element* value) { thumb_ = value; }
+    void set_is_on(bool value) { is_on_ = value; InvalidateRender(true); }
+protected:
+    Size MeasureOverride(Size available) override;
+    Size ArrangeOverride(Size final_size) override;
+private:
+    Element* thumb_ = nullptr;
+    bool is_on_ = false;
+};
+
+class CheckBox : public Button {
+public:
+    std::string TypeName() const override { return "Windows.UI.Xaml.Controls.CheckBox"; }
+    void set_indicator(Element* value) { indicator_ = value; }
+protected:
+    Size MeasureOverride(Size available) override;
+    Size ArrangeOverride(Size final_size) override;
+private:
+    Element* indicator_ = nullptr;
+};
+
 class TextBox : public Control {
 public:
     std::string TypeName() const override { return "Windows.UI.Xaml.Controls.TextBox"; }

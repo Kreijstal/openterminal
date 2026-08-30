@@ -9,6 +9,7 @@
 #ifndef OPENXAML_COLLECTION_H
 #define OPENXAML_COLLECTION_H
 
+#include <algorithm>
 #include <map>
 #include <vector>
 
@@ -68,8 +69,18 @@ public:
         *has = position_ < owner_->Count() ? 1 : 0;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE GetMany(unsigned, ItemAbi**, unsigned*) override {
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE GetMany(unsigned capacity, ItemAbi** items,
+                                      unsigned* actual) override {
+        if (!actual) return E_POINTER;
+        *actual = 0;
+        if (capacity && !items) return E_POINTER;
+        while (*actual < capacity && position_ < owner_->Count()) {
+            HRESULT hr = owner_->GetAt(position_, &items[*actual]);
+            if (FAILED(hr)) return hr;
+            ++position_;
+            ++*actual;
+        }
+        return S_OK;
     }
 
 private:
@@ -235,8 +246,22 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetView(ViewAbi**) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE GetMany(unsigned, unsigned, ItemAbi**, unsigned*) override {
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE GetMany(unsigned start, unsigned capacity,
+                                      ItemAbi** items, unsigned* actual) override {
+        if (!actual) return E_POINTER;
+        *actual = 0;
+        if (capacity && !items) return E_POINTER;
+        if (start > entries_.size()) return E_BOUNDS;
+        const size_t available = entries_.size() - start;
+        const unsigned count = static_cast<unsigned>(
+            std::min<size_t>(available, capacity));
+        for (unsigned offset = 0; offset < count; ++offset) {
+            ItemAbi* item = entries_[start + offset].item;
+            item->AddRef();
+            items[offset] = item;
+        }
+        *actual = count;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE ReplaceAll(unsigned, ItemAbi**) override { return E_NOTIMPL; }
 

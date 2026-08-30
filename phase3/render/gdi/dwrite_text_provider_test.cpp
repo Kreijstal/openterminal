@@ -276,11 +276,10 @@ int main(int argc, char** argv) {
     openxaml::render::Surface transparent(200, 40, {0, 0, 0, 0});
     const std::vector<std::uint32_t> transparent_before = transparent.pixels();
     diagnostic.clear();
-    Check(!openxaml::render::DrawDirectWriteTextRun(
+    Check(openxaml::render::DrawDirectWriteTextRun(
               transparent, run, {255, 0, 0, 0}, diagnostic) &&
-              diagnostic.find("non-opaque") != std::string::npos &&
-              transparent.pixels() == transparent_before,
-          "nonopaque ClearType target is a named no-change refusal");
+              transparent.pixels() != transparent_before,
+          "nonopaque ClearType target uses grayscale source-over");
 
     openxaml::RuntimeTextResult missing;
     diagnostic.clear();

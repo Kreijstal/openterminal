@@ -225,6 +225,20 @@ int main() {
     if (items && first && second) {
         check(SUCCEEDED(items->Append(first)), "append first item");
         check(SUCCEEDED(items->Append(second)), "append second item");
+
+        IInspectable* batch[3]{};
+        UINT32 actual = 99;
+        check(SUCCEEDED(items->GetMany(0, 3, batch, &actual)) && actual == 2,
+              "GetMany returns the available items");
+        check(SameIdentity(batch[0], first) && SameIdentity(batch[1], second),
+              "GetMany preserves item order");
+        for (UINT32 i = 0; i < actual; ++i) batch[i]->Release();
+
+        actual = 99;
+        check(SUCCEEDED(items->GetMany(2, 3, batch, &actual)) && actual == 0,
+              "GetMany accepts the end index");
+        check(items->GetMany(3, 3, batch, &actual) == E_BOUNDS,
+              "GetMany rejects an index past the end");
     }
 
     SelectionHandler handler;

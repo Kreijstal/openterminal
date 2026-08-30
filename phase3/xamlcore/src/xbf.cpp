@@ -209,7 +209,7 @@ void skip_conditionally_declared(Reader& reader, const Metadata& metadata) {
     });
 }
 
-void skip_style_setter(Reader& reader, const Metadata& metadata) {
+StyleSetter read_style_setter(Reader& reader, const Metadata& metadata) {
     constexpr int has_theme = 1 << 0;
     constexpr int has_static = 1 << 1;
     constexpr int has_string = 1 << 2;
@@ -217,22 +217,37 @@ void skip_style_setter(Reader& reader, const Metadata& metadata) {
     constexpr int property_resolved = 1 << 4;
     constexpr int has_container = 1 << 5;
     constexpr int has_self_token = 1 << 6;
+    StyleSetter setter;
     const int flags = reader.seven_bit();
     if ((flags & has_self_token) == 0) {
         if ((flags & property_resolved) != 0) {
-            (void)reader.reference();
+            setter.property_resolved = true;
+            setter.property = reader.reference();
         } else {
-            (void)shared_string(reader, metadata);
-            (void)reader.reference();
+            setter.property_name = shared_string(reader, metadata);
+            setter.property_owner = reader.reference();
         }
     }
     if ((flags & has_string) != 0) {
-        (void)shared_string(reader, metadata);
+        setter.value_kind = StyleSetter::ValueKind::String;
+        setter.text = shared_string(reader, metadata);
     } else if ((flags & has_container) != 0) {
-        (void)constant(reader, metadata);
-    } else if ((flags & (has_static | has_theme | has_object | has_self_token)) != 0) {
-        (void)reader.seven_bit();
+        setter.value_kind = StyleSetter::ValueKind::Container;
+        setter.value = constant(reader, metadata);
+    } else if ((flags & has_static) != 0) {
+        setter.value_kind = StyleSetter::ValueKind::StaticResource;
+        setter.token = reader.seven_bit();
+    } else if ((flags & has_theme) != 0) {
+        setter.value_kind = StyleSetter::ValueKind::ThemeResource;
+        setter.token = reader.seven_bit();
+    } else if ((flags & has_object) != 0) {
+        setter.value_kind = StyleSetter::ValueKind::Object;
+        setter.token = reader.seven_bit();
+    } else if ((flags & has_self_token) != 0) {
+        setter.value_kind = StyleSetter::ValueKind::Self;
+        setter.token = reader.seven_bit();
     }
+    return setter;
 }
 
 void skip_visual_state(Reader& reader, const Metadata& metadata, int version) {
@@ -253,7 +268,8 @@ void skip_visual_state(Reader& reader, const Metadata& metadata, int version) {
     }
 }
 
-void skip_custom_data(Reader& reader, const Metadata& metadata, int version) {
+void read_custom_data(Reader& reader, const Metadata& metadata, Node& node) {
+    const int version = node.custom_data_version;
     if (version == kDeferredElementV1 || version == 6 || version == 9) {
         (void)shared_string(reader, metadata);
         if (version != kDeferredElementV1) {
@@ -311,7 +327,9 @@ void skip_custom_data(Reader& reader, const Metadata& metadata, int version) {
     }
 
     if (version == 2 || version == 8 || version == 11) {
-        repeat(reader, true, [&] { skip_style_setter(reader, metadata); });
+        repeat(reader, true, [&] {
+            node.style_setters.push_back(read_style_setter(reader, metadata));
+        });
         if (version == 11) skip_conditionally_declared(reader, metadata);
         return;
     }
@@ -398,7 +416,7 @@ Node read_node(Reader& reader, const Metadata& metadata) {
         for (std::size_t index = 0; index < static_count + theme_count; ++index)
             (void)reader.reference();
         node.custom_data_version = reader.seven_bit();
-        skip_custom_data(reader, metadata, node.custom_data_version);
+        read_custom_data(reader, metadata, node);
         break;
     }
     case NodeType::CreateTypeBeginInit:

@@ -66,6 +66,71 @@ ToolTip::ToolTip() {
 // was the corpus's one Button read as a sum; L5-defaults-builtin-reachability
 // then measured the same Button empty at [20, 13] and took the sum apart.
 
+ComboBox::ComboBox() {
+    set_background_brush(BrushValue::SolidColor(
+        Color{0xff, 0x33, 0x33, 0x33}));
+}
+
+Size ComboBox::MeasureOverride(Size available) {
+    const Size content = ContentControl::MeasureOverride(available);
+    return {std::max(120.0, content.width + 32.0),
+            std::max(32.0, content.height)};
+}
+
+Size ComboBox::ArrangeOverride(Size final_size) {
+    ContentControl::ArrangeOverride(
+        {std::max(0.0, final_size.width - 32.0), final_size.height});
+    return final_size;
+}
+
+ToggleSwitch::ToggleSwitch() {
+    set_background_brush(BrushValue::SolidColor(
+        Color{0xff, 0x55, 0x55, 0x55}));
+}
+
+Size ToggleSwitch::MeasureOverride(Size available) {
+    const Size content = ContentControl::MeasureOverride(available);
+    return {std::max(40.0, content.width), std::max(20.0, content.height)};
+}
+
+Size ToggleSwitch::ArrangeOverride(Size final_size) {
+    ContentControl::ArrangeOverride(final_size);
+    if (thumb_) {
+        constexpr double thumb_size = 16.0;
+        const double x = is_on_
+            ? std::max(2.0, final_size.width - thumb_size - 2.0)
+            : 2.0;
+        thumb_->Arrange(
+            {x, std::max(0.0, (final_size.height - thumb_size) / 2.0),
+             thumb_size, thumb_size});
+    }
+    return final_size;
+}
+
+Size CheckBox::MeasureOverride(Size available) {
+    constexpr double indicator_column = 28.0;
+    const Size content = ContentControl::MeasureOverride(
+        {std::max(0.0, available.width - indicator_column), available.height});
+    return {content.width + indicator_column, std::max(20.0, content.height)};
+}
+
+Size CheckBox::ArrangeOverride(Size final_size) {
+    const std::vector<Element*> children = Children();
+    if (!children.empty()) {
+        constexpr double indicator_column = 28.0;
+        children.front()->Arrange(
+            {indicator_column, 0.0,
+             std::max(0.0, final_size.width - indicator_column),
+             final_size.height});
+    }
+    if (indicator_) {
+        indicator_->Arrange(
+            {2.0, std::max(0.0, (final_size.height - 18.0) / 2.0),
+             18.0, 18.0});
+    }
+    return final_size;
+}
+
 Size TextBox::MeasureOverride(Size) {
     // The editable text host is supplied by generic.xaml in the real runtime.
     // Its stable, externally observable floor is retained here even before a

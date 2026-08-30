@@ -21,6 +21,9 @@ namespace wf = ABI::Windows::Foundation;
 
 inline constexpr GUID weak_reference_source_iid = {
     0x00000038, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+inline constexpr GUID boolean_reference_iid = {
+    0x3c00fd60, 0x2950, 0x5939,
+    {0xa2, 0x1a, 0x2d, 0x12, 0xc5, 0xa0, 0x1b, 0x8a}};
 
 inline constexpr GUID muxc_info_bar_iid = {
     0x273ffde8, 0x9324, 0x55b7,
@@ -67,6 +70,69 @@ struct SmokeInfoBar : IInspectable {
 
 struct SmokeInfoBarFactory : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE CreateInstance(void*, void**, void**) = 0;
+};
+
+inline constexpr GUID muxc_number_box_iid = {
+    0x22c43a67, 0xd393, 0x56a9,
+    {0x80, 0x1a, 0x2d, 0xea, 0x91, 0x87, 0x7d, 0xe6}};
+inline constexpr GUID muxc_number_box_factory_iid = {
+    0x6b81f3cb, 0x45a4, 0x5d19,
+    {0x9b, 0xbb, 0xa9, 0xfe, 0x46, 0x56, 0xac, 0x4d}};
+
+struct SmokeNumberBox : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Minimum(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Minimum(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Maximum(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Maximum(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Value(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Value(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SmallChange(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_SmallChange(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_LargeChange(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_LargeChange(DOUBLE) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Text(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Text(HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Header(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Header(IInspectable*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_HeaderTemplate(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_HeaderTemplate(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_PlaceholderText(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_PlaceholderText(HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SelectionFlyout(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_SelectionFlyout(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SelectionHighlightColor(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_SelectionHighlightColor(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_TextReadingOrder(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_TextReadingOrder(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_PreventKeyboardDisplayOnProgrammaticFocus(
+        boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_PreventKeyboardDisplayOnProgrammaticFocus(
+        boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Description(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Description(IInspectable*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ValidationMode(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ValidationMode(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SpinButtonPlacementMode(INT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_SpinButtonPlacementMode(INT32) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsWrapEnabled(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsWrapEnabled(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AcceptsExpression(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_AcceptsExpression(boolean) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_NumberFormatter(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_NumberFormatter(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_ValueChanged(
+        void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_ValueChanged(EventRegistrationToken) = 0;
+};
+
+struct SmokeNumberBoxValueChangedArgs : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_OldValue(DOUBLE*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_NewValue(DOUBLE*) = 0;
+};
+
+struct SmokeNumberBoxValueChangedHandler : IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE Invoke(
+        SmokeNumberBox*, SmokeNumberBoxValueChangedArgs*) = 0;
 };
 
 // The factory a class name resolves to, which is where WinRT puts a class's
@@ -213,6 +279,22 @@ class RoutedHandler final : public Handler<wux::IRoutedEventHandler> {
 public:
     HRESULT STDMETHODCALLTYPE Invoke(IInspectable*, wux::IRoutedEventArgs*) override {
         ++calls;
+        return S_OK;
+    }
+};
+
+class NumberBoxValueChangedHandler final
+    : public Handler<SmokeNumberBoxValueChangedHandler> {
+public:
+    DOUBLE old_value = 0.0;
+    DOUBLE new_value = 0.0;
+    HRESULT STDMETHODCALLTYPE Invoke(
+        SmokeNumberBox*, SmokeNumberBoxValueChangedArgs* args) override {
+        ++calls;
+        if (args) {
+            args->get_OldValue(&old_value);
+            args->get_NewValue(&new_value);
+        }
         return S_OK;
     }
 };
@@ -435,6 +517,22 @@ int main() {
         grid_factory->Release();
     }
 
+    auto* content_control_factory = Statics<wuxc::IContentControlFactory>(
+        L"Windows.UI.Xaml.Controls.ContentControl",
+        openxaml::iid::Windows_UI_Xaml_Controls_IContentControlFactory);
+    check(content_control_factory != nullptr, "ContentControl composable factory");
+    if (content_control_factory) {
+        IInspectable* inner = nullptr;
+        wuxc::IContentControl* content_control = nullptr;
+        check(SUCCEEDED(content_control_factory->CreateInstance(
+                  nullptr, &inner, &content_control)) &&
+                  inner != nullptr && content_control != nullptr,
+              "ContentControl factory construction");
+        if (content_control) content_control->Release();
+        if (inner) inner->Release();
+        content_control_factory->Release();
+    }
+
     auto* panel_statics = Statics<wuxc::IPanelStatics>(
         L"Windows.UI.Xaml.Controls.Panel",
         openxaml::iid::Windows_UI_Xaml_Controls_IPanelStatics);
@@ -526,6 +624,30 @@ int main() {
             }
             border->Release();
         }
+
+        HSTRING text = nullptr;
+        WindowsCreateString(L"Profile name", 12, &text);
+        IInspectable* boxed_text = nullptr;
+        if (Boxes()) Boxes()->CreateString(text, &boxed_text);
+        WindowsDeleteString(text);
+        check(boxed_text != nullptr, "boxed string for Content");
+        if (boxed_text) {
+            check(SUCCEEDED(content->put_Content(boxed_text)),
+                  "ContentControl accepts non-UIElement content");
+            IInspectable* returned = nullptr;
+            check(SUCCEEDED(content->get_Content(&returned)) &&
+                      SameIdentity(returned, boxed_text),
+                  "ContentControl object content round-trip");
+            openxaml::winrt::IOpenXamlNative* native = nullptr;
+            check(SUCCEEDED(content->QueryInterface(
+                      openxaml::winrt::IID_IOpenXamlNative,
+                      reinterpret_cast<void**>(&native))) && native &&
+                      native->LayoutElement()->Children().size() == 1,
+                  "ContentControl boxed string creates a visual text child");
+            if (native) native->Release();
+            if (returned) returned->Release();
+            boxed_text->Release();
+        }
         content->Release();
     }
 
@@ -586,6 +708,41 @@ int main() {
         if (inner)
             static_cast<IInspectable*>(inner)->Release();
         info_bar_factory->Release();
+    }
+
+    auto* number_box = Activate<SmokeNumberBox>(
+        L"Microsoft.UI.Xaml.Controls.NumberBox", muxc_number_box_iid);
+    check(number_box != nullptr, "WinUI NumberBox activation");
+    if (number_box) {
+        NumberBoxValueChangedHandler changed;
+        EventRegistrationToken token{};
+        DOUBLE value = 0.0;
+        check(SUCCEEDED(number_box->add_ValueChanged(&changed, &token)) &&
+                  token.value != 0,
+              "NumberBox ValueChanged subscription");
+        check(SUCCEEDED(number_box->put_Value(42.5)) &&
+                  SUCCEEDED(number_box->get_Value(&value)) && value == 42.5 &&
+                  changed.calls == 1 && changed.new_value == 42.5,
+              "NumberBox value round-trip raises ValueChanged");
+        check(SUCCEEDED(number_box->put_Value(42.5)) && changed.calls == 1,
+              "NumberBox unchanged value does not raise ValueChanged");
+        check(SUCCEEDED(number_box->remove_ValueChanged(token)),
+              "NumberBox ValueChanged removal");
+        number_box->Release();
+    }
+
+    auto* number_box_factory = Statics<SmokeInfoBarFactory>(
+        L"Microsoft.UI.Xaml.Controls.NumberBox", muxc_number_box_factory_iid);
+    check(number_box_factory != nullptr, "WinUI NumberBox composable factory");
+    if (number_box_factory) {
+        void* inner = nullptr;
+        void* projected = nullptr;
+        check(SUCCEEDED(number_box_factory->CreateInstance(
+                  nullptr, &inner, &projected)) && inner && projected,
+              "NumberBox factory CreateInstance");
+        if (projected) static_cast<SmokeNumberBox*>(projected)->Release();
+        if (inner) static_cast<IInspectable*>(inner)->Release();
+        number_box_factory->Release();
     }
 
     // One materialized XAML tree owns one namescope. The scope stores weak
@@ -1240,7 +1397,116 @@ int main() {
         boolean can_go_back = 1;
         check(SUCCEEDED(frame->get_CanGoBack(&can_go_back)) && !can_go_back,
               "Frame initial journal");
+
+        HSTRING page_name = nullptr;
+        WindowsCreateString(L"Windows.UI.Xaml.Controls.Page", 29, &page_name);
+        ABI::Windows::UI::Xaml::Interop::TypeName page_type{
+            page_name, ABI::Windows::UI::Xaml::Interop::TypeKind_Metadata};
+        boolean navigated = 0;
+        check(SUCCEEDED(frame->Navigate(page_type, nullptr, &navigated)) && navigated,
+              "Frame activates and hosts a requested page");
+        ABI::Windows::UI::Xaml::Interop::TypeName current{};
+        check(SUCCEEDED(frame->get_CurrentSourcePageType(&current)) &&
+                  current.Kind == ABI::Windows::UI::Xaml::Interop::TypeKind_Metadata &&
+                  current.Name && wcscmp(WindowsGetStringRawBuffer(current.Name, nullptr),
+                                         L"Windows.UI.Xaml.Controls.Page") == 0,
+              "Frame current source page type round-trip");
+        WindowsDeleteString(current.Name);
+        WindowsDeleteString(page_name);
         frame->Release();
+    }
+
+    auto* combo = Activate<wuxc::IComboBox>(
+        L"Windows.UI.Xaml.Controls.ComboBox",
+        openxaml::iid::Windows_UI_Xaml_Controls_IComboBox);
+    check(combo != nullptr, "ComboBox activation");
+    if (combo) {
+        wuxc::IItemsControl* combo_items = nullptr;
+        wuxcp::ISelector* combo_selector = nullptr;
+        check(SUCCEEDED(combo->QueryInterface(
+                  openxaml::iid::Windows_UI_Xaml_Controls_IItemsControl,
+                  reinterpret_cast<void**>(&combo_items))) && combo_items,
+              "ComboBox ItemsControl projection");
+        check(SUCCEEDED(combo->QueryInterface(
+                  openxaml::iid::Windows_UI_Xaml_Controls_Primitives_ISelector,
+                  reinterpret_cast<void**>(&combo_selector))) && combo_selector,
+              "ComboBox Selector projection");
+        IInspectable* marker = BoxInt32(7);
+        IInspectable* selected = nullptr;
+        check(combo_selector && SUCCEEDED(combo_selector->put_SelectedItem(marker)) &&
+                  SUCCEEDED(combo_selector->get_SelectedItem(&selected)) &&
+                  selected == marker,
+              "ComboBox selected item identity");
+        if (selected) selected->Release();
+        if (marker) marker->Release();
+        if (combo_selector) combo_selector->Release();
+        if (combo_items) combo_items->Release();
+        combo->Release();
+    }
+
+    auto* data_template = Activate<wux::IDataTemplate>(
+        L"Windows.UI.Xaml.DataTemplate",
+        openxaml::iid::Windows_UI_Xaml_IDataTemplate);
+    check(data_template != nullptr, "DataTemplate activation");
+    if (data_template) data_template->Release();
+
+    auto* toggle = Activate<wuxc::IToggleSwitch>(
+        L"Windows.UI.Xaml.Controls.ToggleSwitch",
+        openxaml::iid::Windows_UI_Xaml_Controls_IToggleSwitch);
+    check(toggle != nullptr, "ToggleSwitch activation");
+    if (toggle) {
+        RoutedHandler toggled;
+        EventRegistrationToken token{};
+        boolean is_on = 0;
+        check(SUCCEEDED(toggle->add_Toggled(&toggled, &token)) && token.value != 0,
+              "ToggleSwitch Toggled subscription");
+        check(SUCCEEDED(toggle->put_IsOn(1)) &&
+                  SUCCEEDED(toggle->get_IsOn(&is_on)) && is_on &&
+                  toggled.calls == 1,
+              "ToggleSwitch state change raises Toggled");
+        check(SUCCEEDED(toggle->put_IsOn(1)) && toggled.calls == 1,
+              "ToggleSwitch unchanged state does not raise Toggled");
+        check(SUCCEEDED(toggle->remove_Toggled(token)),
+              "ToggleSwitch Toggled removal");
+        toggle->Release();
+    }
+
+    auto* check_box = Activate<wuxc::ICheckBox>(
+        L"Windows.UI.Xaml.Controls.CheckBox",
+        openxaml::iid::Windows_UI_Xaml_Controls_ICheckBox);
+    check(check_box != nullptr, "CheckBox activation");
+    if (check_box) {
+        wuxcp::IToggleButton* toggle_button = nullptr;
+        check(SUCCEEDED(check_box->QueryInterface(
+                  openxaml::iid::Windows_UI_Xaml_Controls_Primitives_IToggleButton,
+                  reinterpret_cast<void**>(&toggle_button))) && toggle_button,
+              "CheckBox ToggleButton projection");
+        if (toggle_button) {
+            RoutedHandler checked;
+            EventRegistrationToken token{};
+            IInspectable* boxed = nullptr;
+            __FIReference_1_boolean* checked_value = nullptr;
+            if (Boxes()) Boxes()->CreateBoolean(1, &boxed);
+            if (boxed) boxed->QueryInterface(
+                boolean_reference_iid,
+                reinterpret_cast<void**>(&checked_value));
+            check(checked_value &&
+                      SUCCEEDED(toggle_button->add_Checked(&checked, &token)) &&
+                      SUCCEEDED(toggle_button->put_IsChecked(checked_value)) &&
+                      checked.calls == 1,
+                  "CheckBox checked state raises Checked");
+            __FIReference_1_boolean* returned = nullptr;
+            boolean state = 0;
+            check(SUCCEEDED(toggle_button->get_IsChecked(&returned)) && returned &&
+                      SUCCEEDED(returned->get_Value(&state)) && state,
+                  "CheckBox checked state round-trip");
+            if (returned) returned->Release();
+            if (checked_value) checked_value->Release();
+            if (boxed) boxed->Release();
+            toggle_button->remove_Checked(token);
+            toggle_button->Release();
+        }
+        check_box->Release();
     }
 
     auto* items = Activate<wuxc::IItemsControl>(
@@ -1821,15 +2087,11 @@ int main() {
               "PropertyMetadata.CreateWithDefaultValue");
         if (default_value) default_value->Release();
 
-        // A metadata carrying a property-changed callback is refused by name
-        // rather than accepted and dropped: this DLL has no way back from a
-        // layout element to the WinRT object that would have to be the
-        // callback's sender. RegisterPropertyChangedCallback is the observer
-        // that does work, and is checked below.
         wux::IPropertyMetadata* with_callback = nullptr;
-        check(metadata_statics->CreateWithDefaultValueAndCallback(nullptr, nullptr,
-                                                                  &with_callback) == E_NOTIMPL,
-              "PropertyMetadata with a callback is refused by name");
+        check(SUCCEEDED(metadata_statics->CreateWithDefaultValueAndCallback(
+                  nullptr, nullptr, &with_callback)) && with_callback,
+              "PropertyMetadata callback constructor");
+        if (with_callback) with_callback->Release();
 
         HSTRING name = nullptr;
         WindowsCreateString(L"SmokeScalar", 11, &name);

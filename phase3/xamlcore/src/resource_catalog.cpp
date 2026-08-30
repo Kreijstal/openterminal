@@ -35,6 +35,13 @@ const std::string* ResourceCatalog::Find(const std::string& scope,
     return nullptr;
 }
 
+const std::string* ResourceCatalog::FindAny(const std::string& key) const noexcept {
+    for (const auto& [scope, _] : scopes_) {
+        if (const std::string* value = Find(scope, key)) return value;
+    }
+    return nullptr;
+}
+
 std::vector<std::pair<std::string, std::string>> ResourceCatalog::Entries(
     const std::string& scope) const {
     const auto scoped = scopes_.find(scope);

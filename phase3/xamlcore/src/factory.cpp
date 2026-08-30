@@ -144,6 +144,44 @@ private:
     const wchar_t* name_;
 };
 
+template <class T>
+class MuxcComposableActivationFactory
+    : public Factory<T>, public IMuxcComposableFactory {
+public:
+    MuxcComposableActivationFactory(const wchar_t* name, const GUID& factory_iid)
+        : Factory<T>(name), factory_iid_(factory_iid) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        return Factory<T>::QueryInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE CreateInstance(
+        void*, void** inner, void** value) override {
+        if (!inner || !value) return E_POINTER;
+        *inner = nullptr;
+        *value = nullptr;
+        auto* instance = new (std::nothrow) T();
+        if (!instance) return E_OUTOFMEMORY;
+        auto* projected = static_cast<typename T::PrimaryInterface*>(instance);
+        projected->AddRef();
+        *inner = static_cast<IInspectable*>(projected);
+        *value = projected;
+        return S_OK;
+    }
+
+protected:
+    HRESULT QueryStatics(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        if (!IsEqualGUID(iid, factory_iid_)) return E_NOINTERFACE;
+        auto* projected = static_cast<IMuxcComposableFactory*>(this);
+        projected->AddRef();
+        *object = projected;
+        return S_OK;
+    }
+
+private:
+    GUID factory_iid_{};
+};
+
 template <class T, class Interface>
 HRESULT CreateComposableObject(IInspectable** inner, Interface** value) {
     if (!inner || !value) return E_POINTER;
@@ -167,6 +205,11 @@ using PropertyIterator =
     wfc::__FIIterator_1___FIKeyValuePair_2_HSTRING_IInspectable_t;
 using PropertyMapChangedHandler =
     wfc::__FMapChangedEventHandler_2_HSTRING_IInspectable_t;
+using StringMap = wfc::__FIMap_2_HSTRING_HSTRING_t;
+using StringMapView = wfc::__FIMapView_2_HSTRING_HSTRING_t;
+using StringObservableMap = wfc::__FIObservableMap_2_HSTRING_HSTRING_t;
+using StringMapChangedHandler =
+    wfc::__FMapChangedEventHandler_2_HSTRING_HSTRING_t;
 using NamedResourcePair =
     wfc::__FIKeyValuePair_2_HSTRING_Windows__CApplicationModel__CResources__CCore__CNamedResource_t;
 using NamedResourceIterator =
@@ -187,6 +230,12 @@ inline constexpr GUID IID_PropertyObservableMap = {
     0x236aac9d, 0xfb12, 0x5c4d, {0xa4, 0x1c, 0x9e, 0x44, 0x5f, 0xb4, 0xd7, 0xec}};
 inline constexpr GUID IID_PropertyIterable = {
     0xfe2f3d47, 0x5d47, 0x5499, {0x83, 0x74, 0x43, 0x0c, 0x7c, 0xda, 0x02, 0x04}};
+inline constexpr GUID IID_StringMap = {
+    0xf6d1f700, 0x49c2, 0x52ae, {0x81, 0x54, 0x82, 0x6f, 0x99, 0x08, 0x77, 0x3c}};
+inline constexpr GUID IID_StringMapView = {
+    0xac7f26f2, 0xfeb7, 0x5b2a, {0x8a, 0xc4, 0x34, 0x5b, 0xc6, 0x2c, 0xae, 0xde}};
+inline constexpr GUID IID_StringObservableMap = {
+    0x1e036276, 0x2f60, 0x55f6, {0xb7, 0xf3, 0xf8, 0x60, 0x79, 0xe6, 0x90, 0x0b}};
 inline constexpr GUID IID_NamedResourceIterator = {
     0x7fdcc3d7, 0xe13e, 0x5f76, {0xaf, 0xc6, 0x07, 0x69, 0xc4, 0x08, 0x63, 0x99}};
 inline constexpr GUID IID_NamedResourceIterable = {
@@ -205,12 +254,16 @@ inline constexpr GUID IID_StringReference = {
     0xfd416dfb, 0x2a07, 0x52eb, {0xaa, 0xe3, 0xdf, 0xce, 0x14, 0x11, 0x6c, 0x05}};
 inline constexpr GUID IID_BooleanReference = {
     0x3c00fd60, 0x2950, 0x5939, {0xa2, 0x1a, 0x2d, 0x12, 0xc5, 0xa0, 0x1b, 0x8a}};
+inline constexpr GUID IID_UInt8Reference = {
+    0xe5198cc8, 0x2873, 0x55f5, {0xb0, 0xa1, 0x84, 0xff, 0x9e, 0x4a, 0xad, 0x62}};
 inline constexpr GUID IID_Int32Reference = {
     0x548cefbd, 0xbc8a, 0x5fa0, {0x8d, 0xf2, 0x95, 0x74, 0x40, 0xfc, 0x8b, 0xf4}};
 inline constexpr GUID IID_UInt64Reference = {
     0x6755e376, 0x53bb, 0x568b, {0xa1, 0x1d, 0x17, 0x23, 0x98, 0x68, 0x30, 0x9e}};
 inline constexpr GUID IID_DoubleReference = {
     0x2f2d6c29, 0x5473, 0x5f3e, {0x92, 0xe7, 0x96, 0x57, 0x2b, 0xb9, 0x90, 0xe2}};
+inline constexpr GUID IID_ColorReference = {
+    0xab8e5d11, 0xb0c1, 0x5a21, {0x95, 0xae, 0xf1, 0x6b, 0xf3, 0xa3, 0x76, 0x24}};
 
 // The prepared MinGW SDK headers instantiate only the IReference<T>
 // specializations used by their own metadata surface, and omit HSTRING. Keep
@@ -225,6 +278,10 @@ struct BooleanReferenceAbi : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_Value(boolean* value) = 0;
 };
 
+struct UInt8ReferenceAbi : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Value(BYTE* value) = 0;
+};
+
 struct Int32ReferenceAbi : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_Value(INT32* value) = 0;
 };
@@ -235,6 +292,10 @@ struct UInt64ReferenceAbi : IInspectable {
 
 struct DoubleReferenceAbi : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_Value(DOUBLE* value) = 0;
+};
+
+struct ColorReferenceAbi : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Value(ABI::Windows::UI::Color* value) = 0;
 };
 
 class ValueSetObject final : public ComObject,
@@ -1137,6 +1198,92 @@ protected:
     }
 };
 
+class ToggleSwitchActivationFactory final
+    : public Factory<ToggleSwitchObject>,
+      public abi::NotImpl_IToggleSwitchStatics {
+public:
+    ToggleSwitchActivationFactory()
+        : Factory(L"Windows.UI.Xaml.Controls.ToggleSwitch") {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(
+            ::openxaml::iid::Windows_UI_Xaml_Controls_IToggleSwitchStatics,
+            wuxc::IToggleSwitchStatics)
+        return Factory<ToggleSwitchObject>::QueryInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_IsOnProperty(
+        wux::IDependencyProperty** value) override {
+        if (!value) return E_POINTER;
+        *value = ProjectProperty(ToggleSwitchIsOnProperty());
+        (*value)->AddRef();
+        return S_OK;
+    }
+
+protected:
+    HRESULT QueryStatics(REFIID iid, void** object) override {
+        OPENXAML_QI_ARM(
+            ::openxaml::iid::Windows_UI_Xaml_Controls_IToggleSwitchStatics,
+            wuxc::IToggleSwitchStatics)
+        return E_NOINTERFACE;
+    }
+};
+
+class NumberBoxActivationFactory final
+    : public MuxcComposableActivationFactory<NumberBoxObject>,
+      public IMuxcNumberBoxStatics {
+public:
+    NumberBoxActivationFactory()
+        : MuxcComposableActivationFactory(
+              L"Microsoft.UI.Xaml.Controls.NumberBox",
+              IID_IMuxcNumberBoxFactory) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IMuxcNumberBoxStatics, IMuxcNumberBoxStatics)
+        return MuxcComposableActivationFactory<NumberBoxObject>::QueryInterface(
+            iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+#define OPENXAML_NUMBERBOX_STATIC_PROPERTY(name)                         \
+    HRESULT STDMETHODCALLTYPE get_##name##Property(                      \
+        wux::IDependencyProperty** value) override {                     \
+        if (!value) return E_POINTER;                                    \
+        *value = ProjectProperty(NumberBox##name##Property());           \
+        (*value)->AddRef();                                              \
+        return S_OK;                                                     \
+    }
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(Minimum)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(Maximum)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(Value)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(SmallChange)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(LargeChange)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(Text)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(Header)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(HeaderTemplate)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(PlaceholderText)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(SelectionFlyout)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(SelectionHighlightColor)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(TextReadingOrder)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(
+        PreventKeyboardDisplayOnProgrammaticFocus)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(Description)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(ValidationMode)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(SpinButtonPlacementMode)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(IsWrapEnabled)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(AcceptsExpression)
+    OPENXAML_NUMBERBOX_STATIC_PROPERTY(NumberFormatter)
+#undef OPENXAML_NUMBERBOX_STATIC_PROPERTY
+
+protected:
+    HRESULT QueryStatics(REFIID iid, void** object) override {
+        OPENXAML_QI_ARM(IID_IMuxcNumberBoxStatics, IMuxcNumberBoxStatics)
+        return MuxcComposableActivationFactory<NumberBoxObject>::QueryStatics(
+            iid, object);
+    }
+};
+
 class TabViewItemActivationFactory final
     : public Factory<TabViewItemObject>,
       public IMuxcTabViewItemFactory {
@@ -1852,20 +1999,13 @@ public:
         return S_OK;
     }
 
-    // Refused, rather than accepted and dropped.
-    //
-    // The native store has a slot for a property-changed callback and calls it
-    // in the runtime's order. What is missing is the *sender*: the callback is
-    // handed a DependencyObject, and a property change arrives here as a
-    // change on a layout element, which has no way back to the WinRT object
-    // wrapping it. Registering a callback that would never fire, or would fire
-    // with the wrong sender, is worse than saying it is not implemented --
-    // a caller that is told E_NOTIMPL knows it has to observe the property
-    // another way, and RegisterPropertyChangedCallback is that way and works.
     HRESULT STDMETHODCALLTYPE CreateWithDefaultValueAndCallback(
-        IInspectable*, ABI::Windows::UI::Xaml::IPropertyChangedCallback*,
-        ABI::Windows::UI::Xaml::IPropertyMetadata**) override {
-        return E_NOTIMPL;
+        IInspectable* default_value,
+        ABI::Windows::UI::Xaml::IPropertyChangedCallback* callback,
+        ABI::Windows::UI::Xaml::IPropertyMetadata** result) override {
+        if (!result) return E_POINTER;
+        *result = new (std::nothrow) PropertyMetadataObject(default_value, callback);
+        return *result ? S_OK : E_OUTOFMEMORY;
     }
 
 };
@@ -1916,9 +2056,178 @@ public:
     }
 };
 
+// VisualTreeHelper must stay in the same object family as the elements it
+// inspects. Letting Windows' XAML implementation inspect an OpenXaml element
+// crosses apartment/runtime identities and returns RPC_E_WRONG_THREAD. The
+// compatibility controls currently expose no template-generated children, so
+// their public visual child count is zero until those templates are installed.
+class VisualTreeHelperFactory final
+    : public ComObject,
+      public IActivationFactory,
+      public wuxm::IVisualTreeHelperStatics {
+public:
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Media.VisualTreeHelper";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(
+            ::openxaml::iid::Windows_UI_Xaml_Media_IVisualTreeHelperStatics,
+            wuxm::IVisualTreeHelperStatics)
+        OPENXAML_QI_ARM(::openxaml::iid::IActivationFactory,
+                        IActivationFactory)
+        OPENXAML_QI_ARM(IID_IUnknown, IActivationFactory)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, IActivationFactory)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable**) override {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE FindElementsInHostCoordinatesPoint(
+        wf::Point, wux::IUIElement*,
+        __FIIterable_1_Windows__CUI__CXaml__CUIElement**) override {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE FindElementsInHostCoordinatesRect(
+        wf::Rect, wux::IUIElement*,
+        __FIIterable_1_Windows__CUI__CXaml__CUIElement**) override {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE FindAllElementsInHostCoordinatesPoint(
+        wf::Point, wux::IUIElement*, boolean,
+        __FIIterable_1_Windows__CUI__CXaml__CUIElement**) override {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE FindAllElementsInHostCoordinatesRect(
+        wf::Rect, wux::IUIElement*, boolean,
+        __FIIterable_1_Windows__CUI__CXaml__CUIElement**) override {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE GetChild(
+        wux::IDependencyObject*, INT32,
+        wux::IDependencyObject** result) override {
+        if (!result) return E_POINTER;
+        *result = nullptr;
+        return E_BOUNDS;
+    }
+    HRESULT STDMETHODCALLTYPE GetChildrenCount(
+        wux::IDependencyObject* reference, INT32* result) override {
+        if (!reference || !result) return E_INVALIDARG;
+        IOpenXamlNative* native = nullptr;
+        const HRESULT hr = reference->QueryInterface(
+            IID_IOpenXamlNative, reinterpret_cast<void**>(&native));
+        if (FAILED(hr)) return E_INVALIDARG;
+        native->Release();
+        *result = 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetParent(
+        wux::IDependencyObject*, wux::IDependencyObject** result) override {
+        if (!result) return E_POINTER;
+        *result = nullptr;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DisconnectChildrenRecursive(
+        wux::IUIElement*) override {
+        return S_OK;
+    }
+};
+
 // DurationHelper is a value-type helper rather than a visual element. The
 // generated Terminal XAML uses FromTimeSpan for pane animations during app
 // startup, so its statics must be available before any window is created.
+class SetterObject final : public ComObject,
+                           public abi::NotImpl_ISetter {
+public:
+    using PrimaryInterface = wux::ISetter;
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Setter";
+    }
+    ~SetterObject() {
+        if (property_) property_->Release();
+        if (value_) value_->Release();
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_ISetter,
+                        wux::ISetter)
+        OPENXAML_QI_ARM(IID_IUnknown, wux::ISetter)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wux::ISetter)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_Property(wux::IDependencyProperty** value) override {
+        if (!value) return E_POINTER;
+        *value = property_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Property(wux::IDependencyProperty* value) override {
+        if (value) value->AddRef();
+        if (property_) property_->Release();
+        property_ = value;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Value(IInspectable** value) override {
+        if (!value) return E_POINTER;
+        *value = value_;
+        if (*value) (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Value(IInspectable* value) override {
+        if (value) value->AddRef();
+        if (value_) value_->Release();
+        value_ = value;
+        return S_OK;
+    }
+
+private:
+    wux::IDependencyProperty* property_ = nullptr;
+    IInspectable* value_ = nullptr;
+};
+
+class VisualStateObject final : public ComObject,
+                                public abi::NotImpl_IVisualState {
+public:
+    using PrimaryInterface = wux::IVisualState;
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.VisualState";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IVisualState,
+                        wux::IVisualState)
+        OPENXAML_QI_ARM(IID_IUnknown, wux::IVisualState)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wux::IVisualState)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+};
+
+class VisualStateGroupObject final : public ComObject,
+                                     public abi::NotImpl_IVisualStateGroup {
+public:
+    using PrimaryInterface = wux::IVisualStateGroup;
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.VisualStateGroup";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_IVisualStateGroup,
+                        wux::IVisualStateGroup)
+        OPENXAML_QI_ARM(IID_IUnknown, wux::IVisualStateGroup)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wux::IVisualStateGroup)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+};
+
 class DurationHelperObject final : public ComObject,
                                    public abi::NotImpl_IDurationHelper {
 public:
@@ -2250,6 +2559,48 @@ private:
     boolean value_;
 };
 
+class BoxedUInt8Object final : public ComObject,
+                               public abi::NotImpl_IPropertyValue,
+                               public UInt8ReferenceAbi {
+public:
+    explicit BoxedUInt8Object(BYTE value) : value_(value) {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.Foundation.IReference`1<UInt8>";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_Foundation_IPropertyValue,
+                        wf::IPropertyValue)
+        OPENXAML_QI_ARM(IID_UInt8Reference, UInt8ReferenceAbi)
+        OPENXAML_QI_ARM(IID_IUnknown, wf::IPropertyValue)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wf::IPropertyValue)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Type(wf::PropertyType* value) override {
+        if (!value) return E_POINTER;
+        *value = wf::PropertyType_UInt8;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_IsNumericScalar(boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = true;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetUInt8(BYTE* value) override {
+        if (!value) return E_POINTER;
+        *value = value_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Value(BYTE* value) override {
+        return GetUInt8(value);
+    }
+
+private:
+    BYTE value_ = 0;
+};
+
 class BoxedUInt32Object final : public ComObject,
                                 public abi::NotImpl_IPropertyValue {
 public:
@@ -2284,6 +2635,36 @@ public:
     }
 private:
     UINT32 value_;
+};
+
+class BoxedColorObject final : public ComObject,
+                               public ColorReferenceAbi {
+public:
+    explicit BoxedColorObject(UINT32 argb)
+        : value_{static_cast<BYTE>((argb >> 24) & 0xff),
+                 static_cast<BYTE>((argb >> 16) & 0xff),
+                 static_cast<BYTE>((argb >> 8) & 0xff),
+                 static_cast<BYTE>(argb & 0xff)} {}
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.Foundation.IReference`1<Windows.UI.Color>";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_ColorReference, ColorReferenceAbi)
+        OPENXAML_QI_ARM(IID_IUnknown, ColorReferenceAbi)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable, ColorReferenceAbi)
+        *object = nullptr;
+        return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Value(ABI::Windows::UI::Color* value) override {
+        if (!value) return E_POINTER;
+        *value = value_;
+        return S_OK;
+    }
+
+private:
+    ABI::Windows::UI::Color value_{};
 };
 
 class BoxedUInt64Object final : public ComObject,
@@ -2428,6 +2809,12 @@ public:
     }
     OPENXAML_COM_BOILERPLATE()
     HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateUInt8(BYTE value, IInspectable** result) override {
+        if (!result) return E_POINTER;
+        auto* boxed = new (std::nothrow) BoxedUInt8Object(value);
+        *result = boxed ? static_cast<wf::IPropertyValue*>(boxed) : nullptr;
+        return boxed ? S_OK : E_OUTOFMEMORY;
+    }
     HRESULT STDMETHODCALLTYPE CreateString(HSTRING value, IInspectable** result) override {
         if (!result) return E_POINTER;
         *result = nullptr;
@@ -4431,6 +4818,122 @@ private:
     std::string scope_;
 };
 
+class ResourceQualifierMapObject final : public ComObject,
+                                         public StringMap,
+                                         public StringMapView,
+                                         public StringObservableMap {
+public:
+    ResourceQualifierMapObject() {
+        wchar_t locale[LOCALE_NAME_MAX_LENGTH]{};
+        if (GetUserDefaultLocaleName(locale, LOCALE_NAME_MAX_LENGTH) > 0)
+            values_.emplace(L"language", locale);
+        else
+            values_.emplace(L"language", L"en-US");
+    }
+    ~ResourceQualifierMapObject() override {
+        for (auto& [_, handler] : changed_handlers_) handler->Release();
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.ApplicationModel.Resources.Core."
+               L"ResourceQualifierObservableMap";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        if (IsEqualGUID(iid, IID_StringMap)) {
+            *object = static_cast<StringMap*>(this);
+        } else if (IsEqualGUID(iid, IID_StringMapView)) {
+            *object = static_cast<StringMapView*>(this);
+        } else if (IsEqualGUID(iid, IID_StringObservableMap)) {
+            *object = static_cast<StringObservableMap*>(this);
+        } else if (IsEqualGUID(iid, IID_IUnknown) ||
+                   IsEqualGUID(iid, ::openxaml::iid::IInspectable)) {
+            *object = static_cast<StringObservableMap*>(this);
+        } else {
+            *object = nullptr;
+            return TraceQueryInterfaceMiss(RuntimeClassName(), iid);
+        }
+        static_cast<IUnknown*>(static_cast<StringObservableMap*>(this))->AddRef();
+        return S_OK;
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE Lookup(HSTRING key, HSTRING* value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        const auto found = values_.find(Key(key));
+        if (found == values_.end()) return E_BOUNDS;
+        return WindowsCreateString(found->second.data(),
+                                   static_cast<UINT32>(found->second.size()),
+                                   value);
+    }
+    HRESULT STDMETHODCALLTYPE get_Size(UINT32* value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<UINT32>(values_.size());
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE HasKey(HSTRING key, boolean* value) override {
+        if (!value) return E_POINTER;
+        *value = values_.count(Key(key)) ? 1 : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetView(StringMapView** value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<StringMapView*>(this);
+        (*value)->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Insert(HSTRING key, HSTRING value,
+                                     boolean* replaced) override {
+        if (!replaced) return E_POINTER;
+        const std::wstring name = Key(key);
+        const auto found = values_.find(name);
+        *replaced = found != values_.end();
+        values_[name] = Key(value);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Remove(HSTRING key) override {
+        return values_.erase(Key(key)) ? S_OK : E_BOUNDS;
+    }
+    HRESULT STDMETHODCALLTYPE Clear() override {
+        values_.clear();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Split(StringMapView** first,
+                                    StringMapView** second) override {
+        if (!first || !second) return E_POINTER;
+        *first = static_cast<StringMapView*>(this);
+        (*first)->AddRef();
+        *second = nullptr;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE add_MapChanged(StringMapChangedHandler* handler,
+                                              EventRegistrationToken* token) override {
+        if (!handler || !token) return E_INVALIDARG;
+        token->value = ++next_token_;
+        handler->AddRef();
+        changed_handlers_[token->value] = handler;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE remove_MapChanged(
+        EventRegistrationToken token) override {
+        const auto found = changed_handlers_.find(token.value);
+        if (found == changed_handlers_.end()) return S_OK;
+        found->second->Release();
+        changed_handlers_.erase(found);
+        return S_OK;
+    }
+
+private:
+    static std::wstring Key(HSTRING value) {
+        UINT32 length = 0;
+        const wchar_t* text = WindowsGetStringRawBuffer(value, &length);
+        return text ? std::wstring(text, length) : std::wstring{};
+    }
+    std::map<std::wstring, std::wstring> values_;
+    std::map<LONGLONG, StringMapChangedHandler*> changed_handlers_;
+    LONGLONG next_token_ = 0;
+};
+
 class ResourceContextObject final : public ComObject,
                                     public abi::NotImpl_IResourceContext {
 public:
@@ -4450,6 +4953,13 @@ public:
     }
     OPENXAML_COM_BOILERPLATE()
 
+    HRESULT STDMETHODCALLTYPE get_QualifierValues(
+        StringObservableMap** value) override {
+        if (!value) return E_POINTER;
+        *value = static_cast<StringObservableMap*>(
+            new (std::nothrow) ResourceQualifierMapObject());
+        return *value ? S_OK : E_OUTOFMEMORY;
+    }
     HRESULT STDMETHODCALLTYPE Reset() override { return S_OK; }
     HRESULT STDMETHODCALLTYPE ResetQualifierValues(__FIIterable_1_HSTRING*) override {
         return S_OK;
@@ -6989,8 +7499,17 @@ PropertyChangedEventArgsActivationFactory& PropertyChangedEventArgsFactory() {
     static PropertyChangedEventArgsActivationFactory factory;
     return factory;
 }
-Factory<ContentControlObject>& ContentControlFactory() {
-    static Factory<ContentControlObject> factory(L"Windows.UI.Xaml.Controls.ContentControl");
+ComposableFactory<ContentControlObject, wuxc::IContentControlFactory,
+                  wuxc::IContentControl>&
+ContentControlFactory() {
+    static ComposableFactory<ContentControlObject, wuxc::IContentControlFactory,
+                             wuxc::IContentControl>
+        factory(L"Windows.UI.Xaml.Controls.ContentControl",
+                ::openxaml::iid::Windows_UI_Xaml_Controls_IContentControlFactory);
+    return factory;
+}
+Factory<DataTemplateObject>& DataTemplateFactory() {
+    static Factory<DataTemplateObject> factory(L"Windows.UI.Xaml.DataTemplate");
     return factory;
 }
 // ResourceDictionary is composable, and Terminal reaches that: Tab builds a
@@ -7031,6 +7550,22 @@ Factory<FrameObject>& FrameFactory() {
     static Factory<FrameObject> factory(L"Windows.UI.Xaml.Controls.Frame");
     return factory;
 }
+Factory<ComboBoxObject>& ComboBoxFactory() {
+    static Factory<ComboBoxObject> factory(L"Windows.UI.Xaml.Controls.ComboBox");
+    return factory;
+}
+ToggleSwitchActivationFactory& ToggleSwitchFactory() {
+    static ToggleSwitchActivationFactory factory;
+    return factory;
+}
+ComposableFactory<CheckBoxObject, wuxc::ICheckBoxFactory, wuxc::ICheckBox>&
+CheckBoxFactory() {
+    static ComposableFactory<CheckBoxObject, wuxc::ICheckBoxFactory,
+                             wuxc::ICheckBox>
+        factory(L"Windows.UI.Xaml.Controls.CheckBox",
+                ::openxaml::iid::Windows_UI_Xaml_Controls_ICheckBoxFactory);
+    return factory;
+}
 Factory<ItemsControlObject>& ItemsControlFactory() {
     static Factory<ItemsControlObject> factory(L"Windows.UI.Xaml.Controls.ItemsControl");
     return factory;
@@ -7048,6 +7583,11 @@ Factory<ButtonObject>& ButtonFactory() {
 }
 Factory<TextBoxObject>& TextBoxFactory() {
     static Factory<TextBoxObject> factory(L"Windows.UI.Xaml.Controls.TextBox"); return factory;
+}
+Factory<AutoSuggestBoxObject>& AutoSuggestBoxFactory() {
+    static Factory<AutoSuggestBoxObject> factory(
+        L"Windows.UI.Xaml.Controls.AutoSuggestBox");
+    return factory;
 }
 Factory<ThumbObject>& ThumbFactory() {
     static Factory<ThumbObject> factory(L"Windows.UI.Xaml.Controls.Primitives.Thumb"); return factory;
@@ -7076,6 +7616,18 @@ SymbolIconActivationFactory& SymbolIconFactory() {
 Factory<RectangleObject>& RectangleFactory() {
     static Factory<RectangleObject> factory(L"Windows.UI.Xaml.Shapes.Rectangle"); return factory;
 }
+Factory<SetterObject>& SetterFactory() {
+    static Factory<SetterObject> factory(L"Windows.UI.Xaml.Setter");
+    return factory;
+}
+Factory<VisualStateObject>& VisualStateFactory() {
+    static Factory<VisualStateObject> factory(L"Windows.UI.Xaml.VisualState");
+    return factory;
+}
+Factory<VisualStateGroupObject>& VisualStateGroupFactory() {
+    static Factory<VisualStateGroupObject> factory(L"Windows.UI.Xaml.VisualStateGroup");
+    return factory;
+}
 
 FontFamilyFactory& TheFontFamilyFactory() {
     static FontFamilyFactory factory;
@@ -7096,6 +7648,10 @@ GridFactory& TheGridFactory() {
 }
 LayoutInformationFactory& TheLayoutInformationFactory() {
     static LayoutInformationFactory factory;
+    return factory;
+}
+VisualTreeHelperFactory& TheVisualTreeHelperFactory() {
+    static VisualTreeHelperFactory factory;
     return factory;
 }
 DurationHelperFactory& TheDurationHelperFactory() {
@@ -7119,6 +7675,38 @@ Factory<TabViewObject>& TheTabViewFactory() {
     static Factory<TabViewObject> factory(L"Microsoft.UI.Xaml.Controls.TabView");
     return factory;
 }
+MuxcComposableActivationFactory<NavigationViewObject>&
+TheNavigationViewFactory() {
+    static MuxcComposableActivationFactory<NavigationViewObject> factory(
+        L"Microsoft.UI.Xaml.Controls.NavigationView",
+        IID_IMuxcNavigationViewFactory);
+    return factory;
+}
+NumberBoxActivationFactory& TheNumberBoxFactory() {
+    static NumberBoxActivationFactory factory;
+    return factory;
+}
+MuxcComposableActivationFactory<NavigationViewItemObject>&
+TheNavigationViewItemFactory() {
+    static MuxcComposableActivationFactory<NavigationViewItemObject> factory(
+        L"Microsoft.UI.Xaml.Controls.NavigationViewItem",
+        IID_IMuxcNavigationViewItemFactory);
+    return factory;
+}
+MuxcComposableActivationFactory<NavigationViewItemHeaderObject>&
+TheNavigationViewItemHeaderFactory() {
+    static MuxcComposableActivationFactory<NavigationViewItemHeaderObject> factory(
+        L"Microsoft.UI.Xaml.Controls.NavigationViewItemHeader",
+        IID_IMuxcNavigationViewItemHeaderFactory);
+    return factory;
+}
+MuxcComposableActivationFactory<BreadcrumbBarObject>&
+TheBreadcrumbBarFactory() {
+    static MuxcComposableActivationFactory<BreadcrumbBarObject> factory(
+        L"Microsoft.UI.Xaml.Controls.BreadcrumbBar",
+        IID_IMuxcBreadcrumbBarFactory);
+    return factory;
+}
 TabViewItemActivationFactory& TheTabViewItemFactory() {
     static TabViewItemActivationFactory factory;
     return factory;
@@ -7137,6 +7725,10 @@ ProgressRingActivationFactory& TheProgressRingFactory() {
 }
 InfoBarActivationFactory& TheInfoBarFactory() {
     static InfoBarActivationFactory factory;
+    return factory;
+}
+Factory<InfoBadgeObject>& TheInfoBadgeFactory() {
+    static Factory<InfoBadgeObject> factory(L"Microsoft.UI.Xaml.Controls.InfoBadge");
     return factory;
 }
 AppBarButtonActivationFactory& TheAppBarButtonFactory() {
@@ -7271,6 +7863,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &PropertyChangedEventArgsFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.ContentControl") == 0)
         return &ContentControlFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.DataTemplate") == 0)
+        return &DataTemplateFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.ContentDialog") == 0)
         return &TheContentDialogFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.ResourceDictionary") == 0)
@@ -7279,6 +7873,14 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &XamlControlsResourcesFactory();
     if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.TabView") == 0)
         return &TheTabViewFactory();
+    if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.NavigationView") == 0)
+        return &TheNavigationViewFactory();
+    if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.NavigationViewItem") == 0)
+        return &TheNavigationViewItemFactory();
+    if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.NavigationViewItemHeader") == 0)
+        return &TheNavigationViewItemHeaderFactory();
+    if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.BreadcrumbBar") == 0)
+        return &TheBreadcrumbBarFactory();
     if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.TabViewItem") == 0)
         return &TheTabViewItemFactory();
     if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.SplitButton") == 0)
@@ -7287,8 +7889,12 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &TheCommandBarFlyoutFactory();
     if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.ProgressRing") == 0)
         return &TheProgressRingFactory();
+    if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.NumberBox") == 0)
+        return &TheNumberBoxFactory();
     if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.InfoBar") == 0)
         return &TheInfoBarFactory();
+    if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.InfoBadge") == 0)
+        return &TheInfoBadgeFactory();
     if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.BitmapIconSource") == 0)
         return &MuxcBitmapIconSourceFactory();
     if (wcscmp(name, L"Microsoft.UI.Xaml.Controls.ImageIconSource") == 0)
@@ -7301,6 +7907,12 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &UserControlFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.Frame") == 0)
         return &FrameFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.ComboBox") == 0)
+        return &ComboBoxFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.ToggleSwitch") == 0)
+        return &ToggleSwitchFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.CheckBox") == 0)
+        return &CheckBoxFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.ItemsControl") == 0)
         return &ItemsControlFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.ListView") == 0)
@@ -7323,6 +7935,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.AppBarButton") == 0)
         return &TheAppBarButtonFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.TextBox") == 0) return &TextBoxFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.AutoSuggestBox") == 0)
+        return &AutoSuggestBoxFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.ToolTip") == 0) return &ToolTipFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.Primitives.Thumb") == 0) return &ThumbFactory();
     if (wcscmp(name, L"Microsoft.Terminal.Control.VisualBellLight") == 0)
@@ -7333,6 +7947,11 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.FontIcon") == 0) return &FontIconFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.SymbolIcon") == 0) return &SymbolIconFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Shapes.Rectangle") == 0) return &RectangleFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Setter") == 0) return &SetterFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.VisualState") == 0)
+        return &VisualStateFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.VisualStateGroup") == 0)
+        return &VisualStateGroupFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Media.FontFamily") == 0)
         return &TheFontFamilyFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Media.ImageBrush") == 0)
@@ -7347,6 +7966,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &RowDefinitionFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.Primitives.LayoutInformation") == 0)
         return &TheLayoutInformationFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Media.VisualTreeHelper") == 0)
+        return &TheVisualTreeHelperFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.DurationHelper") == 0)
         return &TheDurationHelperFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.GridLengthHelper") == 0)
@@ -7386,6 +8007,16 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
 
 constexpr GUID kComponentConnectorIid = {
     0xf6790987, 0xe6e5, 0x47f2, {0x92, 0xc6, 0xec, 0xcc, 0xe4, 0xba, 0x15, 0x9a}};
+constexpr GUID kComponentConnector2Iid = {
+    0xdc8f368b, 0xeccc, 0x498e,
+    {0xb1, 0x39, 0x91, 0x14, 0x22, 0x54, 0xd7, 0xae}};
+
+struct ScopedComponentConnector {
+    ~ScopedComponentConnector() {
+        if (value) value->Release();
+    }
+    wuxmk::IComponentConnector* value = nullptr;
+};
 
 double ConstantNumber(const xbf::Constant& value) {
     switch (value.kind) {
@@ -7427,9 +8058,11 @@ IInspectable* BoxXbfResourceConstant(const xbf::Constant& value) {
         return static_cast<wf::IPropertyValue*>(new (std::nothrow)
             BoxedInt32Object(value.signed_value));
     case xbf::ConstantKind::Enum:
-    case xbf::ConstantKind::Color:
         return static_cast<wf::IPropertyValue*>(new (std::nothrow)
             BoxedUInt32Object(value.unsigned_value));
+    case xbf::ConstantKind::Color:
+        return static_cast<ColorReferenceAbi*>(new (std::nothrow)
+            BoxedColorObject(value.unsigned_value));
     default:
         return nullptr;
     }
@@ -7462,6 +8095,10 @@ HRESULT ActivateXbfObject(const std::string& type, IInspectable** result) {
 
     HRESULT hr = TheApplicationFactory().ActivateLocalXamlType(type, result);
     if (SUCCEEDED(hr)) return hr;
+    // A provider that recognizes the type owns its activation result. Falling
+    // through after its constructor failed would replace the useful error
+    // with REGDB_E_CLASSNOTREG from the global WinRT registry.
+    if (hr != REGDB_E_CLASSNOTREG) return hr;
 
     HSTRING class_name = nullptr;
     hr = WindowsCreateString(name.c_str(), static_cast<UINT32>(name.size()), &class_name);
@@ -7514,6 +8151,7 @@ wux::GridLength ConstantGridLength(const xbf::Constant& value) {
 HRESULT BuildXbfObject(const std::shared_ptr<xbf::Object>& graph,
                        IInspectable* existing,
                        wuxmk::IComponentConnector* connector,
+                       wuxmk::IComponentConnector* binding_connector,
                        IOpenXamlNameScope* name_scope,
                        IInspectable** result);
 
@@ -7643,6 +8281,20 @@ HRESULT InsertGridDefinition(IInspectable* parent, IInspectable* child,
 
 HRESULT SetSingleChild(IInspectable* parent, IInspectable* child,
                        const std::string& property) {
+    if (property == "Windows.UI.Xaml.Controls.ItemsControl.ItemTemplate") {
+        wuxc::IItemsControl* items = nullptr;
+        HRESULT hr = Query(parent,
+                           ::openxaml::iid::Windows_UI_Xaml_Controls_IItemsControl,
+                           &items);
+        if (FAILED(hr)) return hr;
+        wux::IDataTemplate* data_template = nullptr;
+        hr = Query(child, ::openxaml::iid::Windows_UI_Xaml_IDataTemplate,
+                   &data_template);
+        if (SUCCEEDED(hr)) hr = items->put_ItemTemplate(data_template);
+        if (data_template) data_template->Release();
+        items->Release();
+        return hr;
+    }
     if (property == "Windows.UI.Xaml.Controls.ToolTipService.ToolTip") return S_OK;
     if (property == "Windows.UI.Xaml.UIElement.ContextFlyout") {
         wux::IUIElement4* element = nullptr;
@@ -7694,6 +8346,36 @@ HRESULT SetSingleChild(IInspectable* parent, IInspectable* child,
         if (FAILED(hr)) return hr;
         hr = info_bar->put_ActionButton(child);
         info_bar->Release();
+        return hr;
+    }
+    if (property == "Microsoft.UI.Xaml.Controls.NavigationView.Header" ||
+        property == "Microsoft.UI.Xaml.Controls.NavigationView.AutoSuggestBox") {
+        IMuxcNavigationView* navigation = nullptr;
+        HRESULT hr = parent->QueryInterface(
+            IID_IMuxcNavigationView, reinterpret_cast<void**>(&navigation));
+        if (FAILED(hr)) return hr;
+        hr = EndsWith(property, ".Header")
+            ? navigation->put_Header(child)
+            : navigation->put_AutoSuggestBox(child);
+        navigation->Release();
+        return hr;
+    }
+    if (property == "Microsoft.UI.Xaml.Controls.NavigationViewItem.InfoBadge") {
+        IMuxcNavigationViewItem3* item = nullptr;
+        HRESULT hr = parent->QueryInterface(
+            IID_IMuxcNavigationViewItem3, reinterpret_cast<void**>(&item));
+        if (FAILED(hr)) return hr;
+        hr = item->put_InfoBadge(child);
+        item->Release();
+        return hr;
+    }
+    if (property == "Microsoft.UI.Xaml.Controls.BreadcrumbBar.ItemTemplate") {
+        IMuxcBreadcrumbBar* breadcrumb = nullptr;
+        HRESULT hr = parent->QueryInterface(
+            IID_IMuxcBreadcrumbBar, reinterpret_cast<void**>(&breadcrumb));
+        if (FAILED(hr)) return hr;
+        hr = breadcrumb->put_ItemTemplate(child);
+        breadcrumb->Release();
         return hr;
     }
     if (property == "Microsoft.UI.Xaml.Controls.TabView.TabStripHeader" ||
@@ -7903,7 +8585,7 @@ public:
 
             IInspectable* child = nullptr;
             hr = BuildXbfObject(
-                graph_, nullptr, connector, name_scope, &child);
+                graph_, nullptr, connector, nullptr, name_scope, &child);
             if (connector) connector->Release();
             if (SUCCEEDED(hr)) {
                 hr = InsertDeferredCollectionChild(
@@ -7960,8 +8642,11 @@ std::string XbfObjectName(const std::shared_ptr<xbf::Object>& graph) {
 
 HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
                         IInspectable* parent, wuxmk::IComponentConnector* connector,
+                        wuxmk::IComponentConnector* binding_connector,
                         IOpenXamlNameScope* name_scope) {
     if (!value.object) return E_INVALIDARG;
+    if (property == "Windows.UI.Xaml.Controls.Frame.ContentTransitions")
+        return S_OK;
     IOpenXamlResourceDictionary* resources = nullptr;
     const bool merged =
         property == "Windows.UI.Xaml.ResourceDictionary.MergedDictionaries";
@@ -7975,6 +8660,11 @@ HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
     unsigned logical_index = 0;
     for (const auto& item : value.object->items) {
         if (item.kind != xbf::Value::Kind::Object || !item.object) continue;
+        if (property == "Windows.UI.Xaml.Controls.TextBlock.Inlines" &&
+            item.object->type != "Windows.UI.Xaml.Documents.Run" &&
+            item.object->type != "Windows.UI.Xaml.Documents.LineBreak") {
+            continue;
+        }
         // x:Load="False" is encoded as an internal DeferredElement whose
         // payload lives in a custom-runtime-data substream. It is a marker,
         // not an activatable WinRT class, and stays absent from the live
@@ -8009,7 +8699,8 @@ HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
         }
         IInspectable* child = nullptr;
         HRESULT hr = BuildXbfObject(
-            item.object, nullptr, connector, name_scope, &child);
+            item.object, nullptr, connector, binding_connector,
+            name_scope, &child);
         if (FAILED(hr)) {
             if (resources) resources->Release();
             return hr;
@@ -8032,6 +8723,38 @@ HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
             // Lights are retained by the generated component connector.  The
             // GDI island backend has no composition-light renderer.
             hr = S_OK;
+        } else if (property ==
+                       "Windows.UI.Xaml.VisualStateManager.VisualStateGroups" ||
+                   property == "Windows.UI.Xaml.VisualStateGroup.States" ||
+                   property == "Windows.UI.Xaml.VisualState.Setters") {
+            // These nonvisual collections are retained by the generated
+            // connector/binding objects. Building every child above is what
+            // gives x:Bind its strongly typed VisualState/Setter references;
+            // the renderer does not otherwise consume state collections yet.
+            hr = S_OK;
+        } else if (property ==
+                       "Microsoft.UI.Xaml.Controls.NavigationView.MenuItems" ||
+                   property ==
+                       "Microsoft.UI.Xaml.Controls.NavigationView.FooterMenuItems") {
+            IMuxcNavigationView* projected = nullptr;
+            hr = parent->QueryInterface(IID_IMuxcNavigationView,
+                                        reinterpret_cast<void**>(&projected));
+            if (SUCCEEDED(hr)) {
+                auto* navigation = static_cast<NavigationViewObject*>(projected);
+                hr = navigation->AppendMenuItem(
+                    child, EndsWith(property, ".FooterMenuItems"));
+                projected->Release();
+            }
+        } else if (property ==
+                       "Microsoft.UI.Xaml.Controls.NavigationViewItem.MenuItems") {
+            IMuxcNavigationViewItem* projected = nullptr;
+            hr = parent->QueryInterface(IID_IMuxcNavigationViewItem,
+                                        reinterpret_cast<void**>(&projected));
+            if (SUCCEEDED(hr)) {
+                auto* item = static_cast<NavigationViewItemObject*>(projected);
+                hr = item->AppendMenuItem(child);
+                projected->Release();
+            }
         } else if (property ==
                        "Microsoft.UI.Xaml.Controls.CommandBarFlyout.PrimaryCommands" ||
                    property ==
@@ -8059,7 +8782,8 @@ HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
             if (item.kind != xbf::Value::Kind::Object || !item.object) continue;
             IInspectable* child = nullptr;
             HRESULT hr = BuildXbfObject(
-                item.object, nullptr, connector, name_scope, &child);
+                item.object, nullptr, connector, binding_connector,
+                name_scope, &child);
             if (FAILED(hr)) {
                 resources->Release();
                 return hr;
@@ -8078,7 +8802,148 @@ HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
 
 HRESULT ApplyConstantProperty(const std::string& property, const xbf::Constant& value,
                               IInspectable* object) {
-    if (property == "x:ConnectionId" || property == "x:Uid") return S_OK;
+    if (property == "x:ConnectionId") return S_OK;
+    if (property == "x:Uid") {
+        const std::string& uid = value.string_value;
+        if (uid.empty()) return E_INVALIDARG;
+        const ResourceCatalog& catalog = ConfiguredResourceCatalog();
+
+        const auto resource = [&](const char* member) -> const std::string* {
+            return catalog.FindAny(uid + "." + member);
+        };
+        const auto boxed_string = [](const std::string& text,
+                                     IInspectable** boxed) -> HRESULT {
+            if (!boxed) return E_POINTER;
+            *boxed = nullptr;
+            wf::IPropertyValueStatics* statics = BoxingStatics();
+            if (!statics) return E_NOINTERFACE;
+            HSTRING string = nullptr;
+            HRESULT hr = HStringFromUtf8(text, &string);
+            if (SUCCEEDED(hr)) hr = statics->CreateString(string, boxed);
+            WindowsDeleteString(string);
+            return hr;
+        };
+
+        if (const std::string* text_value = resource("Text")) {
+            wuxc::ITextBlock* text = nullptr;
+            HRESULT hr = Query(object,
+                               ::openxaml::iid::Windows_UI_Xaml_Controls_ITextBlock,
+                               &text);
+            if (SUCCEEDED(hr)) {
+                HSTRING string = nullptr;
+                hr = HStringFromUtf8(*text_value, &string);
+                if (SUCCEEDED(hr)) hr = text->put_Text(string);
+                WindowsDeleteString(string);
+                text->Release();
+                if (FAILED(hr)) return hr;
+            }
+        }
+
+        if (const std::string* content_value = resource("Content")) {
+            wuxc::IContentControl* content = nullptr;
+            HRESULT hr = Query(
+                object, ::openxaml::iid::Windows_UI_Xaml_Controls_IContentControl,
+                &content);
+            if (SUCCEEDED(hr)) {
+                IInspectable* boxed = nullptr;
+                hr = boxed_string(*content_value, &boxed);
+                if (SUCCEEDED(hr)) hr = content->put_Content(boxed);
+                if (boxed) boxed->Release();
+                content->Release();
+                if (FAILED(hr)) return hr;
+            }
+        }
+
+        HSTRING runtime_name = nullptr;
+        std::string owner;
+        if (SUCCEEDED(object->GetRuntimeClassName(&runtime_name)) && runtime_name) {
+            owner = Utf8FromHString(runtime_name);
+            WindowsDeleteString(runtime_name);
+        }
+        if (owner == "Microsoft.UI.Xaml.Controls.NumberBox") {
+            if (const std::string* placeholder = resource("PlaceholderText")) {
+                IMuxcNumberBox* number_box = nullptr;
+                HRESULT hr = object->QueryInterface(
+                    IID_IMuxcNumberBox,
+                    reinterpret_cast<void**>(&number_box));
+                if (SUCCEEDED(hr)) {
+                    HSTRING string = nullptr;
+                    hr = HStringFromUtf8(*placeholder, &string);
+                    if (SUCCEEDED(hr)) hr = number_box->put_PlaceholderText(string);
+                    WindowsDeleteString(string);
+                    number_box->Release();
+                    if (FAILED(hr)) return hr;
+                }
+            }
+        }
+        const bool custom_runtime_content =
+            owner.rfind("Windows.UI.Xaml.", 0) != 0 &&
+            owner.rfind("Microsoft.UI.Xaml.", 0) != 0;
+        if (custom_runtime_content && resource("Header")) {
+            // The application style supplies a custom composable ContentControl's
+            // header/help presenters. Preserve that observable template shape
+            // while XBF Style custom streams are still deferred, without
+            // changing Terminal's own control or page implementation.
+            wuxc::IContentControl* content = nullptr;
+            if (SUCCEEDED(Query(
+                    object,
+                    ::openxaml::iid::Windows_UI_Xaml_Controls_IContentControl,
+                    &content))) {
+                IOpenXamlLocalizedContentTemplate* fallback = nullptr;
+                if (SUCCEEDED(content->QueryInterface(
+                        IID_IOpenXamlLocalizedContentTemplate,
+                        reinterpret_cast<void**>(&fallback)))) {
+                    const std::pair<const char*, LocalizedTemplateMember> members[] = {
+                        {"Header", LocalizedTemplateMember::Header},
+                        {"HelpText", LocalizedTemplateMember::Help}};
+                    for (const auto& [name, member] : members) {
+                        const std::string* localized = resource(name);
+                        if (!localized) continue;
+                        HSTRING string = nullptr;
+                        HRESULT hr = HStringFromUtf8(*localized, &string);
+                        if (SUCCEEDED(hr)) {
+                            hr = fallback->SetLocalizedTemplateText(
+                                static_cast<UINT32>(member), string);
+                        }
+                        WindowsDeleteString(string);
+                        if (FAILED(hr)) {
+                            fallback->Release();
+                            content->Release();
+                            return hr;
+                        }
+                    }
+                    fallback->Release();
+                }
+                content->Release();
+            }
+        }
+        if (!owner.empty()) {
+            static constexpr const char* stored_members[] = {
+                "Header", "HelpText", "Description", "ToolTipService.ToolTip"};
+            for (const char* member : stored_members) {
+                const std::string* text_value = resource(member);
+                if (!text_value) continue;
+                const openxaml::DependencyProperty* native =
+                    openxaml::FindPropertyOnOwner(owner, member);
+                if (!native) continue;
+                wux::IDependencyObject* dependency = nullptr;
+                HRESULT hr = Query(object,
+                                   ::openxaml::iid::Windows_UI_Xaml_IDependencyObject,
+                                   &dependency);
+                if (FAILED(hr)) continue;
+                IInspectable* boxed = nullptr;
+                hr = boxed_string(*text_value, &boxed);
+                if (SUCCEEDED(hr)) {
+                    wux::IDependencyProperty* projected = ProjectProperty(*native);
+                    hr = dependency->SetValue(projected, boxed);
+                }
+                if (boxed) boxed->Release();
+                dependency->Release();
+                if (FAILED(hr)) return hr;
+            }
+        }
+        return S_OK;
+    }
 
     if (property == "Windows.UI.Xaml.DependencyObject.Name") {
         wux::IFrameworkElement* framework = nullptr;
@@ -8105,6 +8970,72 @@ HRESULT ApplyConstantProperty(const std::string& property, const xbf::Constant& 
         if (FAILED(hr)) return hr;
         hr = dictionary->SetSourceText(value.string_value.c_str());
         dictionary->Release();
+        return hr;
+    }
+
+    if (property == "Windows.UI.Xaml.FrameworkElement.Tag") {
+        wux::IFrameworkElement* framework = nullptr;
+        HRESULT hr = Query(object,
+                           ::openxaml::iid::Windows_UI_Xaml_IFrameworkElement,
+                           &framework);
+        if (FAILED(hr)) return hr;
+        IInspectable* boxed = BoxXbfResourceConstant(value);
+        if (!boxed) {
+            framework->Release();
+            return E_OUTOFMEMORY;
+        }
+        hr = framework->put_Tag(boxed);
+        boxed->Release();
+        framework->Release();
+        return hr;
+    }
+
+    if (property.rfind("Microsoft.UI.Xaml.Controls.NavigationView.", 0) == 0) {
+        IMuxcNavigationView* navigation = nullptr;
+        HRESULT hr = object->QueryInterface(
+            IID_IMuxcNavigationView, reinterpret_cast<void**>(&navigation));
+        if (FAILED(hr)) return hr;
+        const std::string name = property.substr(property.rfind('.') + 1);
+        if (name == "IsPaneOpen")
+            hr = navigation->put_IsPaneOpen(ConstantInteger(value) != 0);
+        else if (name == "IsSettingsVisible")
+            hr = navigation->put_IsSettingsVisible(ConstantInteger(value) != 0);
+        else if (name == "IsPaneToggleButtonVisible")
+            hr = navigation->put_IsPaneToggleButtonVisible(
+                ConstantInteger(value) != 0);
+        else if (name == "AlwaysShowHeader")
+            hr = navigation->put_AlwaysShowHeader(ConstantInteger(value) != 0);
+        else {
+            IMuxcNavigationView2* navigation2 = nullptr;
+            hr = object->QueryInterface(
+                IID_IMuxcNavigationView2,
+                reinterpret_cast<void**>(&navigation2));
+            if (SUCCEEDED(hr) && name == "IsBackButtonVisible")
+                hr = navigation2->put_IsBackButtonVisible(ConstantInteger(value));
+            else if (SUCCEEDED(hr) && name == "PaneDisplayMode")
+                hr = navigation2->put_PaneDisplayMode(ConstantInteger(value));
+            else if (SUCCEEDED(hr))
+                hr = S_OK;
+            if (navigation2) navigation2->Release();
+        }
+        navigation->Release();
+        return hr;
+    }
+
+    if (property.rfind(
+            "Microsoft.UI.Xaml.Controls.NavigationViewItem.", 0) == 0) {
+        IMuxcNavigationViewItem2* item = nullptr;
+        HRESULT hr = object->QueryInterface(
+            IID_IMuxcNavigationViewItem2, reinterpret_cast<void**>(&item));
+        if (FAILED(hr)) return hr;
+        const std::string name = property.substr(property.rfind('.') + 1);
+        if (name == "SelectsOnInvoked")
+            hr = item->put_SelectsOnInvoked(ConstantInteger(value) != 0);
+        else if (name == "IsExpanded")
+            hr = item->put_IsExpanded(ConstantInteger(value) != 0);
+        else
+            hr = S_OK;
+        item->Release();
         return hr;
     }
 
@@ -8276,17 +9207,34 @@ HRESULT ApplyConstantProperty(const std::string& property, const xbf::Constant& 
 
 HRESULT ApplyXbfProperty(const std::string& property, const xbf::Value& value,
                          IInspectable* object, wuxmk::IComponentConnector* connector,
+                         wuxmk::IComponentConnector* binding_connector,
                          IOpenXamlNameScope* name_scope) {
     if (value.kind == xbf::Value::Kind::Constant)
         return ApplyConstantProperty(property, value.constant, object);
     if (value.kind != xbf::Value::Kind::Object || !value.object) return S_OK;
+    if (property == "Windows.UI.Xaml.Controls.ItemsControl.ItemTemplate") {
+        wuxc::IAutoSuggestBox* auto_suggest = nullptr;
+        const HRESULT query = object->QueryInterface(
+            ::openxaml::iid::Windows_UI_Xaml_Controls_IAutoSuggestBox,
+            reinterpret_cast<void**>(&auto_suggest));
+        if (auto_suggest) auto_suggest->Release();
+        if (SUCCEEDED(query)) return S_OK;
+    }
+    if (property == "Windows.UI.Xaml.Controls.Frame.ContentTransitions" ||
+        property == "Windows.UI.Xaml.Controls.ContentControl.ContentTransitions" ||
+        property == "Windows.UI.Xaml.Controls.AutoSuggestBox.ItemTemplate" ||
+        property == "Microsoft.UI.Xaml.Controls.BreadcrumbBar.ItemTemplate") {
+        return S_OK;
+    }
     if (value.object->type.size() >= 6 &&
         value.object->type.compare(value.object->type.size() - 6, 6, "#value") == 0)
-        return ApplyCollection(property, value, object, connector, name_scope);
+        return ApplyCollection(property, value, object, connector,
+                               binding_connector, name_scope);
 
     IInspectable* child = nullptr;
     HRESULT hr = BuildXbfObject(
-        value.object, nullptr, connector, name_scope, &child);
+        value.object, nullptr, connector, binding_connector,
+        name_scope, &child);
     if (FAILED(hr)) return hr;
     hr = SetSingleChild(object, child, property);
     child->Release();
@@ -8296,6 +9244,7 @@ HRESULT ApplyXbfProperty(const std::string& property, const xbf::Value& value,
 HRESULT BuildXbfObject(const std::shared_ptr<xbf::Object>& graph,
                        IInspectable* existing,
                        wuxmk::IComponentConnector* connector,
+                       wuxmk::IComponentConnector* binding_connector,
                        IOpenXamlNameScope* name_scope,
                        IInspectable** result) {
     if (!graph || !result) return E_INVALIDARG;
@@ -8328,9 +9277,32 @@ HRESULT BuildXbfObject(const std::shared_ptr<xbf::Object>& graph,
         return hr;
     }
 
+    const auto connection = graph->properties.find("x:ConnectionId");
+    ScopedComponentConnector local_binding;
+    if (!binding_connector && connector &&
+        connection != graph->properties.end() &&
+        connection->second.kind == xbf::Value::Kind::Constant) {
+        wuxmk::IComponentConnector2* connector2 = nullptr;
+        if (SUCCEEDED(connector->QueryInterface(
+                kComponentConnector2Iid,
+                reinterpret_cast<void**>(&connector2)))) {
+            const INT32 connection_id =
+                ConstantInteger(connection->second.constant);
+            hr = connector2->GetBindingConnector(
+                connection_id, object, &local_binding.value);
+            connector2->Release();
+            if (FAILED(hr)) {
+                TraceXbfFailure("binding-connector", graph->type, hr);
+                object->Release();
+                return hr;
+            }
+            binding_connector = local_binding.value;
+        }
+    }
+
     for (const auto& [property, value] : graph->properties) {
         hr = ApplyXbfProperty(
-            property, value, object, connector, name_scope);
+            property, value, object, connector, binding_connector, name_scope);
         if (FAILED(hr)) {
             TraceXbfFailure("property", property, hr);
             object->Release();
@@ -8357,7 +9329,8 @@ HRESULT BuildXbfObject(const std::shared_ptr<xbf::Object>& graph,
                         continue;
                     IInspectable* child = nullptr;
                     hr = BuildXbfObject(
-                        value.object, nullptr, connector, name_scope, &child);
+                        value.object, nullptr, connector, binding_connector,
+                        name_scope, &child);
                     if (FAILED(hr)) break;
                     hr = dictionary->InsertResource(key.c_str(), child);
                     child->Release();
@@ -8389,7 +9362,6 @@ HRESULT BuildXbfObject(const std::shared_ptr<xbf::Object>& graph,
         }
     }
 
-    const auto connection = graph->properties.find("x:ConnectionId");
     if (connector && connection != graph->properties.end() &&
         connection->second.kind == xbf::Value::Kind::Constant) {
         const INT32 connection_id = ConstantInteger(connection->second.constant);
@@ -8405,6 +9377,14 @@ HRESULT BuildXbfObject(const std::shared_ptr<xbf::Object>& graph,
             TraceXbfFailure("connection", graph->type, hr);
             object->Release();
             return hr;
+        }
+        if (binding_connector) {
+            hr = binding_connector->Connect(connection_id, object);
+            if (FAILED(hr)) {
+                TraceXbfFailure("binding-connection", graph->type, hr);
+                object->Release();
+                return hr;
+            }
         }
     }
     *result = object;
@@ -8424,7 +9404,7 @@ HRESULT MaterializeXbfImpl(const std::shared_ptr<xbf::Object>& graph,
         return E_OUTOFMEMORY;
     }
     const HRESULT hr = BuildXbfObject(
-        graph, component, connector, name_scope, &root);
+        graph, component, connector, nullptr, name_scope, &root);
     if (root) root->Release();
     name_scope->Release();
     if (connector) connector->Release();
@@ -8437,6 +9417,11 @@ namespace openxaml::winrt {
 HRESULT MaterializeXbf(const std::shared_ptr<xbf::Object>& graph,
                        IInspectable* component) {
     return MaterializeXbfImpl(graph, component);
+}
+
+HRESULT ActivateXamlPage(HSTRING runtime_class, IInspectable** result) {
+    if (!runtime_class || !result) return E_INVALIDARG;
+    return ActivateXbfObject(Utf8FromHString(runtime_class), result);
 }
 }  // namespace openxaml::winrt
 
@@ -8463,6 +9448,19 @@ extern "C" __declspec(dllexport) HRESULT WINAPI
 OpenXamlGetActivationFactory(HSTRING classid, REFIID iid, void** result) {
     if (!result) return E_POINTER;
     *result = nullptr;
+    const wchar_t* const class_name =
+        WindowsGetStringRawBuffer(classid, nullptr);
+    // Scalar boxes are an operating-system ABI, not part of the XAML object
+    // family. Prefer the platform factory when it exists so native Windows
+    // callers receive the same IPropertyValue/IReference<T> implementation
+    // as every other process. The local factory remains the fallback for Wine
+    // environments that do not provide Windows.Foundation.PropertyValue.
+    if (class_name &&
+        wcscmp(class_name, L"Windows.Foundation.PropertyValue") == 0) {
+        const HRESULT platform = RoGetActivationFactory(classid, iid, result);
+        if (SUCCEEDED(platform)) return platform;
+        *result = nullptr;
+    }
     IActivationFactory* factory = nullptr;
     const HRESULT hr = DllGetActivationFactory(classid, &factory);
     if (FAILED(hr)) return hr;

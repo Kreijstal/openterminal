@@ -54,6 +54,11 @@ int main() {
     Require(!parsed.Has("Microsoft.Terminal.Control/Resources", "Missing"),
             "missing key");
     Require(parsed.Size("Missing/Resources") == 0, "missing scope");
+    const auto* any_xaml_property = parsed.FindAny("NewTabRun.Text");
+    Require(any_xaml_property && *any_xaml_property == "Open a new tab",
+            "scope-independent x:Uid lookup");
+    Require(!parsed.FindAny("Missing.Text"),
+            "scope-independent missing x:Uid lookup");
     const auto* xaml_property = parsed.Find(
         "TerminalApp/Resources", "NewTabRun/Text");
     Require(xaml_property && *xaml_property == "Open a new tab",

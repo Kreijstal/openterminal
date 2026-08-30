@@ -242,11 +242,15 @@ inline ::IInspectable* UnsetValue() {
 
 class PropertyMetadataObject final : public ComObject, public abi::NotImpl_IPropertyMetadata {
 public:
-    explicit PropertyMetadataObject(IInspectable* default_value)
-        : default_value_(default_value) {
+    explicit PropertyMetadataObject(
+        IInspectable* default_value,
+        wux::IPropertyChangedCallback* property_changed = nullptr)
+        : default_value_(default_value), property_changed_(property_changed) {
         if (default_value_) default_value_->AddRef();
+        if (property_changed_) property_changed_->AddRef();
     }
     ~PropertyMetadataObject() override {
+        if (property_changed_) property_changed_->Release();
         if (default_value_) default_value_->Release();
     }
 
@@ -284,6 +288,7 @@ public:
 
 private:
     IInspectable* default_value_ = nullptr;
+    wux::IPropertyChangedCallback* property_changed_ = nullptr;
 };
 
 // --- DependencyProperty -------------------------------------------------------

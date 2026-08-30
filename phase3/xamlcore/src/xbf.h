@@ -66,6 +66,27 @@ struct Constant {
     std::vector<float> floats;
 };
 
+struct StyleSetter {
+    bool property_resolved = false;
+    Reference property;
+    std::string property_name;
+    Reference property_owner;
+
+    enum class ValueKind {
+        None,
+        Container,
+        String,
+        StaticResource,
+        ThemeResource,
+        Object,
+        Self,
+    };
+    ValueKind value_kind = ValueKind::None;
+    Constant value;
+    std::string text;
+    std::uint32_t token = 0;
+};
+
 enum class NodeType : std::uint8_t {
     PushScope = 1,
     PopScope = 2,
@@ -116,6 +137,7 @@ struct Node {
     std::int32_t custom_data_version = 0;
     std::vector<std::string> static_resources;
     std::vector<std::string> theme_resources;
+    std::vector<StyleSetter> style_setters;
 };
 
 struct Substream {

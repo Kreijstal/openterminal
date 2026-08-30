@@ -311,6 +311,33 @@ private:
                 break;
             }
 
+            // VisualStateGroupCollection custom data is still an ordinary
+            // object graph in its referenced substream.  The optimized form
+            // starts with PushScope/GetValue against the collection object
+            // already on the parent stack, just like FrameworkElement.Resources.
+            // Materialize that graph so named states, setters, and (critically)
+            // their generated x:Bind connection ids reach IComponentConnector.
+            const bool visual_state_collection =
+                target->type.size() > 6 &&
+                target->type.compare(target->type.size() - 6, 6, "#value") == 0 &&
+                (node.custom_data_version == 1 ||
+                 (node.custom_data_version >= 3 && node.custom_data_version <= 5));
+            if (visual_state_collection && node.substream >= 0 &&
+                static_cast<std::size_t>(node.substream) != stream_index_) {
+                (void)Writer(document_, static_cast<std::size_t>(node.substream),
+                             target).Run();
+                const auto property = target->type.substr(0, target->type.size() - 6);
+                const auto nested = target->properties.find(property);
+                if (nested != target->properties.end() &&
+                    nested->second.kind == Value::Kind::Object &&
+                    nested->second.object) {
+                    for (auto& value : nested->second.object->items)
+                        target->items.push_back(std::move(value));
+                    target->properties.erase(nested);
+                }
+                break;
+            }
+
             const bool deferred_element =
                 target->type == "Windows.UI.Xaml.Internal.DeferredElement" ||
                 target->type == "stable-type:746";

@@ -208,13 +208,20 @@ OPENXAML_MUXC_CONTROL(InfoBadge, "InfoBadge");
 OPENXAML_MUXC_CONTROL(InfoBar, "InfoBar");
 OPENXAML_MUXC_CONTROL(NavigationView, "NavigationView");
 OPENXAML_MUXC_CONTROL(NavigationViewItem, "NavigationViewItem");
-OPENXAML_MUXC_CONTROL(NumberBox, "NumberBox");
 OPENXAML_MUXC_CONTROL(ProgressRing, "ProgressRing");
 OPENXAML_MUXC_CONTROL(SplitButton, "SplitButton");
 OPENXAML_MUXC_CONTROL(TeachingTip, "TeachingTip");
 OPENXAML_MUXC_CONTROL(TreeView, "TreeView");
 
 #undef OPENXAML_MUXC_CONTROL
+
+class NumberBox : public MuxContentControl {
+public:
+    NumberBox();
+protected:
+    Size MeasureOverride(Size available) override;
+    Size ArrangeOverride(Size final_size) override;
+};
 
 // TabView is populated through its WinRT TabItems vector rather than through
 // ContentControl.Content. It therefore needs a real multi-child layout

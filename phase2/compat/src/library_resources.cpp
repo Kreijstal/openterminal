@@ -8,6 +8,7 @@
 #include <winstring.h>
 
 #include <algorithm>
+#include <cctype>
 #include <map>
 #include <fstream>
 #include <memory>
@@ -63,7 +64,23 @@ const Json::Value* findResource(const std::wstring_view scope,
     if (!resources.isObject()) return nullptr;
     if (resources.isMember(keyName)) return &resources[keyName];
     std::replace(keyName.begin(), keyName.end(), '/', '.');
-    return resources.isMember(keyName) ? &resources[keyName] : nullptr;
+    if (resources.isMember(keyName)) return &resources[keyName];
+
+    // MRT resource identifiers are case-insensitive. Generated enum labels
+    // can therefore ask for `Cleartype`, `Mingw`, or `Wsl` while the RESW
+    // contains the branded spellings `ClearType`, `MinGW`, or `WSL`.
+    // Preserve those Windows semantics when reading the distilled JSON.
+    for (const auto& candidate : resources.getMemberNames())
+    {
+        if (candidate.size() != keyName.size()) continue;
+        const bool equal = std::equal(
+            candidate.begin(), candidate.end(), keyName.begin(),
+            [](const unsigned char left, const unsigned char right) {
+                return std::tolower(left) == std::tolower(right);
+            });
+        if (equal) return &resources[candidate];
+    }
+    return nullptr;
 }
 }
 
