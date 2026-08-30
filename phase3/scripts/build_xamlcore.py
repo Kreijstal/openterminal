@@ -297,7 +297,7 @@ def main() -> None:
              str(Path(__file__).resolve()), *sys.argv[1:], "--no-xvfb"],
             check=False).returncode)
 
-    for tool in ("x86_64-w64-mingw32-g++", "wine"):
+    for tool in ("x86_64-w64-mingw32-g++", "x86_64-w64-mingw32-windres", "wine"):
         require_tool(tool)
 
     root = ensure_tmp_root(args.root)
@@ -363,9 +363,9 @@ def main() -> None:
     common = ["x86_64-w64-mingw32-g++", "-std=c++17", "-O2", "-Wall",
               "-DOPENXAML_STABLE_XBF_SCHEMA",
               "-static", "-static-libgcc", "-static-libstdc++"]
-    libraries = ["-lruntimeobject", "-lole32", "-luuid", "-lgdi32",
+    libraries = ["-lruntimeobject", "-lole32", "-loleaut32", "-luuid", "-lgdi32",
                  "-luser32", "-lmsimg32", "-ldwrite", "-ldcomp",
-                 "-ld3d11", "-ldxgi"]
+                 "-ld3d11", "-ldxgi", "-lwindowscodecs"]
 
     dll = root / "Microsoft.UI.Xaml.dll"
     import_library = root / "libopenxaml.dll.a"
@@ -523,6 +523,28 @@ def main() -> None:
     run(common + ["-o", str(tab_view_selection_smoke),
                   str(PHASE3_DIR / "xamlcore" / "client" /
                       "tab_view_selection_smoke.cpp")]
+        + includes + libraries)
+
+    # One binary is run in two fresh processes on Windows: once with the
+    # pinned official WinUI 2 DLL and once with this build's DLL. It uses
+    # DllGetActivationFactory explicitly, so the result cannot accidentally
+    # come from a package registration or a stale app-local deployment.
+    muxc_tabview_oracle = root / "muxc_tabview_oracle.exe"
+    muxc_tabview_manifest = root / "muxc_tabview_oracle_manifest.o"
+    run(["x86_64-w64-mingw32-windres",
+         "-I", str(PHASE3_DIR / "harness"),
+         str(PHASE3_DIR / "xamlcore" / "client" /
+             "muxc_tabview_oracle.rc"),
+         str(muxc_tabview_manifest)])
+    # Keep this ABI-only client at O0. GCC 16 devirtualizes the hand-declared
+    # Microsoft.UI.Xaml interface (whose implementation lives in a separately
+    # loaded PE) into an invalid direct call at O2; the raw ABI being measured
+    # is independent of client optimization. The loaded DLL keeps its normal
+    # optimization; only this observation client is compiled conservatively.
+    run(common + ["-O0", "-municode", "-o", str(muxc_tabview_oracle),
+                  str(PHASE3_DIR / "xamlcore" / "client" /
+                      "muxc_tabview_oracle.cpp"),
+                  str(muxc_tabview_manifest)]
         + includes + libraries)
 
     external_surface_test = root / "external_surface_binding_test.exe"

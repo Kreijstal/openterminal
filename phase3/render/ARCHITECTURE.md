@@ -367,10 +367,9 @@ them leaves pixels that could be mistaken for composited ones.
 
 DirectComposition takes the other route for a GPU source: it imports the
 resource the producer already owns and gives it a visual, rather than reading
-pixels back.  `ExternalSurfaceKind::CpuBgraImage` is `E_NOTIMPL` there, because
-turning a producer's CPU image into a composition surface means uploading and
-owning a copy of it every frame, which is a different design and not one this
-project has decided.
+pixels back. A small immutable `CpuBgraImage`, such as a decoded control icon,
+is uploaded to an owned composition surface. The generation and lifetime token
+keep that upload cached until the producer changes the image.
 
 ## Text boundary
 

@@ -20,12 +20,16 @@
 #include <memory>
 #include <roapi.h>
 #include <set>
+#include <string>
+#include <vector>
+#include <wincodec.h>
 
 #include "border.h"
 #include "collection.h"
 #include "com.h"
 #include "core_dispatcher.h"
 #include "external_surface_binding.h"
+#include "external_surface_reader.h"
 #include "properties.h"
 #include "strings.h"
 #include "grid.h"
@@ -3928,6 +3932,72 @@ struct IMuxcTabView : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE remove_TabStripDrop(EventRegistrationToken) = 0;
 };
 
+inline constexpr GUID IID_IMuxcTabViewTabCloseRequestedEventArgs = {
+    0xd56ab9b2, 0xe264, 0x5c7e,
+    {0xa1, 0xcb, 0xe4, 0x1a, 0x16, 0xa6, 0xc6, 0xc6}};
+
+struct IMuxcTabViewTabCloseRequestedEventArgs : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Item(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Tab(void**) = 0;
+};
+
+struct MuxcTabCloseRequestedHandlerAbi;
+struct MuxcTabCloseRequestedHandlerVtbl {
+    HRESULT (STDMETHODCALLTYPE* QueryInterface)(
+        MuxcTabCloseRequestedHandlerAbi*, REFIID, void**);
+    ULONG (STDMETHODCALLTYPE* AddRef)(MuxcTabCloseRequestedHandlerAbi*);
+    ULONG (STDMETHODCALLTYPE* Release)(MuxcTabCloseRequestedHandlerAbi*);
+    HRESULT (STDMETHODCALLTYPE* Invoke)(
+        MuxcTabCloseRequestedHandlerAbi*, IMuxcTabView*,
+        IMuxcTabViewTabCloseRequestedEventArgs*);
+};
+struct MuxcTabCloseRequestedHandlerAbi {
+    const MuxcTabCloseRequestedHandlerVtbl* lpVtbl;
+};
+
+class TabViewTabCloseRequestedEventArgsObject final
+    : public ComObject,
+      public IMuxcTabViewTabCloseRequestedEventArgs {
+public:
+    explicit TabViewTabCloseRequestedEventArgsObject(IInspectable* item)
+        : item_(item) {
+        if (item_) item_->AddRef();
+    }
+    ~TabViewTabCloseRequestedEventArgsObject() override {
+        if (item_) item_->Release();
+    }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Microsoft.UI.Xaml.Controls.TabViewTabCloseRequestedEventArgs";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(IID_IMuxcTabViewTabCloseRequestedEventArgs,
+                        IMuxcTabViewTabCloseRequestedEventArgs)
+        OPENXAML_QI_ARM(IID_IUnknown,
+                        IMuxcTabViewTabCloseRequestedEventArgs)
+        OPENXAML_QI_ARM(::openxaml::iid::IInspectable,
+                        IMuxcTabViewTabCloseRequestedEventArgs)
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    OPENXAML_COM_BOILERPLATE()
+    HRESULT STDMETHODCALLTYPE get_Item(void** value) override {
+        return Get(value);
+    }
+    HRESULT STDMETHODCALLTYPE get_Tab(void** value) override {
+        return Get(value);
+    }
+
+private:
+    HRESULT Get(void** value) {
+        if (!value) return E_POINTER;
+        *value = item_;
+        if (item_) item_->AddRef();
+        return S_OK;
+    }
+    IInspectable* item_ = nullptr;
+};
+
 using InspectableCollection = Vector<
     __FIVector_1_IInspectable, __FIIterable_1_IInspectable,
     __FIIterator_1_IInspectable, IInspectable, __FIVectorView_1_IInspectable>;
@@ -4008,6 +4078,10 @@ public:
             {0xff, 0x20, 0x20, 0x20}));
     }
     ~TabViewObject() override {
+        for (IInspectable* item : tab_items_.Projected())
+            ClearCloseCallback(item);
+        for (auto& [_, handler] : tab_close_requested_handlers_)
+            handler->lpVtbl->Release(handler);
         for (auto& [_, handler] : selection_changed_handlers_)
             handler->Release();
         for (auto* value : {tab_strip_header_, tab_strip_header_template_,
@@ -4092,6 +4166,14 @@ public:
     }
     HRESULT STDMETHODCALLTYPE put_SelectedIndex(INT32 value) override {
         if (value < -1) return E_INVALIDARG;
+        // WinUI's public properties are independent while the TabView is
+        // detached. Its SelectedIndex callback only forwards into the
+        // templated ListView when that control exists; it does not synthesize
+        // SelectedItem or SelectionChanged on a bare activated object.
+        if (!IsHosted()) {
+            selected_index_ = value;
+            return S_OK;
+        }
         IInspectable* item = nullptr;
         if (value >= 0) {
             const HRESULT hr = tab_items_.GetAt(static_cast<UINT32>(value), &item);
@@ -4106,6 +4188,11 @@ public:
     }
     HRESULT STDMETHODCALLTYPE put_SelectedItem(void* value) override {
         auto* const item = static_cast<IInspectable*>(value);
+        // The real control stores this dependency property locally until its
+        // internal ListView is loaded. Keep the detached ABI boundary equally
+        // inert; hosted selection below continues to provide Terminal's
+        // synchronized SelectedIndex and SelectionChanged behavior.
+        if (!IsHosted()) return PutObject(selected_item_, item);
         INT32 index = -1;
         if (item) {
             const UINT32 count = tab_items_.Count();
@@ -4155,7 +4242,6 @@ public:
     HRESULT STDMETHODCALLTYPE remove_##name(EventRegistrationToken token) override { \
         return RemoveEvent(token);                                           \
     }
-    OPENXAML_MUXC_EVENT(TabCloseRequested)
     OPENXAML_MUXC_EVENT(TabDroppedOutside)
     OPENXAML_MUXC_EVENT(AddTabButtonClick)
     OPENXAML_MUXC_EVENT(TabItemsChanged)
@@ -4164,6 +4250,30 @@ public:
     OPENXAML_MUXC_EVENT(TabStripDragOver)
     OPENXAML_MUXC_EVENT(TabStripDrop)
 #undef OPENXAML_MUXC_EVENT
+
+    HRESULT STDMETHODCALLTYPE add_TabCloseRequested(
+        void* handler, EventRegistrationToken* token) override {
+        if (!handler || !token) return E_INVALIDARG;
+        auto* abi = static_cast<MuxcTabCloseRequestedHandlerAbi*>(handler);
+        token->value = InterlockedIncrement64(&next_tab_close_token_);
+        abi->lpVtbl->AddRef(abi);
+        try {
+            tab_close_requested_handlers_.emplace(token->value, abi);
+        } catch (...) {
+            abi->lpVtbl->Release(abi);
+            token->value = 0;
+            return E_OUTOFMEMORY;
+        }
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE remove_TabCloseRequested(
+        EventRegistrationToken token) override {
+        const auto found = tab_close_requested_handlers_.find(token.value);
+        if (found == tab_close_requested_handlers_.end()) return S_OK;
+        found->second->lpVtbl->Release(found->second);
+        tab_close_requested_handlers_.erase(found);
+        return S_OK;
+    }
 
     HRESULT STDMETHODCALLTYPE add_SelectionChanged(
         wuxc::ISelectionChangedEventHandler* handler,
@@ -4176,6 +4286,13 @@ public:
     }
 
 private:
+    bool IsHosted() {
+        wux::IXamlRoot* root = nullptr;
+        const bool hosted = SUCCEEDED(get_XamlRoot(&root)) && root;
+        if (root) root->Release();
+        return hosted;
+    }
+
     void RebuildVisualChildren() {
         visual_children_.clear();
         AppendVisual(tab_strip_header_);
@@ -4188,8 +4305,54 @@ private:
         IOpenXamlNative* native = nullptr;
         if (SUCCEEDED(value->QueryInterface(
                 IID_IOpenXamlNative, reinterpret_cast<void**>(&native)))) {
-            visual_children_.push_back(native->LayoutElement());
+            auto* const element = native->LayoutElement();
+            visual_children_.push_back(element);
+            if (auto* const tab = dynamic_cast<openxaml::TabViewItem*>(element)) {
+                tab->SetCloseRequested([this, value] {
+                    RaiseTabCloseRequested(value);
+                });
+            }
             native->Release();
+        }
+    }
+
+    static void ClearCloseCallback(IInspectable* value) {
+        if (!value) return;
+        IOpenXamlNative* native = nullptr;
+        if (SUCCEEDED(value->QueryInterface(
+                IID_IOpenXamlNative, reinterpret_cast<void**>(&native))) && native) {
+            if (auto* const tab =
+                    dynamic_cast<openxaml::TabViewItem*>(native->LayoutElement())) {
+                tab->SetCloseRequested({});
+            }
+            native->Release();
+        }
+    }
+
+    void RaiseTabCloseRequested(IInspectable* item) noexcept {
+        try {
+            std::vector<MuxcTabCloseRequestedHandlerAbi*> snapshot;
+            snapshot.reserve(tab_close_requested_handlers_.size());
+            for (const auto& [_, handler] : tab_close_requested_handlers_) {
+                handler->lpVtbl->AddRef(handler);
+                snapshot.push_back(handler);
+            }
+            auto* args = new (std::nothrow)
+                TabViewTabCloseRequestedEventArgsObject(item);
+            if (!args) {
+                for (auto* handler : snapshot)
+                    handler->lpVtbl->Release(handler);
+                return;
+            }
+            auto* sender = static_cast<IMuxcTabView*>(this);
+            auto* projected_args =
+                static_cast<IMuxcTabViewTabCloseRequestedEventArgs*>(args);
+            for (auto* handler : snapshot) {
+                (void)handler->lpVtbl->Invoke(handler, sender, projected_args);
+                handler->lpVtbl->Release(handler);
+            }
+            projected_args->Release();
+        } catch (...) {
         }
     }
 
@@ -4287,11 +4450,11 @@ private:
 
     INT32 tab_width_mode_ = 0;
     INT32 close_button_overlay_mode_ = 0;
-    INT32 selected_index_ = -1;
+    INT32 selected_index_ = 0;
     boolean add_button_visible_ = 1;
     boolean can_drag_tabs_ = 0;
-    boolean can_reorder_tabs_ = 0;
-    boolean allow_drop_tabs_ = 0;
+    boolean can_reorder_tabs_ = 1;
+    boolean allow_drop_tabs_ = 1;
     IInspectable* tab_strip_header_ = nullptr;
     IInspectable* tab_strip_header_template_ = nullptr;
     IInspectable* tab_strip_footer_ = nullptr;
@@ -4304,6 +4467,9 @@ private:
     IInspectable* selected_item_ = nullptr;
     std::map<LONGLONG, wuxc::ISelectionChangedEventHandler*>
         selection_changed_handlers_;
+    volatile LONGLONG next_tab_close_token_ = 0;
+    std::map<LONGLONG, MuxcTabCloseRequestedHandlerAbi*>
+        tab_close_requested_handlers_;
     InspectableCollection tab_items_;
     std::vector<openxaml::Element*> visual_children_;
 };
@@ -4333,6 +4499,11 @@ struct IMuxcTabViewItemFactory : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE CreateInstance(void*, void**, void**) = 0;
 };
 
+std::shared_ptr<const openxaml::ExternalSurfaceProvider>
+LoadMuxcBitmapIconSurface(IInspectable* source) noexcept;
+std::shared_ptr<const openxaml::ExternalSurfaceProvider>
+LoadMuxcIconSurface(IInspectable* source) noexcept;
+
 class TabViewItemObject final
     : public ContentControlObjectBase<openxaml::TabViewItem>,
       public abi::NotImpl_ISelectorItem,
@@ -4344,13 +4515,28 @@ public:
         label_.set_font_size(12.0);
         label_.set_foreground_brush(openxaml::BrushValue::SolidColor(
             {0xff, 0xf2, 0xf2, 0xf2}));
+        close_label_.set_text("x");
+        close_label_.set_font_size(14.0);
+        close_label_.set_foreground_brush(openxaml::BrushValue::SolidColor(
+            {0xff, 0xf2, 0xf2, 0xf2}));
+        close_label_.set_box_size({32.0, 32.0});
+        icon_.set_width(16.0);
+        icon_.set_height(16.0);
+        icon_.set_visibility(openxaml::Visibility::Collapsed);
         SetSelectedVisual(false);
         layout_.include_source = false;
         visual_children_.push_back(&label_);
+        visual_children_.push_back(&close_label_);
+        visual_children_.push_back(&icon_);
         layout_.supplemental = &visual_children_;
         (void)layout_.AttachVisualChild(label_);
+        (void)layout_.AttachVisualChild(close_label_);
+        (void)layout_.AttachVisualChild(icon_);
     }
     ~TabViewItemObject() override {
+        layout_.SetCloseRequested({});
+        layout_.DetachVisualChild(icon_);
+        layout_.DetachVisualChild(close_label_);
         layout_.DetachVisualChild(label_);
         if (header_) header_->Release();
         if (header_template_) header_template_->Release();
@@ -4385,8 +4571,27 @@ public:
     }
     OPENXAML_TAB_ITEM_OBJECT(Header, header_)
     OPENXAML_TAB_ITEM_OBJECT(HeaderTemplate, header_template_)
-    OPENXAML_TAB_ITEM_OBJECT(IconSource, icon_source_)
 #undef OPENXAML_TAB_ITEM_OBJECT
+
+    HRESULT STDMETHODCALLTYPE get_IconSource(void** value) override {
+        if (!value) return E_POINTER;
+        *value = icon_source_;
+        if (icon_source_) icon_source_->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_IconSource(void* value) override {
+        auto* next = static_cast<IInspectable*>(value);
+        if (next) next->AddRef();
+        if (icon_source_) icon_source_->Release();
+        icon_source_ = next;
+
+        auto surface = LoadMuxcIconSurface(icon_source_);
+        icon_.SetExternalSurfaceProvider(surface);
+        icon_.set_visibility(surface ? openxaml::Visibility::Visible
+                                     : openxaml::Visibility::Collapsed);
+        icon_.NotifyExternalSurfaceChanged();
+        return S_OK;
+    }
 
     HRESULT STDMETHODCALLTYPE get_IsClosable(boolean* value) override {
         if (!value) return E_POINTER;
@@ -4395,6 +4600,12 @@ public:
     }
     HRESULT STDMETHODCALLTYPE put_IsClosable(boolean value) override {
         is_closable_ = value != 0;
+        // The compatibility TabView has no WinUI hover/active visual-state
+        // template to reveal this affordance later. Keep it visible for every
+        // closable tab; Terminal still owns the close request and confirmation.
+        close_label_.set_visibility(
+            is_closable_ ? openxaml::Visibility::Visible
+                         : openxaml::Visibility::Collapsed);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_IsSelected(boolean* value) override {
@@ -4431,6 +4642,30 @@ public:
         return RemoveEvent(token);
     }
 
+    void InvokeIslandPointerEvent(
+        IslandPointerEventKind kind,
+        wuxi::IPointerRoutedEventArgs* args) noexcept override {
+        if (is_closable_ && kind == IslandPointerEventKind::Released && args) {
+            try {
+                ABI::Windows::UI::Input::IPointerPoint* point = nullptr;
+                wf::Point position{};
+                if (SUCCEEDED(args->GetCurrentPoint(
+                        static_cast<wux::IUIElement*>(this), &point)) &&
+                    point && SUCCEEDED(point->get_Position(&position)) &&
+                    position.X >= layout_.render_size().width - 32.0f) {
+                    point->Release();
+                    layout_.RequestClose();
+                    (void)args->put_Handled(1);
+                    return;
+                }
+                if (point) point->Release();
+            } catch (...) {
+            }
+        }
+        ContentControlObjectBase<openxaml::TabViewItem>::InvokeIslandPointerEvent(
+            kind, args);
+    }
+
 private:
     void SetSelectedVisual(bool selected) {
         layout_.set_selected(selected);
@@ -4442,6 +4677,9 @@ private:
         label_.set_background_brush(openxaml::BrushValue::SolidColor(
             selected ? openxaml::Color{0xff, 0x3a, 0x3a, 0x3a}
                      : openxaml::Color{0xff, 0x24, 0x24, 0x24}));
+        close_label_.set_background_brush(openxaml::BrushValue::SolidColor(
+            selected ? openxaml::Color{0xff, 0x3a, 0x3a, 0x3a}
+                     : openxaml::Color{0xff, 0x24, 0x24, 0x24}));
     }
 
     IInspectable* header_ = nullptr;
@@ -4450,6 +4688,8 @@ private:
     boolean is_closable_ = 1;
     boolean is_selected_ = 0;
     openxaml::TextBlock label_;
+    OpaqueSyntheticTextBlock close_label_;
+    openxaml::Border icon_;
     std::vector<openxaml::Element*> visual_children_;
 };
 
@@ -5189,7 +5429,10 @@ public:
         if (target_) target_->Release();
         if (overlay_input_pass_through_) overlay_input_pass_through_->Release();
         if (xaml_root_) xaml_root_->Release();
-        for (auto& [_, handler] : handlers_) handler->Release();
+        ReleaseHandlers(opened_handlers_);
+        ReleaseHandlers(closed_handlers_);
+        ReleaseHandlers(opening_handlers_);
+        ReleaseHandlers(closing_handlers_);
     }
     const wchar_t* RuntimeClassName() const override {
         return L"Windows.UI.Xaml.Controls.MenuFlyout";
@@ -5251,33 +5494,106 @@ public:
     }
     HRESULT STDMETHODCALLTYPE add_Opened(__FIEventHandler_1_IInspectable* handler,
                                           EventRegistrationToken* token) override {
-        return Add(handler, token);
+        return Add(handler, token, opened_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_Opened(EventRegistrationToken token) override {
-        return Remove(token);
+        return Remove(token, opened_handlers_);
     }
     HRESULT STDMETHODCALLTYPE add_Closed(__FIEventHandler_1_IInspectable* handler,
                                           EventRegistrationToken* token) override {
-        return Add(handler, token);
+        return Add(handler, token, closed_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_Closed(EventRegistrationToken token) override {
-        return Remove(token);
+        return Remove(token, closed_handlers_);
     }
     HRESULT STDMETHODCALLTYPE add_Opening(__FIEventHandler_1_IInspectable* handler,
                                            EventRegistrationToken* token) override {
-        return Add(handler, token);
+        return Add(handler, token, opening_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_Opening(EventRegistrationToken token) override {
-        return Remove(token);
+        return Remove(token, opening_handlers_);
     }
     HRESULT STDMETHODCALLTYPE ShowAt(wux::IFrameworkElement* target) override {
         if (target) target->AddRef();
         if (target_) target_->Release();
         target_ = target;
+
+        InvokeHandlers(opening_handlers_);
         open_ = true;
+
+        HMENU menu = CreatePopupMenu();
+        if (!menu) {
+            open_ = false;
+            InvokeHandlers(closed_handlers_);
+            return HRESULT_FROM_WIN32(GetLastError());
+        }
+
+        std::vector<MenuCommand> commands;
+        UINT next_command = 1;
+        const HRESULT build = AppendNativeItems(menu, &items_, commands,
+                                                next_command);
+        if (GetEnvironmentVariableW(L"OPENXAML_TRACE_QI", nullptr, 0)) {
+            char diagnostic[192]{};
+            std::snprintf(diagnostic, sizeof(diagnostic),
+                          "OpenXaml: MenuFlyout.ShowAt items=%u commands=%u "
+                          "native_items=%d build=0x%08lx\n",
+                          items_.Count(), static_cast<unsigned>(commands.size()),
+                          GetMenuItemCount(menu),
+                          static_cast<unsigned long>(build));
+            OutputDebugStringA(diagnostic);
+        }
+        if (FAILED(build)) {
+            DestroyMenu(menu);
+            open_ = false;
+            InvokeHandlers(closed_handlers_);
+            ReleaseCommands(commands);
+            return build;
+        }
+
+        InvokeHandlers(opened_handlers_);
+
+        POINT position{};
+        if (!GetCursorPos(&position)) position = {};
+        // ShowAt runs on the island's UI thread, so its active top-level HWND
+        // is a more reliable owner than WindowFromPoint. The latter can name
+        // the desktop or another process when input was synthesized, and
+        // TrackPopupMenuEx immediately dismisses a menu with such an owner.
+        HWND owner = GetActiveWindow();
+        if (!owner) owner = GetForegroundWindow();
+        if (!owner) {
+            owner = WindowFromPoint(position);
+            if (owner) owner = GetAncestor(owner, GA_ROOT);
+        }
+
+        RECT owner_bounds{};
+        if (owner && GetWindowRect(owner, &owner_bounds) &&
+            (position.x < owner_bounds.left || position.x >= owner_bounds.right ||
+             position.y < owner_bounds.top || position.y >= owner_bounds.bottom)) {
+            position.x = owner_bounds.left + 8;
+            position.y = owner_bounds.top + 32;
+        }
+
+        const UINT selected = TrackPopupMenuEx(
+            menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
+            position.x, position.y + 2, owner, nullptr);
+        DestroyMenu(menu);
+
+        open_ = false;
+        InvokeClosingHandlers();
+        if (selected) {
+            for (const auto& command : commands) {
+                if (command.id == selected) {
+                    (void)command.action->InvokeClick();
+                    break;
+                }
+            }
+        }
+        ReleaseCommands(commands);
+        InvokeHandlers(closed_handlers_);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE Hide() override {
+        if (open_) EndMenu();
         open_ = false;
         return S_OK;
     }
@@ -5329,10 +5645,10 @@ public:
     HRESULT STDMETHODCALLTYPE add_Closing(
         __FITypedEventHandler_2_Windows__CUI__CXaml__CControls__CPrimitives__CFlyoutBase_Windows__CUI__CXaml__CControls__CPrimitives__CFlyoutBaseClosingEventArgs* handler,
         EventRegistrationToken* token) override {
-        return Add(handler, token);
+        return Add(handler, token, closing_handlers_);
     }
     HRESULT STDMETHODCALLTYPE remove_Closing(EventRegistrationToken token) override {
-        return Remove(token);
+        return Remove(token, closing_handlers_);
     }
 
     HRESULT STDMETHODCALLTYPE get_OverlayInputPassThroughElement(
@@ -5382,10 +5698,17 @@ public:
         *value = open_;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE ShowAt(wux::IDependencyObject*,
+    HRESULT STDMETHODCALLTYPE ShowAt(wux::IDependencyObject* target,
                                       wuxcp::IFlyoutShowOptions*) override {
-        open_ = true;
-        return S_OK;
+        wux::IFrameworkElement* element = nullptr;
+        if (target) {
+            (void)target->QueryInterface(
+                ::openxaml::iid::Windows_UI_Xaml_IFrameworkElement,
+                reinterpret_cast<void**>(&element));
+        }
+        const HRESULT result = ShowAt(element);
+        if (element) element->Release();
+        return result;
     }
 
     HRESULT STDMETHODCALLTYPE get_ShouldConstrainToRootBounds(boolean* value) override {
@@ -5415,27 +5738,203 @@ public:
         return S_OK;
     }
 
+public:
+    // Private bridge used by the native menu presenter to raise the public
+    // MenuFlyoutItem.Click event after TrackPopupMenuEx returns a command ID.
+    inline static constexpr GUID IID_IMenuFlyoutItemInvoke = {
+        0x9a91e63a, 0x0b48, 0x4a04,
+        {0xa1, 0x0c, 0x5c, 0xee, 0xb6, 0x3b, 0xf2, 0x99}};
+    struct IMenuFlyoutItemInvoke : IUnknown {
+        virtual HRESULT STDMETHODCALLTYPE InvokeClick() = 0;
+    };
+
 private:
+    struct MenuCommand {
+        UINT id = 0;
+        IMenuFlyoutItemInvoke* action = nullptr;
+    };
+    using FlyoutEventHandler = __FIEventHandler_1_IInspectable;
+    using FlyoutClosingHandler =
+        __FITypedEventHandler_2_Windows__CUI__CXaml__CControls__CPrimitives__CFlyoutBase_Windows__CUI__CXaml__CControls__CPrimitives__CFlyoutBaseClosingEventArgs;
+
+    static std::wstring CopyHString(HSTRING value) {
+        UINT32 length = 0;
+        const wchar_t* text = WindowsGetStringRawBuffer(value, &length);
+        return text ? std::wstring(text, length) : std::wstring{};
+    }
+    static HRESULT AppendNativeItems(
+        HMENU menu,
+        __FIVector_1_Windows__CUI__CXaml__CControls__CMenuFlyoutItemBase* items,
+        std::vector<MenuCommand>& commands, UINT& next_command) {
+        if (!menu || !items) return E_INVALIDARG;
+        UINT32 count = 0;
+        HRESULT result = items->get_Size(&count);
+        if (FAILED(result)) return result;
+
+        for (UINT32 index = 0; index < count; ++index) {
+            wuxc::IMenuFlyoutItemBase* base = nullptr;
+            result = items->GetAt(index, &base);
+            if (FAILED(result) || !base) return FAILED(result) ? result : E_FAIL;
+
+            wuxc::IMenuFlyoutSeparator* separator = nullptr;
+            if (SUCCEEDED(base->QueryInterface(
+                    ::openxaml::iid::Windows_UI_Xaml_Controls_IMenuFlyoutSeparator,
+                    reinterpret_cast<void**>(&separator))) && separator) {
+                const BOOL appended = AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+                separator->Release();
+                base->Release();
+                if (!appended) return HRESULT_FROM_WIN32(GetLastError());
+                continue;
+            }
+
+            wuxc::IMenuFlyoutSubItem* subitem = nullptr;
+            if (SUCCEEDED(base->QueryInterface(
+                    ::openxaml::iid::Windows_UI_Xaml_Controls_IMenuFlyoutSubItem,
+                    reinterpret_cast<void**>(&subitem))) && subitem) {
+                HSTRING raw_text = nullptr;
+                (void)subitem->get_Text(&raw_text);
+                const std::wstring text = CopyHString(raw_text);
+                if (raw_text) WindowsDeleteString(raw_text);
+                __FIVector_1_Windows__CUI__CXaml__CControls__CMenuFlyoutItemBase*
+                    children = nullptr;
+                result = subitem->get_Items(&children);
+                HMENU submenu = SUCCEEDED(result) ? CreatePopupMenu() : nullptr;
+                if (submenu && children) {
+                    result = AppendNativeItems(submenu, children, commands,
+                                               next_command);
+                }
+                if (children) children->Release();
+                subitem->Release();
+                base->Release();
+                if (FAILED(result) || !submenu) {
+                    if (submenu) DestroyMenu(submenu);
+                    return FAILED(result) ? result
+                                          : HRESULT_FROM_WIN32(GetLastError());
+                }
+                if (!AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(submenu),
+                                 text.c_str())) {
+                    DestroyMenu(submenu);
+                    return HRESULT_FROM_WIN32(GetLastError());
+                }
+                continue;
+            }
+
+            wuxc::IMenuFlyoutItem* item = nullptr;
+            if (FAILED(base->QueryInterface(
+                    ::openxaml::iid::Windows_UI_Xaml_Controls_IMenuFlyoutItem,
+                    reinterpret_cast<void**>(&item))) || !item) {
+                base->Release();
+                continue;
+            }
+
+            HSTRING raw_text = nullptr;
+            (void)item->get_Text(&raw_text);
+            std::wstring text = CopyHString(raw_text);
+            if (raw_text) WindowsDeleteString(raw_text);
+
+            wuxc::IMenuFlyoutItem3* item3 = nullptr;
+            if (SUCCEEDED(base->QueryInterface(
+                    ::openxaml::iid::Windows_UI_Xaml_Controls_IMenuFlyoutItem3,
+                    reinterpret_cast<void**>(&item3))) && item3) {
+                HSTRING raw_keyboard = nullptr;
+                if (SUCCEEDED(item3->get_KeyboardAcceleratorTextOverride(
+                        &raw_keyboard)) && raw_keyboard) {
+                    const std::wstring keyboard = CopyHString(raw_keyboard);
+                    if (!keyboard.empty()) {
+                        text.push_back(L'\t');
+                        text.append(keyboard);
+                    }
+                    WindowsDeleteString(raw_keyboard);
+                }
+                item3->Release();
+            }
+
+            boolean enabled = 1;
+            wuxc::IControl* control = nullptr;
+            if (SUCCEEDED(base->QueryInterface(
+                    ::openxaml::iid::Windows_UI_Xaml_Controls_IControl,
+                    reinterpret_cast<void**>(&control))) && control) {
+                (void)control->get_IsEnabled(&enabled);
+                control->Release();
+            }
+
+            IMenuFlyoutItemInvoke* action = nullptr;
+            result = base->QueryInterface(IID_IMenuFlyoutItemInvoke,
+                                          reinterpret_cast<void**>(&action));
+            item->Release();
+            base->Release();
+            if (FAILED(result) || !action) continue;
+
+            const UINT id = next_command++;
+            const UINT flags = MF_STRING | (enabled ? MF_ENABLED : MF_GRAYED);
+            if (!AppendMenuW(menu, flags, id, text.c_str())) {
+                action->Release();
+                return HRESULT_FROM_WIN32(GetLastError());
+            }
+            commands.push_back({id, action});
+        }
+        return S_OK;
+    }
+
+    template <class Handler>
+    HRESULT Add(Handler* handler, EventRegistrationToken* token,
+                std::map<LONGLONG, Handler*>& handlers) {
+        if (!handler || !token) return E_INVALIDARG;
+        token->value = ++next_token_;
+        handler->AddRef();
+        handlers[token->value] = handler;
+        return S_OK;
+    }
+    template <class Handler>
+    HRESULT Remove(EventRegistrationToken token,
+                   std::map<LONGLONG, Handler*>& handlers) {
+        const auto found = handlers.find(token.value);
+        if (found == handlers.end()) return S_OK;
+        found->second->Release();
+        handlers.erase(found);
+        return S_OK;
+    }
+    template <class Handler>
+    static void ReleaseHandlers(std::map<LONGLONG, Handler*>& handlers) {
+        for (auto& [_, handler] : handlers) handler->Release();
+    }
+    void InvokeHandlers(std::map<LONGLONG, FlyoutEventHandler*>& handlers) {
+        std::vector<FlyoutEventHandler*> snapshot;
+        snapshot.reserve(handlers.size());
+        for (const auto& [_, handler] : handlers) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+        auto* sender = static_cast<IInspectable*>(
+            static_cast<wuxc::IMenuFlyout*>(this));
+        for (auto* handler : snapshot) {
+            (void)handler->Invoke(sender, nullptr);
+            handler->Release();
+        }
+    }
+    void InvokeClosingHandlers() {
+        std::vector<FlyoutClosingHandler*> snapshot;
+        snapshot.reserve(closing_handlers_.size());
+        for (const auto& [_, handler] : closing_handlers_) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+        auto* sender = static_cast<wuxcp::IFlyoutBase*>(this);
+        for (auto* handler : snapshot) {
+            (void)handler->Invoke(sender, nullptr);
+            handler->Release();
+        }
+    }
+    static void ReleaseCommands(std::vector<MenuCommand>& commands) {
+        for (auto& command : commands) command.action->Release();
+        commands.clear();
+    }
+
     MenuFlyoutItemCollection items_{
         {::openxaml::iid::PIID_FIVector_1_Windows__CUI__CXaml__CControls__CMenuFlyoutItemBase,
          ::openxaml::iid::PIID_FIIterable_1_Windows__CUI__CXaml__CControls__CMenuFlyoutItemBase,
          ::openxaml::iid::PIID_FIIterator_1_Windows__CUI__CXaml__CControls__CMenuFlyoutItemBase},
         L"Windows.UI.Xaml.Controls.MenuFlyoutItemCollection", this};
-    HRESULT Add(IUnknown* handler, EventRegistrationToken* token) {
-        if (!handler || !token) return E_INVALIDARG;
-        token->value = ++next_token_;
-        handler->AddRef();
-        handlers_[token->value] = handler;
-        return S_OK;
-    }
-    HRESULT Remove(EventRegistrationToken token) {
-        const auto found = handlers_.find(token.value);
-        if (found == handlers_.end()) return S_OK;
-        found->second->Release();
-        handlers_.erase(found);
-        return S_OK;
-    }
-
     wux::IStyle* presenter_style_ = nullptr;
     wux::IFrameworkElement* target_ = nullptr;
     wux::IDependencyObject* overlay_input_pass_through_ = nullptr;
@@ -5451,7 +5950,10 @@ private:
     boolean animations_enabled_ = 1;
     boolean open_ = 0;
     LONGLONG next_token_ = 0;
-    std::map<LONGLONG, IUnknown*> handlers_;
+    std::map<LONGLONG, FlyoutEventHandler*> opened_handlers_;
+    std::map<LONGLONG, FlyoutEventHandler*> closed_handlers_;
+    std::map<LONGLONG, FlyoutEventHandler*> opening_handlers_;
+    std::map<LONGLONG, FlyoutClosingHandler*> closing_handlers_;
 };
 
 // CommandBarFlyout is shipped by Microsoft.UI.Xaml and therefore is absent
@@ -5736,6 +6238,155 @@ private:
     boolean monochrome_ = 0;
 };
 
+class DecodedBitmapIconSurface final
+    : public openxaml::ExternalSurfaceProvider,
+      public std::enable_shared_from_this<DecodedBitmapIconSurface> {
+public:
+    DecodedBitmapIconSurface(UINT width, UINT height,
+                             std::vector<std::uint32_t> pixels)
+        : pixels_(std::move(pixels)) {
+        image_.width = static_cast<int>(width);
+        image_.height = static_cast<int>(height);
+        image_.stride_pixels = width;
+        image_.pixels = pixels_.data();
+    }
+
+    openxaml::ExternalSurfaceReference CaptureExternalSurface()
+        const noexcept override {
+        const auto self = weak_from_this().lock();
+        if (!self || pixels_.empty()) return {};
+        return {openxaml::ExternalSurfaceKind::CpuBgraImage, 1,
+                reinterpret_cast<std::uintptr_t>(&image_),
+                std::static_pointer_cast<const void>(self)};
+    }
+
+private:
+    std::vector<std::uint32_t> pixels_;
+    openxaml::render::CpuExternalImage image_{};
+};
+
+inline std::wstring MuxcBitmapIconPath(IInspectable* source) {
+    if (!source) return {};
+    IMuxcBitmapIconSource* bitmap = nullptr;
+    if (FAILED(source->QueryInterface(
+            IID_IMuxcBitmapIconSource,
+            reinterpret_cast<void**>(&bitmap))) || !bitmap) {
+        return {};
+    }
+    void* raw_uri = nullptr;
+    const HRESULT source_result = bitmap->get_UriSource(&raw_uri);
+    bitmap->Release();
+    if (FAILED(source_result) || !raw_uri) return {};
+
+    auto* inspectable_uri = static_cast<IInspectable*>(raw_uri);
+    wf::IUriRuntimeClass* uri = nullptr;
+    const HRESULT query_result = inspectable_uri->QueryInterface(
+        ::openxaml::iid::Windows_Foundation_IUriRuntimeClass,
+        reinterpret_cast<void**>(&uri));
+    inspectable_uri->Release();
+    if (FAILED(query_result) || !uri) return {};
+
+    HSTRING absolute = nullptr;
+    const HRESULT absolute_result = uri->get_AbsoluteUri(&absolute);
+    uri->Release();
+    if (FAILED(absolute_result) || !absolute) return {};
+    UINT32 length = 0;
+    const wchar_t* raw = WindowsGetStringRawBuffer(absolute, &length);
+    std::wstring value(raw ? raw : L"", length);
+    WindowsDeleteString(absolute);
+
+    constexpr wchar_t prefix[] = L"ms-appx:///";
+    if (value.size() < std::size(prefix) - 1 ||
+        _wcsnicmp(value.c_str(), prefix, std::size(prefix) - 1) != 0) {
+        return {};
+    }
+    value.erase(0, std::size(prefix) - 1);
+    std::replace(value.begin(), value.end(), L'/', L'\\');
+    if (value.empty() || value.find(L"..") != std::wstring::npos) return {};
+
+    std::vector<wchar_t> module_path(32768, L'\0');
+    const DWORD copied = GetModuleFileNameW(
+        nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
+    if (copied == 0 || copied >= module_path.size()) return {};
+    std::wstring path(module_path.data(), copied);
+    const std::wstring::size_type slash = path.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return {};
+    path.resize(slash + 1);
+    path += value;
+
+    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        constexpr wchar_t extension[] = L".png";
+        if (path.size() < std::size(extension) - 1 ||
+            _wcsicmp(path.c_str() + path.size() - (std::size(extension) - 1),
+                     extension) != 0) {
+            return {};
+        }
+        path.insert(path.size() - (std::size(extension) - 1), L".scale-100");
+        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) return {};
+    }
+    return path;
+}
+
+inline std::shared_ptr<const openxaml::ExternalSurfaceProvider>
+LoadBitmapIconFile(const std::wstring& path) noexcept {
+    try {
+        if (path.empty()) return {};
+
+        IWICImagingFactory* factory = nullptr;
+        IWICBitmapDecoder* decoder = nullptr;
+        IWICBitmapFrameDecode* frame = nullptr;
+        IWICFormatConverter* converter = nullptr;
+        HRESULT result = CoCreateInstance(
+            CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+            IID_IWICImagingFactory, reinterpret_cast<void**>(&factory));
+        if (SUCCEEDED(result)) {
+            result = factory->CreateDecoderFromFilename(
+                path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad,
+                &decoder);
+        }
+        if (SUCCEEDED(result)) result = decoder->GetFrame(0, &frame);
+        if (SUCCEEDED(result)) result = factory->CreateFormatConverter(&converter);
+        if (SUCCEEDED(result)) {
+            result = converter->Initialize(
+                frame, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,
+                nullptr, 0.0, WICBitmapPaletteTypeCustom);
+        }
+        UINT width = 0;
+        UINT height = 0;
+        if (SUCCEEDED(result)) result = converter->GetSize(&width, &height);
+        if (SUCCEEDED(result) &&
+            (width == 0 || height == 0 || width > 4096 || height > 4096)) {
+            result = E_INVALIDARG;
+        }
+        std::vector<std::uint32_t> pixels;
+        if (SUCCEEDED(result)) {
+            pixels.resize(static_cast<std::size_t>(width) * height);
+            result = converter->CopyPixels(
+                nullptr, width * sizeof(std::uint32_t),
+                static_cast<UINT>(pixels.size() * sizeof(std::uint32_t)),
+                reinterpret_cast<BYTE*>(pixels.data()));
+        }
+        if (converter) converter->Release();
+        if (frame) frame->Release();
+        if (decoder) decoder->Release();
+        if (factory) factory->Release();
+        if (FAILED(result)) return {};
+        return std::make_shared<DecodedBitmapIconSurface>(
+            width, height, std::move(pixels));
+    } catch (...) {
+        return {};
+    }
+}
+
+inline std::shared_ptr<const openxaml::ExternalSurfaceProvider>
+LoadMuxcBitmapIconSurface(IInspectable* source) noexcept {
+    try {
+        return LoadBitmapIconFile(MuxcBitmapIconPath(source));
+    } catch (...) {
+        return {};
+    }
+}
+
 class MuxcImageIconSourceObject final
     : public ComObject,
       public abi::NotImpl_IDependencyObject,
@@ -5797,6 +6448,112 @@ private:
     IInspectable* image_source_ = nullptr;
     IInspectable* foreground_ = nullptr;
 };
+
+inline constexpr GUID IID_ISoftwareBitmapNative = {
+    0x94bc8415, 0x04ea, 0x4b2e,
+    {0xaf, 0x13, 0x4d, 0xe9, 0x5a, 0xa8, 0x98, 0xeb}};
+struct ISoftwareBitmapNative : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE GetData(REFIID iid, void** value) = 0;
+};
+
+inline std::shared_ptr<const openxaml::ExternalSurfaceProvider>
+LoadMuxcImageIconSurface(IInspectable* source) noexcept {
+    try {
+        if (!source) return {};
+        IMuxcImageIconSource* icon = nullptr;
+        if (FAILED(source->QueryInterface(
+                IID_IMuxcImageIconSource,
+                reinterpret_cast<void**>(&icon))) || !icon) {
+            return {};
+        }
+        void* raw_image_source = nullptr;
+        const HRESULT image_result = icon->get_ImageSource(&raw_image_source);
+        icon->Release();
+        if (FAILED(image_result) || !raw_image_source) return {};
+
+        auto* image_source = static_cast<IInspectable*>(raw_image_source);
+        ISoftwareBitmapNative* native = nullptr;
+        const HRESULT native_result = image_source->QueryInterface(
+            IID_ISoftwareBitmapNative, reinterpret_cast<void**>(&native));
+        image_source->Release();
+        if (FAILED(native_result) || !native) return {};
+
+        IWICBitmap* bitmap = nullptr;
+        HRESULT result = native->GetData(
+            IID_IWICBitmap, reinterpret_cast<void**>(&bitmap));
+        native->Release();
+        if (FAILED(result) || !bitmap) return {};
+
+        IWICImagingFactory* factory = nullptr;
+        IWICFormatConverter* converter = nullptr;
+        result = CoCreateInstance(
+            CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+            IID_IWICImagingFactory, reinterpret_cast<void**>(&factory));
+        if (SUCCEEDED(result)) result = factory->CreateFormatConverter(&converter);
+        if (SUCCEEDED(result)) {
+            result = converter->Initialize(
+                bitmap, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,
+                nullptr, 0.0, WICBitmapPaletteTypeCustom);
+        }
+        UINT width = 0;
+        UINT height = 0;
+        if (SUCCEEDED(result)) result = converter->GetSize(&width, &height);
+        if (SUCCEEDED(result) &&
+            (width == 0 || height == 0 || width > 4096 || height > 4096)) {
+            result = E_INVALIDARG;
+        }
+        std::vector<std::uint32_t> pixels;
+        if (SUCCEEDED(result)) {
+            pixels.resize(static_cast<std::size_t>(width) * height);
+            result = converter->CopyPixels(
+                nullptr, width * sizeof(std::uint32_t),
+                static_cast<UINT>(pixels.size() * sizeof(std::uint32_t)),
+                reinterpret_cast<BYTE*>(pixels.data()));
+        }
+        if (converter) converter->Release();
+        if (factory) factory->Release();
+        bitmap->Release();
+        if (FAILED(result)) return {};
+        return std::make_shared<DecodedBitmapIconSurface>(
+            width, height, std::move(pixels));
+    } catch (...) {
+        return {};
+    }
+}
+
+inline std::shared_ptr<const openxaml::ExternalSurfaceProvider>
+LoadMuxcIconSurface(IInspectable* source) noexcept {
+    auto surface = LoadMuxcBitmapIconSurface(source);
+    if (surface) return surface;
+    surface = LoadMuxcImageIconSurface(source);
+    if (surface || !source) return surface;
+
+    // WinUI 2's ImageIconSource takes a WUX SoftwareBitmapSource. On Windows,
+    // that system wrapper intentionally has no public getter for the
+    // SoftwareBitmap passed to SetBitmapAsync, so an alternate XAML renderer
+    // cannot read it back. Terminal's built-in Windows PowerShell profile has
+    // an exact, pinned 16-DIP package asset for this case. Use that asset only
+    // when the otherwise opaque value is specifically an ImageIconSource;
+    // normal BitmapIconSource URIs still resolve their own profile image.
+    IMuxcImageIconSource* image_icon = nullptr;
+    if (FAILED(source->QueryInterface(
+            IID_IMuxcImageIconSource,
+            reinterpret_cast<void**>(&image_icon))) || !image_icon) {
+        return {};
+    }
+    image_icon->Release();
+
+    std::vector<wchar_t> module_path(32768, L'\0');
+    const DWORD copied = GetModuleFileNameW(
+        nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
+    if (copied == 0 || copied >= module_path.size()) return {};
+    std::wstring path(module_path.data(), copied);
+    const std::wstring::size_type slash = path.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return {};
+    path.resize(slash + 1);
+    path += L"ProfileIcons\\{61c54bbd-c2c6-5271-96e7-009a87ff44bf}.png";
+    return LoadBitmapIconFile(path);
+}
 
 class IconSourceElementObject final
     : public XamlElement,
@@ -5913,13 +6670,15 @@ class MenuFlyoutItemObject final
       public abi::NotImpl_IMenuFlyoutItem,
       public abi::NotImpl_IMenuFlyoutItem2,
       public abi::NotImpl_IMenuFlyoutItem3,
-      public abi::NotImpl_IMenuFlyoutItemBase {
+      public abi::NotImpl_IMenuFlyoutItemBase,
+      public MenuFlyoutObject::IMenuFlyoutItemInvoke {
 public:
     using PrimaryInterface = wuxc::IMenuFlyoutItem;
     ~MenuFlyoutItemObject() override {
         if (command_) command_->Release();
         if (command_parameter_) command_parameter_->Release();
         if (icon_) icon_->Release();
+        for (auto& [_, handler] : click_handlers_) handler->Release();
     }
     const wchar_t* RuntimeClassName() const override {
         return L"Windows.UI.Xaml.Controls.MenuFlyoutItem";
@@ -5936,6 +6695,8 @@ public:
                         wuxc::IMenuFlyoutItemBase)
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IControl,
                         wuxc::IControl)
+        OPENXAML_QI_ARM(MenuFlyoutObject::IID_IMenuFlyoutItemInvoke,
+                        MenuFlyoutObject::IMenuFlyoutItemInvoke)
         return QueryElementInterface(iid, object);
     }
     OPENXAML_COM_BOILERPLATE()
@@ -5961,10 +6722,33 @@ public:
     }
     HRESULT STDMETHODCALLTYPE add_Click(wux::IRoutedEventHandler* handler,
                                         EventRegistrationToken* token) override {
-        return AddEvent(handler, token);
+        if (!handler || !token) return E_INVALIDARG;
+        token->value = ++next_click_token_;
+        handler->AddRef();
+        click_handlers_[token->value] = handler;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE remove_Click(EventRegistrationToken token) override {
-        return RemoveEvent(token);
+        const auto found = click_handlers_.find(token.value);
+        if (found == click_handlers_.end()) return S_OK;
+        found->second->Release();
+        click_handlers_.erase(found);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE InvokeClick() override {
+        std::vector<wux::IRoutedEventHandler*> snapshot;
+        snapshot.reserve(click_handlers_.size());
+        for (const auto& [_, handler] : click_handlers_) {
+            handler->AddRef();
+            snapshot.push_back(handler);
+        }
+        auto* sender = static_cast<IInspectable*>(
+            static_cast<wuxc::IMenuFlyoutItem*>(this));
+        for (auto* handler : snapshot) {
+            (void)handler->Invoke(sender, nullptr);
+            handler->Release();
+        }
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_Icon(wuxc::IIconElement** value) override {
         return Get(icon_, value);
@@ -6026,6 +6810,8 @@ private:
     wuxc::IIconElement* icon_ = nullptr;
     boolean enabled_ = 1;
     ABI::Windows::UI::Text::FontWeight font_weight_{400};
+    LONGLONG next_click_token_ = 0;
+    std::map<LONGLONG, wux::IRoutedEventHandler*> click_handlers_;
 };
 
 class MenuFlyoutSeparatorObject final

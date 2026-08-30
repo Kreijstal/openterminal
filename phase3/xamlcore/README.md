@@ -239,6 +239,44 @@ the same way, including children through `IVector` rather than from the markup.
 It writes what the oracle probe writes, so all three implementations compare
 with the same `check_layout.py`.
 
+`client/muxc_tabview_oracle.cpp` is the narrower WinUI 2 control oracle. The
+same Win32 executable explicitly calls `DllGetActivationFactory` in either the
+official `Microsoft.UI.Xaml.dll` or OpenXaml, in separate processes, and emits
+deterministic JSON for TabView defaults, property round-trips, collections,
+selection events, island HWND hosting, add-button input and tab-close input.
+An optional raw BGRA desktop capture covers the visible boundary. Compare the
+two runs strictly with `phase3/scripts/check_muxc_tabview.py`; runtime paths are
+identification, not an expected equality. Official DLLs and pixel captures
+stay in temporary/artifact directories and are never committed.
+
+Run the two sides from an interactive Win11 desktop so `SendInput` and desktop
+capture have a real foreground surface. The PowerShell runner creates a loose
+temporary package solely to give the official WinUI DLL its package resource
+graph, then launches the same probe against each DLL:
+
+```powershell
+phase3\scripts\run_muxc_tabview_oracle.ps1 `
+  -Probe C:\tmp\muxc_tabview_oracle.exe `
+  -OpenXamlDll C:\tmp\openxaml\Microsoft.UI.Xaml.dll `
+  -OutputDirectory C:\tmp\muxc-oracle -CapturePixels
+```
+
+Copy the JSON (and optional BGRA files) back and compare them:
+
+```console
+python3 phase3/scripts/check_muxc_tabview.py \
+  --official /tmp/muxc-oracle/official.json \
+  --actual /tmp/muxc-oracle/openxaml.json \
+  --official-pixels /tmp/muxc-oracle/official.bgra \
+  --actual-pixels /tmp/muxc-oracle/openxaml.bgra
+```
+
+Host-class names, parser/setup diagnostics, and capture status are reported but
+do not count as control-contract mismatches. `--strict-diagnostics` opts into
+comparing those too. Physical input is compared only when the probe acquired
+the foreground on that run; a service or disconnected RDP session records the
+sweep as invalid instead of manufacturing an input difference.
+
 It shares the markup parser with the layout core, which decides what a case
 *says*, not what it measures. That parser was split out for this
 (`layout/src/markup_tree.h`): one parse, two builders, so a disagreement

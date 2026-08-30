@@ -203,6 +203,8 @@ inline constexpr GUID IID_ResourceCandidateVectorView = {
     0xe28e92f0, 0x9ffb, 0x5ea7, {0x9f, 0xc9, 0xa7, 0x3b, 0xda, 0x47, 0x18, 0x86}};
 inline constexpr GUID IID_StringReference = {
     0xfd416dfb, 0x2a07, 0x52eb, {0xaa, 0xe3, 0xdf, 0xce, 0x14, 0x11, 0x6c, 0x05}};
+inline constexpr GUID IID_BooleanReference = {
+    0x3c00fd60, 0x2950, 0x5939, {0xa2, 0x1a, 0x2d, 0x12, 0xc5, 0xa0, 0x1b, 0x8a}};
 inline constexpr GUID IID_Int32Reference = {
     0x548cefbd, 0xbc8a, 0x5fa0, {0x8d, 0xf2, 0x95, 0x74, 0x40, 0xfc, 0x8b, 0xf4}};
 inline constexpr GUID IID_UInt64Reference = {
@@ -217,6 +219,10 @@ inline constexpr GUID IID_DoubleReference = {
 // interface identified by IID_StringReference above.
 struct StringReferenceAbi : IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_Value(HSTRING* value) = 0;
+};
+
+struct BooleanReferenceAbi : IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Value(boolean* value) = 0;
 };
 
 struct Int32ReferenceAbi : IInspectable {
@@ -2204,7 +2210,8 @@ private:
 };
 
 class BoxedBooleanObject final : public ComObject,
-                                 public abi::NotImpl_IPropertyValue {
+                                 public abi::NotImpl_IPropertyValue,
+                                 public BooleanReferenceAbi {
 public:
     explicit BoxedBooleanObject(boolean value) : value_(value) {}
     const wchar_t* RuntimeClassName() const override {
@@ -2214,6 +2221,7 @@ public:
         if (!object) return E_POINTER;
         OPENXAML_QI_ARM(::openxaml::iid::Windows_Foundation_IPropertyValue,
                         wf::IPropertyValue)
+        OPENXAML_QI_ARM(IID_BooleanReference, BooleanReferenceAbi)
         OPENXAML_QI_ARM(IID_IUnknown, wf::IPropertyValue)
         OPENXAML_QI_ARM(::openxaml::iid::IInspectable, wf::IPropertyValue)
         *object = nullptr;
@@ -2234,6 +2242,9 @@ public:
         if (!value) return E_POINTER;
         *value = value_;
         return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Value(boolean* value) override {
+        return GetBoolean(value);
     }
 private:
     boolean value_;

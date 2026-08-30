@@ -23,10 +23,43 @@ void Check(bool condition, const char* what, int line) {
 
 class FixedDesiredElement final : public Border {
 public:
+    explicit FixedDesiredElement(Size desired = {16.0, 16.0})
+        : desired_(desired) {}
     std::string TypeName() const override { return "Test.FixedDesiredElement"; }
 
 protected:
-    Size MeasureOverride(Size) override { return {16.0, 16.0}; }
+    Size MeasureOverride(Size) override { return desired_; }
+
+private:
+    Size desired_;
+};
+
+class TabViewItemHarness final : public TabViewItem {
+public:
+    TabViewItemHarness()
+        : header_({110.0, 16.0}), close_({14.0, 14.0}), icon_({16.0, 16.0}) {
+        CHECK(AttachVisualChild(header_));
+        CHECK(AttachVisualChild(close_));
+        CHECK(AttachVisualChild(icon_));
+    }
+    ~TabViewItemHarness() override {
+        DetachVisualChild(icon_);
+        DetachVisualChild(close_);
+        DetachVisualChild(header_);
+    }
+    std::vector<Element*> Children() const override {
+        return {const_cast<FixedDesiredElement*>(&header_),
+                const_cast<FixedDesiredElement*>(&close_),
+                const_cast<FixedDesiredElement*>(&icon_)};
+    }
+    const FixedDesiredElement& header() const { return header_; }
+    const FixedDesiredElement& close() const { return close_; }
+    const FixedDesiredElement& icon() const { return icon_; }
+
+private:
+    FixedDesiredElement header_;
+    FixedDesiredElement close_;
+    FixedDesiredElement icon_;
 };
 
 class TabViewHarness final : public TabView {
@@ -176,6 +209,31 @@ void TabViewLaysOutItsItemCollection() {
     CHECK(second->layout_slot().width == 120.0);
     CHECK(first->selected());
     CHECK(!second->selected());
+
+    int closes = 0;
+    first->SetCloseRequested([&] { ++closes; });
+    first->RequestClose();
+    CHECK(closes == 1);
+}
+
+void TabViewItemMeasuresAndArrangesItsCloseAffordance() {
+    TabViewItemHarness item;
+    item.Measure({500.0, 32.0});
+    CHECK(item.desired_size().width == 190.0);
+    CHECK(item.close().has_layout_storage());
+    CHECK(item.icon().has_layout_storage());
+
+    item.Arrange({0.0, 0.0, item.desired_size().width, 32.0});
+    CHECK(item.header().layout_slot().x == 36.0);
+    CHECK(item.header().layout_slot().width == 110.0);
+    CHECK(item.close().layout_slot().x == 158.0);
+    CHECK(item.close().layout_slot().width == 32.0);
+    CHECK(item.close().render_size().width == 32.0);
+    CHECK(item.close().render_size().height == 32.0);
+    CHECK(item.icon().layout_slot().x == 12.0);
+    CHECK(item.icon().layout_slot().y == 8.0);
+    CHECK(item.icon().render_size().width == 16.0);
+    CHECK(item.icon().render_size().height == 16.0);
 }
 
 void ControlMarkup() {
@@ -205,5 +263,6 @@ int main() {
     UserControlContentAlwaysUsesTheControlBounds();
     PopupFlyoutAndMuxc();
     TabViewLaysOutItsItemCollection();
+    TabViewItemMeasuresAndArrangesItsCloseAffordance();
     ControlMarkup();
 }

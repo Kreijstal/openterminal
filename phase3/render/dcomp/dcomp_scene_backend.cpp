@@ -1,4 +1,5 @@
 #include "dcomp_scene_backend.h"
+#include "external_surface_reader.h"
 
 #include <d3d11.h>
 #include <dcomp.h>
@@ -892,12 +893,31 @@ HRESULT WindowsDcompPlatform::ImportExternalSurface(
             value->AddRef();
             break;
         case ExternalSurfaceKind::CpuBgraImage:
-            // A producer's CPU image is composited by the CPU backend. Making
-            // a DirectComposition surface out of it would mean this platform
-            // uploading and owning a copy of the producer's pixels every
-            // frame, which is a different design from importing a resource the
-            // producer already owns on the GPU. Named rather than approximated.
-            return E_NOTIMPL;
+        {
+            const auto* image = reinterpret_cast<const CpuExternalImage*>(
+                source.native_value);
+            if (!image || image->width <= 0 || image->height <= 0 ||
+                !image->pixels || image->stride_pixels <
+                                      static_cast<std::size_t>(image->width)) {
+                return E_INVALIDARG;
+            }
+            try {
+                Surface surface(image->width, image->height,
+                                Color{0, 0, 0, 0});
+                for (int y = 0; y < image->height; ++y) {
+                    const auto* source_row =
+                        image->pixels + static_cast<std::size_t>(y) *
+                                            image->stride_pixels;
+                    auto* target_row =
+                        surface.pixels().data() +
+                        static_cast<std::size_t>(y) * image->width;
+                    std::copy_n(source_row, image->width, target_row);
+                }
+                return UploadCpuSurface(surface, content);
+            } catch (...) {
+                return E_OUTOFMEMORY;
+            }
+        }
         case ExternalSurfaceKind::None:
             return E_INVALIDARG;
     }

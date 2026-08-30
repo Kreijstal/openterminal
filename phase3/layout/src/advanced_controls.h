@@ -235,6 +235,12 @@ public:
 
     void set_selected(bool value);
     bool selected() const { return selected_; }
+    void SetCloseRequested(std::function<void()> callback) {
+        close_requested_ = std::move(callback);
+    }
+    void RequestClose() {
+        if (close_requested_) close_requested_();
+    }
 
 protected:
     Size MeasureOverride(Size available) override;
@@ -242,6 +248,7 @@ protected:
 
 private:
     bool selected_ = false;
+    std::function<void()> close_requested_;
 };
 
 }  // namespace openxaml

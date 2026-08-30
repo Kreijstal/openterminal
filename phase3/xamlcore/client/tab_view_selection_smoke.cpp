@@ -205,6 +205,18 @@ int main() {
         L"Microsoft.UI.Xaml.Controls.TabViewItem");
     check(tab_view && first && second, "activate TabView and two items");
 
+    if (tab_view) {
+        boolean value = false;
+        check(SUCCEEDED(tab_view->get_CanReorderTabs(&value)) && value,
+              "CanReorderTabs defaults true");
+        value = false;
+        check(SUCCEEDED(tab_view->get_AllowDropTabs(&value)) && value,
+              "AllowDropTabs defaults true");
+        INT32 index = -1;
+        check(SUCCEEDED(tab_view->get_SelectedIndex(&index)) && index == 0,
+              "SelectedIndex defaults zero");
+    }
+
     __FIVector_1_IInspectable* items = nullptr;
     if (tab_view)
         check(SUCCEEDED(tab_view->get_TabItems(
@@ -221,40 +233,42 @@ int main() {
         check(SUCCEEDED(tab_view->add_SelectionChanged(&handler, &token)) &&
                   token.value != 0,
               "register SelectionChanged");
-        check(SUCCEEDED(tab_view->put_SelectedItem(first)), "select first item");
-        check(handler.calls == 1 && handler.HasChange(nullptr, first),
-              "first selection raises added item and retained args stay valid");
+        check(SUCCEEDED(tab_view->put_SelectedItem(first)), "store first item");
+        check(handler.calls == 0,
+              "detached SelectedItem raises no SelectionChanged event");
         INT32 index = -2;
         tab_view->get_SelectedIndex(&index);
-        check(index == 0, "SelectedItem synchronizes SelectedIndex");
+        check(index == 0,
+              "detached SelectedItem leaves SelectedIndex independent");
 
         check(SUCCEEDED(tab_view->put_SelectedItem(first)),
-              "repeat selected item");
-        check(handler.calls == 1, "repeat selection raises no duplicate event");
+              "repeat stored item");
+        check(handler.calls == 0, "repeat detached item raises no event");
 
         check(SUCCEEDED(tab_view->put_SelectedItem(second)),
-              "select second item");
-        check(handler.calls == 2 && handler.HasChange(first, second),
-              "selection change reports removed and added items");
+              "store second item");
+        check(handler.calls == 0,
+              "changing detached SelectedItem raises no event");
         tab_view->get_SelectedIndex(&index);
-        check(index == 1, "second item index is synchronized");
+        check(index == 0,
+              "second detached item leaves SelectedIndex unchanged");
 
         check(SUCCEEDED(tab_view->put_SelectedIndex(0)),
-              "select by index");
+              "store detached index");
         void* selected_value = nullptr;
         tab_view->get_SelectedItem(&selected_value);
-        check(SameIdentity(static_cast<IInspectable*>(selected_value), first),
-              "SelectedIndex synchronizes SelectedItem");
+        check(SameIdentity(static_cast<IInspectable*>(selected_value), second),
+              "detached SelectedIndex leaves SelectedItem independent");
         if (selected_value)
             static_cast<IInspectable*>(selected_value)->Release();
-        check(handler.calls == 3 && handler.HasChange(second, first),
-              "index selection raises the same typed event");
+        check(handler.calls == 0,
+              "detached SelectedIndex raises no SelectionChanged event");
 
         check(SUCCEEDED(tab_view->remove_SelectionChanged(token)),
               "remove SelectionChanged");
         check(SUCCEEDED(tab_view->put_SelectedItem(second)),
-              "selection after handler removal");
-        check(handler.calls == 3, "removed handler is not invoked");
+              "property write after handler removal");
+        check(handler.calls == 0, "removed handler is not invoked");
     }
 
     if (items) items->Release();

@@ -294,17 +294,72 @@ void TabViewItem::set_selected(bool value) {
 }
 
 Size TabViewItem::MeasureOverride(Size available) {
-    const Size measured = ContentControl::MeasureOverride(available);
-    return {std::max(kMinimumTabWidth, measured.width),
-            std::max(kTabRowHeight, measured.height)};
+    const std::vector<Element*> children = Children();
+    const bool close_visible =
+        children.size() > 1 &&
+        children[1]->visibility() == Visibility::Visible;
+    const bool icon_visible =
+        children.size() > 2 &&
+        children[2]->visibility() == Visibility::Visible;
+    constexpr double horizontal_padding = 24.0;
+    constexpr double close_width = 32.0;
+    constexpr double icon_width = 16.0;
+    constexpr double icon_column_width = 24.0;
+
+    // ContentControl only measures its first child. The template-less TabView
+    // item has a second retained child for the close affordance, and an
+    // unmeasured child has no layout storage: Arrange records its slot, but the
+    // renderer correctly refuses to compile it. Measure the close child and
+    // reserve its width just as the WinUI template's close column does.
+    const double chrome = horizontal_padding +
+                          (close_visible ? close_width : 0.0) +
+                          (icon_visible ? icon_column_width : 0.0);
+    const Size content_available{
+        std::max(0.0, available.width - chrome), available.height};
+    const Size measured = ContentControl::MeasureOverride(content_available);
+    Size close_desired{};
+    if (close_visible) {
+        children[1]->Measure({close_width, available.height});
+        close_desired = children[1]->desired_size();
+    }
+    Size icon_desired{};
+    if (icon_visible) {
+        children[2]->Measure({icon_width, icon_width});
+        icon_desired = children[2]->desired_size();
+    }
+    return {std::max(kMinimumTabWidth, measured.width + chrome),
+            std::max({kTabRowHeight, measured.height, close_desired.height,
+                      icon_desired.height})};
 }
 
 Size TabViewItem::ArrangeOverride(Size final_size) {
     const std::vector<Element*> children = Children();
     if (!children.empty()) {
-        children.front()->Arrange({12.0, 0.0,
-                                   std::max(0.0, final_size.width - 24.0),
+        const bool close_visible =
+            children.size() > 1 &&
+            children[1]->visibility() == Visibility::Visible;
+        const bool icon_visible =
+            children.size() > 2 &&
+            children[2]->visibility() == Visibility::Visible;
+        constexpr double close_width = 32.0;
+        constexpr double icon_width = 16.0;
+        constexpr double icon_column_width = 24.0;
+        const double content_x = 12.0 +
+                                 (icon_visible ? icon_column_width : 0.0);
+        children.front()->Arrange({content_x, 0.0,
+                                   std::max(0.0, final_size.width - 24.0 -
+                                                     (close_visible ? close_width : 0.0) -
+                                                     (icon_visible ? icon_column_width : 0.0)),
                                    final_size.height});
+        if (close_visible) {
+            children[1]->Arrange({std::max(0.0, final_size.width - close_width),
+                                  0.0, close_width, final_size.height});
+        }
+        if (icon_visible) {
+            children[2]->Arrange(
+                {12.0, std::max(0.0, (final_size.height - icon_width) / 2.0),
+                 icon_width, icon_width});
+        }
     }
     return final_size;
 }
