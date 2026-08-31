@@ -24,6 +24,7 @@
 #include <string>
 
 #include "border.h"
+#include "basic_controls.h"
 #include "control.h"
 #include "layout.h"
 #include "stack_panel.h"
@@ -227,6 +228,26 @@ void RenderOriginUsesTheLayoutRoundingGrid() {
     CHECK(border.render_origin().y == 31.0);
 }
 
+void ViewboxUniformlyScalesAndCentersItsChild() {
+    Viewbox viewbox;
+    viewbox.set_width(10.0);
+    viewbox.set_height(10.0);
+    auto child = std::make_unique<Border>();
+    child->set_width(20.0);
+    child->set_height(40.0);
+    Border* content = child.get();
+    viewbox.SetChild(std::move(child));
+
+    viewbox.Measure({10.0, 10.0});
+    viewbox.Arrange({0.0, 0.0, 10.0, 10.0});
+
+    CHECK(content->visual_transform().kind == VisualTransformKind::Scale);
+    CHECK(content->visual_transform().scale_x == 0.25);
+    CHECK(content->visual_transform().scale_y == 0.25);
+    CHECK(content->render_origin().x == 3.0);
+    CHECK(content->render_origin().y == 0.0);
+}
+
 }  // namespace
 
 int main() {
@@ -238,6 +259,7 @@ int main() {
     FrameworkElementRetainsItsAlignedRenderOrigin();
     OverflowingStretchDegeneratesToLeftTop();
     RenderOriginUsesTheLayoutRoundingGrid();
+    ViewboxUniformlyScalesAndCentersItsChild();
 
     if (failures) std::cerr << failures << " check(s) failed\n";
     return failures ? 1 : 0;

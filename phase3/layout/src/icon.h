@@ -73,6 +73,7 @@ public:
     const std::string& runtime_text_refusal() const {
         return content_.runtime_text_refusal();
     }
+    std::vector<double> ShapedAdvances() const { return content_.ShapedAdvances(); }
 protected:
     Size MeasureOverride(Size available) override;
     Size ArrangeOverride(Size final_size) override;

@@ -256,8 +256,22 @@ private:
             break;
         }
         case NodeType::SetDeferredProperty:
-            SetProperty(node, Value::Named(Value::Kind::Object,
-                                            "deferred-substream:" + std::to_string(node.substream)));
+            // A FrameworkTemplate body is the one deferred stream whose
+            // object graph must survive the reader: it is instantiated when
+            // a control consumes the template. Other deferred properties
+            // retain their marker until their corresponding runtime feature
+            // requests them.
+            if (document_.property_name(node.object) ==
+                    "Windows.UI.Xaml.FrameworkTemplate.Template" &&
+                node.substream >= 0 &&
+                static_cast<std::size_t>(node.substream) != stream_index_) {
+                SetProperty(node, Value::FromObject(
+                    Writer(document_, static_cast<std::size_t>(node.substream)).Run()));
+            } else {
+                SetProperty(node, Value::Named(
+                    Value::Kind::Object,
+                    "deferred-substream:" + std::to_string(node.substream)));
+            }
             break;
         case NodeType::SetCustomRuntimeData:
         {
@@ -338,6 +352,17 @@ private:
                 break;
             }
 
+            // Style custom data is an object-writer stream rooted in the
+            // Style already on the parent stack. Expanding it exposes the
+            // ControlTemplate setter retained by the compiled XAML.
+            if (target->type == "Windows.UI.Xaml.Style" &&
+                node.custom_data_version == 8 && node.substream >= 0 &&
+                static_cast<std::size_t>(node.substream) != stream_index_) {
+                (void)Writer(document_, static_cast<std::size_t>(node.substream),
+                             target).Run();
+                break;
+            }
+
             const bool deferred_element =
                 target->type == "Windows.UI.Xaml.Internal.DeferredElement" ||
                 target->type == "stable-type:746";
@@ -369,6 +394,136 @@ private:
     std::string root_class_;
     std::map<std::string, ObjectPtr> names_;
 };
+
+using ResourceMap = std::map<std::string, Value>;
+
+Value CloneValue(const Value& value);
+
+ObjectPtr CloneObject(const ObjectPtr& source) {
+    if (!source) return nullptr;
+    auto result = std::make_shared<Object>();
+    result->type = source->type;
+    result->x_class = source->x_class;
+    for (const auto& [name, value] : source->properties)
+        result->properties.emplace(name, CloneValue(value));
+    for (const auto& value : source->items)
+        result->items.push_back(CloneValue(value));
+    for (const auto& [key, value] : source->dictionary)
+        result->dictionary.emplace(key, CloneValue(value));
+    result->deferred_content = CloneObject(source->deferred_content);
+    return result;
+}
+
+Value CloneValue(const Value& value) {
+    Value result = value;
+    if (value.kind == Value::Kind::Object && value.object)
+        result.object = CloneObject(value.object);
+    return result;
+}
+
+void AddDictionaryResources(const ObjectPtr& dictionary, ResourceMap& resources) {
+    if (!dictionary) return;
+    for (const auto& [key, value] : dictionary->dictionary)
+        resources[key] = value;
+
+    const auto themes = dictionary->properties.find(
+        "Windows.UI.Xaml.ResourceDictionary.ThemeDictionaries");
+    if (themes == dictionary->properties.end() ||
+        themes->second.kind != Value::Kind::Object || !themes->second.object)
+        return;
+    const auto& choices = themes->second.object->dictionary;
+    auto selected = choices.find("Dark");
+    if (selected == choices.end()) selected = choices.find("Light");
+    if (selected != choices.end() && selected->second.kind == Value::Kind::Object)
+        AddDictionaryResources(selected->second.object, resources);
+}
+
+Value ResolveResource(const Value& source, const ResourceMap& resources,
+                      std::set<std::string>& resolving) {
+    if (source.kind != Value::Kind::Resource) return CloneValue(source);
+    if (!resolving.insert(source.text).second) return source;
+    const auto found = resources.find(source.text);
+    if (found == resources.end()) {
+        resolving.erase(source.text);
+        return source;
+    }
+    Value result = ResolveResource(found->second, resources, resolving);
+    resolving.erase(source.text);
+    return result;
+}
+
+void ResolveTemplateResources(const ObjectPtr& object,
+                              const ResourceMap& resources) {
+    if (!object) return;
+    const auto resolve = [&](Value& value) {
+        if (value.kind == Value::Kind::Resource) {
+            std::set<std::string> resolving;
+            value = ResolveResource(value, resources, resolving);
+        }
+        if (value.kind == Value::Kind::Object && value.object)
+            ResolveTemplateResources(value.object, resources);
+    };
+    for (auto& [_, value] : object->properties) resolve(value);
+    for (auto& value : object->items) resolve(value);
+    for (auto& [_, value] : object->dictionary) resolve(value);
+}
+
+ObjectPtr CaptionTemplateRoot(const Value& style_reference,
+                              const ResourceMap& resources) {
+    std::set<std::string> resolving;
+    const Value style_value = ResolveResource(style_reference, resources, resolving);
+    if (style_value.kind != Value::Kind::Object || !style_value.object ||
+        style_value.object->type != "Windows.UI.Xaml.Style")
+        return nullptr;
+    const auto setter = style_value.object->properties.find(
+        "Windows.UI.Xaml.Setter.Value");
+    if (setter == style_value.object->properties.end() ||
+        setter->second.kind != Value::Kind::Object || !setter->second.object ||
+        setter->second.object->type != "Windows.UI.Xaml.Controls.ControlTemplate")
+        return nullptr;
+    const auto body = setter->second.object->properties.find(
+        "Windows.UI.Xaml.FrameworkTemplate.Template");
+    if (body == setter->second.object->properties.end() ||
+        body->second.kind != Value::Kind::Object || !body->second.object)
+        return nullptr;
+    return CloneObject(body->second.object);
+}
+
+void InstallCaptionTemplates(const ObjectPtr& object,
+                             const ResourceMap& inherited) {
+    if (!object) return;
+    ResourceMap resources = inherited;
+    const auto local_resources = object->properties.find(
+        "Windows.UI.Xaml.FrameworkElement.Resources");
+    if (local_resources != object->properties.end() &&
+        local_resources->second.kind == Value::Kind::Object)
+        AddDictionaryResources(local_resources->second.object, resources);
+
+    const auto style = object->properties.find(
+        "Windows.UI.Xaml.FrameworkElement.Style");
+    if (style != object->properties.end() &&
+        style->second.kind == Value::Kind::Resource &&
+        style->second.text == "CaptionButton") {
+        ObjectPtr body = CaptionTemplateRoot(style->second, resources);
+        if (body) {
+            ResolveTemplateResources(body, resources);
+            object->properties["OpenXaml.Control.TemplateRoot"] =
+                Value::FromObject(std::move(body));
+        }
+    }
+
+    for (const auto& [name, value] : object->properties) {
+        if (name == "OpenXaml.Control.TemplateRoot") continue;
+        if (value.kind == Value::Kind::Object)
+            InstallCaptionTemplates(value.object, resources);
+    }
+    for (const auto& value : object->items)
+        if (value.kind == Value::Kind::Object)
+            InstallCaptionTemplates(value.object, resources);
+    for (const auto& [_, value] : object->dictionary)
+        if (value.kind == Value::Kind::Object)
+            InstallCaptionTemplates(value.object, resources);
+}
 
 std::size_t Count(const ObjectPtr& object, std::set<const Object*>& visited) {
     if (!object || !visited.insert(object.get()).second) return 0;
@@ -408,7 +563,9 @@ Value Value::Named(Kind kind, std::string value) {
 
 std::shared_ptr<Object> WriteObjectGraph(const Document& document,
                                          std::size_t stream_index) {
-    return Writer(document, stream_index).Run();
+    auto result = Writer(document, stream_index).Run();
+    InstallCaptionTemplates(result, {});
+    return result;
 }
 
 std::size_t CountObjects(const std::shared_ptr<Object>& root) {

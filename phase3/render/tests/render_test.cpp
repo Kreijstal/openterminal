@@ -19,6 +19,7 @@
 #include "content_presenter.h"
 #include "display_list.h"
 #include "grid.h"
+#include "icon.h"
 #include "image.h"
 #include "markup.h"
 #include "shape.h"
@@ -247,6 +248,7 @@ void InstallTestFont() {
     metrics.descender = -200.0;
     metrics.line_gap = 0.0;
     for (char32_t c = 32; c < 127; ++c) metrics.advances[c] = 500.0;
+    metrics.advances[0xe921] = 500.0;
     FontLibrary::Default().Add("RenderTestFont", metrics);
 }
 
@@ -293,6 +295,25 @@ void AZeroAreaTextBlockPaintsNothing() {
     CHECK(list.scene && list.scene->nodes().size() == 1);
     if (list.scene && !list.scene->nodes().empty()) {
         CHECK(list.scene->nodes().front().content->commands.empty());
+    }
+}
+
+void AFontIconBecomesAnIconFontRun() {
+    InstallTestFont();
+    auto icon = std::make_unique<FontIcon>();
+    icon->set_glyph("\xee\xa4\xa1"); // U+E921, Terminal's minimize glyph.
+    icon->set_font_family("RenderTestFont");
+    icon->set_font_size(20.0);
+    icon->set_width(20.0);
+    icon->set_height(20.0);
+    const DisplayList list = LayOut(std::move(icon), Size{20.0, 20.0});
+
+    CHECK(list.refusals.empty());
+    CHECK(list.texts.size() == 1);
+    if (!list.texts.empty()) {
+        CHECK(list.texts[0].text == "\xee\xa4\xa1");
+        CHECK(list.texts[0].font_family == "RenderTestFont");
+        CHECK(list.texts[0].font_size == 20.0);
     }
 }
 
@@ -1145,6 +1166,7 @@ int main() {
     TransparentPaintsNothingAndIsNotARefusal();
     ATextBlockBecomesARunAtItsArrangedOrigin();
     AZeroAreaTextBlockPaintsNothing();
+    AFontIconBecomesAnIconFontRun();
     APartlyTransparentBrushUsesPremultipliedSourceOver();
     ABrushWithNoColourIsANamedNoDraw();
     TheProbeInkColourIsReserved();

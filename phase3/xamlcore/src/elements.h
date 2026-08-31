@@ -473,6 +473,7 @@ private:
 };
 
 using AbiBorder = ChildSourced<openxaml::Border>;
+using AbiViewbox = ChildSourced<openxaml::Viewbox>;
 using AbiGrid = ChildSourced<openxaml::Grid>;
 using AbiStackPanel = ChildSourced<openxaml::StackPanel>;
 using AbiCanvas = ChildSourced<openxaml::Canvas>;
@@ -2836,6 +2837,64 @@ private:
         L"Windows.UI.Xaml.Controls.UIElementCollection", this};
 };
 
+class ViewboxObject final : public XamlElement,
+                            public abi::NotImpl_IViewbox {
+public:
+    using PrimaryInterface = wuxc::IViewbox;
+    ViewboxObject() { layout_.source = &child_holder_; }
+    openxaml::Element* Layout() override { return &layout_; }
+    const wchar_t* RuntimeClassName() const override {
+        return L"Windows.UI.Xaml.Controls.Viewbox";
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IViewbox,
+                        wuxc::IViewbox)
+        return QueryElementInterface(iid, object);
+    }
+    OPENXAML_COM_BOILERPLATE()
+
+    HRESULT STDMETHODCALLTYPE get_Child(wux::IUIElement** value) override {
+        if (!value) return E_POINTER;
+        if (!child_holder_.Count()) {
+            *value = nullptr;
+            return S_OK;
+        }
+        return child_holder_.GetAt(0, value);
+    }
+    HRESULT STDMETHODCALLTYPE put_Child(wux::IUIElement* value) override {
+        HRESULT hr = child_holder_.Clear();
+        if (SUCCEEDED(hr) && value) hr = child_holder_.Append(value);
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE get_Stretch(wuxm::Stretch* value) override {
+        if (!value) return E_POINTER;
+        *value = wuxm::Stretch_Uniform;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_Stretch(wuxm::Stretch value) override {
+        return value == wuxm::Stretch_Uniform ? S_OK : E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE get_StretchDirection(
+        wuxc::StretchDirection* value) override {
+        if (!value) return E_POINTER;
+        *value = wuxc::StretchDirection_Both;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE put_StretchDirection(
+        wuxc::StretchDirection value) override {
+        return value == wuxc::StretchDirection_Both ? S_OK : E_NOTIMPL;
+    }
+
+private:
+    AbiViewbox layout_;
+    ChildCollection child_holder_{
+        {::openxaml::iid::PIID_FIVector_1_Windows__CUI__CXaml__CUIElement,
+         ::openxaml::iid::PIID_FIIterable_1_Windows__CUI__CXaml__CUIElement,
+         ::openxaml::iid::PIID_FIIterator_1_Windows__CUI__CXaml__CUIElement},
+        L"Windows.UI.Xaml.Controls.UIElementCollection", this};
+};
+
 // --- Panel-derived ------------------------------------------------------------
 
 template <class LayoutType>
@@ -3575,6 +3634,14 @@ struct IOpenXamlLocalizedContentTemplate : IUnknown {
     virtual HRESULT SetLocalizedTemplateText(UINT32 member, HSTRING value) = 0;
 };
 
+inline constexpr GUID IID_IOpenXamlTemplateHost = {
+    0x6f70656e, 0x7861, 0x6d6c,
+    {0x9e, 0x05, 0x74, 0x6d, 0x70, 0x6c, 0x72, 0x74}};
+
+struct IOpenXamlTemplateHost : IUnknown {
+    virtual HRESULT SetTemplateRoot(IInspectable* value) = 0;
+};
+
 enum class LocalizedTemplateMember : UINT32 { Header = 0, Help = 1 };
 
 // IControl is shared by both the content-control and non-content-control
@@ -3603,7 +3670,8 @@ template <class LayoutType>
 class ContentControlObjectBase : public XamlElement,
                                  public ControlAbiBase,
                                  public abi::NotImpl_IContentControl,
-                                 public IOpenXamlLocalizedContentTemplate {
+                                 public IOpenXamlLocalizedContentTemplate,
+                                 public IOpenXamlTemplateHost {
 public:
     using PrimaryInterface = wuxc::IContentControl;
 
@@ -3612,6 +3680,8 @@ public:
         layout_.supplemental = &supplemental_content_;
     }
     ~ContentControlObjectBase() override {
+        if (template_layout_) DetachFallbackVisual(*template_layout_);
+        if (template_root_) template_root_->Release();
         if (fallback_header_attached_)
             layout_.DetachVisualChild(fallback_header_);
         if (fallback_help_attached_)
@@ -3783,6 +3853,29 @@ public:
         return S_OK;
     }
 
+    HRESULT STDMETHODCALLTYPE SetTemplateRoot(IInspectable* value) override {
+        if (template_layout_) {
+            DetachFallbackVisual(*template_layout_);
+            template_layout_ = nullptr;
+        }
+        if (template_root_) {
+            template_root_->Release();
+            template_root_ = nullptr;
+        }
+        if (!value) return S_OK;
+        IOpenXamlNative* native = nullptr;
+        HRESULT hr = value->QueryInterface(
+            IID_IOpenXamlNative, reinterpret_cast<void**>(&native));
+        if (FAILED(hr)) return hr;
+        openxaml::Element* const element = native->LayoutElement();
+        native->Release();
+        if (!element || !AttachFallbackVisual(*element)) return E_INVALIDARG;
+        value->AddRef();
+        template_root_ = value;
+        template_layout_ = element;
+        return S_OK;
+    }
+
 protected:
     bool AttachFallbackVisual(openxaml::Element& element) {
         if (!layout_.AttachVisualChild(element)) return false;
@@ -3831,6 +3924,7 @@ protected:
     HRESULT QueryControlInterface(REFIID iid, void** object) {
         OPENXAML_QI_ARM(IID_IOpenXamlLocalizedContentTemplate,
                         IOpenXamlLocalizedContentTemplate)
+        OPENXAML_QI_ARM(IID_IOpenXamlTemplateHost, IOpenXamlTemplateHost)
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IContentControl,
                         wuxc::IContentControl)
         OPENXAML_QI_ARM(::openxaml::iid::Windows_UI_Xaml_Controls_IControl, wuxc::IControl)
@@ -3841,6 +3935,8 @@ protected:
     BrushProjection background_{layout_, ProjectedBrushSlot::Background};
     wuxm::IBrush* foreground_ = nullptr;
     IInspectable* content_value_ = nullptr;
+    IInspectable* template_root_ = nullptr;
+    openxaml::Element* template_layout_ = nullptr;
     openxaml::TextBlock fallback_header_;
     openxaml::TextBlock fallback_help_;
     openxaml::TextBlock content_label_;
@@ -9311,11 +9407,7 @@ class ButtonObject final : public ContentControlObjectBase<openxaml::Button>,
                            public abi::NotImpl_IButtonBase {
 public:
     using PrimaryInterface = wuxc::IButton;
-    ButtonObject() { layout_.supplemental = &visual_children_; }
-    ~ButtonObject() override {
-        if (label_attached_) layout_.DetachVisualChild(label_);
-        if (flyout_) flyout_->Release();
-    }
+    ~ButtonObject() override { if (flyout_) flyout_->Release(); }
     const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.Button"; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
         if (!object) return E_POINTER;
@@ -9327,12 +9419,6 @@ public:
         return QueryControlInterface(iid, object);
     }
     OPENXAML_COM_BOILERPLATE()
-
-    HRESULT STDMETHODCALLTYPE put_Name(HSTRING value) override {
-        const HRESULT hr = XamlElement::put_Name(value);
-        if (SUCCEEDED(hr)) ConfigureNamedVisual(Utf8FromHString(value));
-        return hr;
-    }
 
     HRESULT STDMETHODCALLTYPE add_Click(wux::IRoutedEventHandler* handler,
                                         EventRegistrationToken* token) override {
@@ -9355,40 +9441,7 @@ public:
     }
 
 private:
-    void ConfigureNamedVisual(const std::string& name) {
-        std::string glyph;
-        if (name == "MinimizeButton") glyph = "-";
-        else if (name == "MaximizeButton") glyph = "[]";
-        else if (name == "CloseButton") glyph = "x";
-        else return;
-
-        label_.set_text(std::move(glyph));
-        label_.set_font_size(14.0);
-        label_.set_foreground_brush(openxaml::BrushValue::SolidColor(
-            {0xff, 0xf2, 0xf2, 0xf2}));
-        const auto backing = openxaml::BrushValue::SolidColor(
-            {0xff, 0x2b, 0x2b, 0x2b});
-        label_.set_background_brush(backing);
-        // Keep ClearType on a fully opaque integer-sized stratum. A glyph-sized
-        // TextBlock has fractional edges, leaving antialiased backing pixels
-        // that cannot legally carry ClearType coverage in DirectComposition.
-        label_.set_box_size({46.0, 40.0});
-        layout_.set_background_brush(backing);
-        layout_.set_horizontal_content_alignment(
-            openxaml::HorizontalAlignment::Stretch);
-        layout_.set_vertical_content_alignment(
-            openxaml::VerticalAlignment::Stretch);
-        if (!label_attached_) {
-            label_attached_ = layout_.AttachVisualChild(label_);
-            if (label_attached_) visual_children_.push_back(&label_);
-        }
-        label_.InvalidateRender(true);
-    }
-
     wuxcp::IFlyoutBase* flyout_ = nullptr;
-    OpaqueSyntheticTextBlock label_;
-    std::vector<openxaml::Element*> visual_children_;
-    bool label_attached_ = false;
 };
 
 class AppBarButtonObject final
@@ -10006,7 +10059,6 @@ class FontIconObject final : public XamlElement,
                              public abi::NotImpl_IIconElement {
 public:
     using PrimaryInterface = wuxc::IFontIcon;
-    ~FontIconObject() override { if (foreground_) foreground_->Release(); }
     openxaml::Element* Layout() override { return &layout_; }
     const wchar_t* RuntimeClassName() const override { return L"Windows.UI.Xaml.Controls.FontIcon"; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
@@ -10028,20 +10080,14 @@ public:
     HRESULT STDMETHODCALLTYPE get_FontFamily(wuxm::IFontFamily** value) override;
     HRESULT STDMETHODCALLTYPE put_FontFamily(wuxm::IFontFamily* value) override;
     HRESULT STDMETHODCALLTYPE get_Foreground(wuxm::IBrush** value) override {
-        if (!value) return E_POINTER;
-        *value = foreground_;
-        if (*value) (*value)->AddRef();
-        return S_OK;
+        return foreground_.Get(value);
     }
     HRESULT STDMETHODCALLTYPE put_Foreground(wuxm::IBrush* value) override {
-        if (value) value->AddRef();
-        if (foreground_) foreground_->Release();
-        foreground_ = value;
-        return S_OK;
+        return foreground_.Assign(value);
     }
 private:
     openxaml::FontIcon layout_;
-    wuxm::IBrush* foreground_ = nullptr;
+    BrushProjection foreground_{layout_, ProjectedBrushSlot::Foreground};
 };
 
 class SymbolIconObject final : public XamlElement,

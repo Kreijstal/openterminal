@@ -38,6 +38,7 @@ Windows.UI.Xaml.Media.ISolidColorBrushFactory
 Windows.UI.Xaml.Controls.IPanel
 Windows.UI.Xaml.Controls.IPanelStatics
 Windows.UI.Xaml.Controls.IBorder
+Windows.UI.Xaml.Controls.IViewbox
 Windows.UI.Xaml.Controls.IGrid
 Windows.UI.Xaml.Controls.IStackPanel
 Windows.UI.Xaml.Controls.IStackPanelFactory

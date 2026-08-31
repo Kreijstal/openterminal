@@ -12,6 +12,29 @@ public:
     const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
 };
 
+// A one-child scaling decorator. Viewbox measures its child at the child's
+// natural size, then uniformly scales and centers that visual into its final
+// slot. This is the path Terminal's caption-button template uses to fit the
+// MDL2 FontIcon into a 10-DIP square.
+class Viewbox : public Element {
+public:
+    std::string TypeName() const override { return "Windows.UI.Xaml.Controls.Viewbox"; }
+    bool IsLayoutElement() const override { return true; }
+    static const std::vector<std::string>& Owners();
+    const std::vector<std::string>& PropertyOwners() const override { return Owners(); }
+    void SetChild(std::unique_ptr<Element> child);
+    std::vector<Element*> Children() const override {
+        return child_ ? std::vector<Element*>{child_.get()} : std::vector<Element*>{};
+    }
+
+protected:
+    Size MeasureOverride(Size available) override;
+    Size ArrangeOverride(Size final_size) override;
+
+private:
+    std::unique_ptr<Element> child_;
+};
+
 class ComboBox : public ContentControl {
 public:
     ComboBox();

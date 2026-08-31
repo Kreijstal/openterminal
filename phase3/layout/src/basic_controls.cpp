@@ -1,10 +1,15 @@
 #include "basic_controls.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace openxaml {
 namespace {
 const std::vector<std::string> kButtonOwners = {
     "Button", "ButtonBase", "ContentControl", "Control", kTextPropertyOwner,
     "FrameworkElement", "UIElement"};
+const std::vector<std::string> kViewboxOwners = {
+    "Viewbox", "FrameworkElement", "UIElement"};
 const std::vector<std::string> kTextBoxOwners = {
     "TextBox", "TextBoxBase", "Control", kTextPropertyOwner, "FrameworkElement", "UIElement"};
 const std::vector<std::string> kToolTipOwners = {
@@ -29,11 +34,51 @@ const DependencyProperty* const kToolTipPlacement =
 }  // namespace
 
 const std::vector<std::string>& Button::Owners() { return kButtonOwners; }
+const std::vector<std::string>& Viewbox::Owners() { return kViewboxOwners; }
 const std::vector<std::string>& TextBox::Owners() { return kTextBoxOwners; }
 const std::vector<std::string>& ToolTip::Owners() { return kToolTipOwners; }
 const std::vector<std::string>& Thumb::Owners() { return kThumbOwners; }
 const DependencyProperty& TextBox::TextProperty() { return *kText; }
 const DependencyProperty& TextBox::PlaceholderTextProperty() { return *kPlaceholder; }
+
+void Viewbox::SetChild(std::unique_ptr<Element> child) {
+    if (child) Adopt(*child);
+    child_ = std::move(child);
+}
+
+Size Viewbox::MeasureOverride(Size available) {
+    const std::vector<Element*> children = Children();
+    Element* const child = children.empty() ? nullptr : children.front();
+    if (!child) return {};
+    child->Measure({kInfinity, kInfinity});
+    const Size natural = child->desired_size();
+    double scale = kInfinity;
+    if (natural.width > 0.0 && std::isfinite(available.width))
+        scale = std::min(scale, available.width / natural.width);
+    if (natural.height > 0.0 && std::isfinite(available.height))
+        scale = std::min(scale, available.height / natural.height);
+    if (!std::isfinite(scale)) scale = 1.0;
+    return {natural.width * scale, natural.height * scale};
+}
+
+Size Viewbox::ArrangeOverride(Size final_size) {
+    const std::vector<Element*> children = Children();
+    Element* const child = children.empty() ? nullptr : children.front();
+    if (!child) return final_size;
+    Size natural = child->desired_size();
+    if (natural.width <= 0.0 || natural.height <= 0.0) {
+        child->Arrange({0.0, 0.0, 0.0, 0.0});
+        return final_size;
+    }
+    const double scale = std::max(
+        0.0, std::min(final_size.width / natural.width,
+                      final_size.height / natural.height));
+    child->set_visual_transform(VisualTransform::Scale(scale, scale));
+    child->Arrange({(final_size.width - natural.width * scale) / 2.0,
+                    (final_size.height - natural.height * scale) / 2.0,
+                    natural.width, natural.height});
+    return final_size;
+}
 
 // The two values L7-terminal-24911ba19e reads off the runtime's default
 // ToolTip style. The case is a ToolTip around an empty line of text, and the

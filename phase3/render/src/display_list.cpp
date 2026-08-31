@@ -478,8 +478,42 @@ struct Walker {
             }
         }
         if (const auto* icon = dynamic_cast<const FontIcon*>(&element)) {
-            if (!icon->runtime_text_refusal().empty())
+            if (!icon->runtime_text_refusal().empty()) {
                 Refuse(path, "Text", icon->runtime_text_refusal());
+            } else if (!icon->glyph().empty() && actual.width > 0.0 &&
+                       actual.height > 0.0 && slot.width > 0.0 && slot.height > 0.0) {
+                Color text_color = ProbeInkColor();
+                if (element.foreground_brush().declared) {
+                    if (!element.foreground_brush().has_color) {
+                        Refuse(path, "Foreground",
+                               "the declared icon brush has no retained solid colour");
+                    } else {
+                        text_color = element.foreground_brush().color;
+                    }
+                }
+                TextOp op;
+                op.bounds = bounds;
+                op.text = icon->glyph();
+                op.font_family = icon->font_family();
+                op.font_size = icon->font_size();
+                op.baseline = BaselineOf(op.font_family, op.font_size);
+                op.advances = icon->ShapedAdvances();
+                op.bold = false;
+                op.path = path;
+                out.texts.push_back(op);
+
+                LocalText local;
+                local.bounds = local_bounds;
+                local.text = op.text;
+                local.font_family = op.font_family;
+                local.font_size = op.font_size;
+                local.baseline = op.baseline;
+                local.advances = op.advances;
+                local.color = text_color;
+                local.bold = false;
+                local.path = op.path;
+                content->commands.push_back(std::move(local));
+            }
         }
 
         int index = 0;

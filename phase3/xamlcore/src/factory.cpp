@@ -7364,6 +7364,10 @@ Factory<BorderObject>& BorderFactory() {
     static Factory<BorderObject> factory(L"Windows.UI.Xaml.Controls.Border");
     return factory;
 }
+Factory<ViewboxObject>& ViewboxFactory() {
+    static Factory<ViewboxObject> factory(L"Windows.UI.Xaml.Controls.Viewbox");
+    return factory;
+}
 Factory<ValueSetObject>& ValueSetFactory() {
     static Factory<ValueSetObject> factory(
         L"Windows.Foundation.Collections.ValueSet");
@@ -7905,6 +7909,8 @@ IActivationFactory* FactoryFor(const wchar_t* name) {
         return &TheFlyoutBaseFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.Border") == 0)
         return &BorderFactory();
+    if (wcscmp(name, L"Windows.UI.Xaml.Controls.Viewbox") == 0)
+        return &ViewboxFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.Panel") == 0)
         return &PanelFactory();
     if (wcscmp(name, L"Windows.UI.Xaml.Controls.Grid") == 0)
@@ -8349,6 +8355,24 @@ HRESULT InsertGridDefinition(IInspectable* parent, IInspectable* child,
 
 HRESULT SetSingleChild(IInspectable* parent, IInspectable* child,
                        const std::string& property) {
+    if (property == "OpenXaml.Control.TemplateRoot") {
+        IOpenXamlTemplateHost* host = nullptr;
+        HRESULT hr = parent->QueryInterface(
+            IID_IOpenXamlTemplateHost, reinterpret_cast<void**>(&host));
+        if (FAILED(hr)) return hr;
+        hr = host->SetTemplateRoot(child);
+        host->Release();
+        return hr;
+    }
+    if (property == "Windows.UI.Xaml.Setter.Value") {
+        wux::ISetter* setter = nullptr;
+        HRESULT hr = Query(parent, ::openxaml::iid::Windows_UI_Xaml_ISetter,
+                           &setter);
+        if (FAILED(hr)) return hr;
+        hr = setter->put_Value(child);
+        setter->Release();
+        return hr;
+    }
     if (property == "Windows.UI.Xaml.Controls.ItemsControl.ItemTemplate") {
         wuxc::IItemsControl* items = nullptr;
         HRESULT hr = Query(parent,
@@ -8470,6 +8494,38 @@ HRESULT SetSingleChild(IInspectable* parent, IInspectable* child,
         panel->Release();
         return hr;
     }
+    if (property == "Windows.UI.Xaml.Controls.Border.Background" ||
+        property == "Windows.UI.Xaml.Controls.Border.BorderBrush") {
+        wuxc::IBorder* border = nullptr;
+        HRESULT hr = Query(parent,
+                           ::openxaml::iid::Windows_UI_Xaml_Controls_IBorder,
+                           &border);
+        if (FAILED(hr)) return hr;
+        wuxm::IBrush* brush = nullptr;
+        hr = Query(child, ::openxaml::iid::Windows_UI_Xaml_Media_IBrush, &brush);
+        if (SUCCEEDED(hr)) {
+            hr = EndsWith(property, ".Background")
+                ? border->put_Background(brush)
+                : border->put_BorderBrush(brush);
+        }
+        if (brush) brush->Release();
+        border->Release();
+        return hr;
+    }
+    if (property == "Windows.UI.Xaml.Controls.IconElement.Foreground" ||
+        property == "Windows.UI.Xaml.Controls.FontIcon.Foreground") {
+        wuxc::IIconElement* icon = nullptr;
+        HRESULT hr = Query(parent,
+                           ::openxaml::iid::Windows_UI_Xaml_Controls_IIconElement,
+                           &icon);
+        if (FAILED(hr)) return hr;
+        wuxm::IBrush* brush = nullptr;
+        hr = Query(child, ::openxaml::iid::Windows_UI_Xaml_Media_IBrush, &brush);
+        if (SUCCEEDED(hr)) hr = icon->put_Foreground(brush);
+        if (brush) brush->Release();
+        icon->Release();
+        return hr;
+    }
     if (property == "Windows.UI.Xaml.Shapes.Shape.Fill" ||
         property == "Windows.UI.Xaml.Shapes.Shape.Stroke") {
         wuxs::IShape* shape = nullptr;
@@ -8533,6 +8589,19 @@ HRESULT SetSingleChild(IInspectable* parent, IInspectable* child,
         if (SUCCEEDED(hr)) hr = border->put_Child(element);
         if (element) element->Release();
         border->Release();
+        return hr;
+    }
+    if (property == "Windows.UI.Xaml.Controls.Viewbox.Child") {
+        wuxc::IViewbox* viewbox = nullptr;
+        HRESULT hr = Query(parent,
+                           ::openxaml::iid::Windows_UI_Xaml_Controls_IViewbox,
+                           &viewbox);
+        if (FAILED(hr)) return hr;
+        wux::IUIElement* element = nullptr;
+        hr = Query(child, ::openxaml::iid::Windows_UI_Xaml_IUIElement, &element);
+        if (SUCCEEDED(hr)) hr = viewbox->put_Child(element);
+        if (element) element->Release();
+        viewbox->Release();
         return hr;
     }
     if (property == "Windows.UI.Xaml.Controls.ContentPresenter.Content") {
@@ -8713,7 +8782,8 @@ HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
                         wuxmk::IComponentConnector* binding_connector,
                         IOpenXamlNameScope* name_scope) {
     if (!value.object) return E_INVALIDARG;
-    if (property == "Windows.UI.Xaml.Controls.Frame.ContentTransitions")
+    if (property == "Windows.UI.Xaml.Controls.Frame.ContentTransitions" ||
+        property == "Windows.UI.Xaml.VisualStateGroup.Transitions")
         return S_OK;
     IOpenXamlResourceDictionary* resources = nullptr;
     const bool merged =
@@ -9259,6 +9329,19 @@ HRESULT ApplyConstantProperty(const std::string& property, const xbf::Constant& 
         if (text) text->Release();
         return hr;
     }
+    if (property == "Windows.UI.Xaml.Controls.FontIcon.Glyph") {
+        wuxc::IFontIcon* icon = nullptr;
+        HRESULT hr = Query(object,
+                           ::openxaml::iid::Windows_UI_Xaml_Controls_IFontIcon,
+                           &icon);
+        if (FAILED(hr)) return hr;
+        HSTRING glyph = nullptr;
+        hr = HStringFromUtf8(value.string_value, &glyph);
+        if (SUCCEEDED(hr)) hr = icon->put_Glyph(glyph);
+        WindowsDeleteString(glyph);
+        icon->Release();
+        return hr;
+    }
     if (property == "Windows.UI.Xaml.Controls.Border.Padding" ||
         property == "Windows.UI.Xaml.Controls.Border.BorderThickness") {
         wuxc::IBorder* border = nullptr;
@@ -9299,10 +9382,23 @@ HRESULT ApplyXbfProperty(const std::string& property, const xbf::Value& value,
         return ApplyCollection(property, value, object, connector,
                                binding_connector, name_scope);
 
+    // Every ControlTemplate instance owns a fresh namescope. Reusing the
+    // component namescope would make repeated template part names such as
+    // ButtonBaseElement and ButtonIcon collide across the three caption
+    // buttons.
+    IOpenXamlNameScope* child_name_scope = name_scope;
+    XamlNameScope* template_name_scope = nullptr;
+    if (property == "OpenXaml.Control.TemplateRoot") {
+        template_name_scope = new (std::nothrow) XamlNameScope();
+        if (!template_name_scope) return E_OUTOFMEMORY;
+        child_name_scope = template_name_scope;
+    }
+
     IInspectable* child = nullptr;
     HRESULT hr = BuildXbfObject(
         value.object, nullptr, connector, binding_connector,
-        name_scope, &child);
+        child_name_scope, &child);
+    if (template_name_scope) template_name_scope->Release();
     if (FAILED(hr)) return hr;
     hr = SetSingleChild(object, child, property);
     child->Release();

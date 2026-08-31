@@ -89,6 +89,7 @@ RUNTIME_CLASSES = [
     "Windows.UI.Core.CoreWindow",
     "Windows.UI.Xaml.Media.Animation.Timeline",
     "Windows.UI.Xaml.Controls.Border",
+    "Windows.UI.Xaml.Controls.Viewbox",
     "Windows.UI.Xaml.Controls.Panel",
     "Windows.UI.Xaml.Controls.Grid",
     "Windows.UI.Xaml.Controls.StackPanel",
