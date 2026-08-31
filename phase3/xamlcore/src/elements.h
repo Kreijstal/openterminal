@@ -360,9 +360,18 @@ public:
     openxaml::TextBlock* fallback_header = nullptr;
     openxaml::TextBlock* fallback_help = nullptr;
     bool fallback_template = false;
+    // A ControlTemplate root is the control's chrome, not ordinary Content.
+    // It must fill the complete control slot. Applying ContentControl's
+    // default Left/Top alignment here leaves a 10-DIP caption icon at the
+    // top-left of its 46x40 button.
+    openxaml::Element* control_template_root = nullptr;
 
 protected:
     openxaml::Size MeasureOverride(openxaml::Size available) override {
+        if (control_template_root) {
+            control_template_root->Measure(available);
+            return control_template_root->desired_size();
+        }
         if (!fallback_template)
             return Base::MeasureOverride(available);
 
@@ -400,6 +409,11 @@ protected:
     }
 
     openxaml::Size ArrangeOverride(openxaml::Size final_size) override {
+        if (control_template_root) {
+            control_template_root->Arrange(
+                {0.0, 0.0, final_size.width, final_size.height});
+            return final_size;
+        }
         if (!fallback_template)
             return Base::ArrangeOverride(final_size);
 
@@ -3857,6 +3871,7 @@ public:
         if (template_layout_) {
             DetachFallbackVisual(*template_layout_);
             template_layout_ = nullptr;
+            layout_.control_template_root = nullptr;
         }
         if (template_root_) {
             template_root_->Release();
@@ -3873,6 +3888,7 @@ public:
         value->AddRef();
         template_root_ = value;
         template_layout_ = element;
+        layout_.control_template_root = element;
         return S_OK;
     }
 

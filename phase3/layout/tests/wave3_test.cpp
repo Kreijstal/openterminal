@@ -87,6 +87,11 @@ void VisualStatesAndStoryboards() {
     VisualState wide;
     wide.name = "Wide";
     wide.setters.push_back({"Part", &Element::WidthProperty(), 80.0});
+    bool brush_like_state = false;
+    VisualStateSetter retained_value;
+    retained_value.apply = [&brush_like_state]() { brush_like_state = true; };
+    retained_value.clear = [&brush_like_state]() { brush_like_state = false; };
+    wide.setters.push_back(std::move(retained_value));
     Timeline fade;
     fade.target_name = "Part";
     fade.target_property = &Element::OpacityProperty();
@@ -104,11 +109,13 @@ void VisualStatesAndStoryboards() {
     CHECK(manager.GoToState("Wide"));
     CHECK(part.width() == 80.0);
     CHECK(part.opacity() == 1.0);
+    CHECK(brush_like_state);
     manager.SampleCurrent("CommonStates", 0.0);
     CHECK(part.opacity() == 0.0);
     CHECK(manager.GoToState("Normal"));
     CHECK(part.width() == 10.0);
     CHECK(part.opacity() == 0.25);
+    CHECK(!brush_like_state);
     CHECK(!manager.GoToState("Absent"));
 }
 

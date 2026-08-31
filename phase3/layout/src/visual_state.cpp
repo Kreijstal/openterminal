@@ -104,7 +104,11 @@ DependencyObject* VisualStateManager::Resolve(const std::string& name) const {
 void VisualStateManager::Clear(VisualStateGroup& group) {
     if (!group.current_) return;
     for (const VisualStateSetter& setter : group.current_->setters) {
-        if (setter.property) Resolve(setter.target_name)->ClearAnimatedValue(*setter.property);
+        if (setter.clear) {
+            setter.clear();
+        } else if (setter.property) {
+            Resolve(setter.target_name)->ClearAnimatedValue(*setter.property);
+        }
     }
     group.current_->storyboard.Stop(names_, owner_);
     group.current_ = nullptr;
@@ -112,6 +116,10 @@ void VisualStateManager::Clear(VisualStateGroup& group) {
 
 void VisualStateManager::ApplySetters(const VisualState& state) {
     for (const VisualStateSetter& setter : state.setters) {
+        if (setter.apply) {
+            setter.apply();
+            continue;
+        }
         if (!setter.property)
             throw VisualStateError("a visual-state setter has no target property");
         Resolve(setter.target_name)->SetAnimatedValue(*setter.property, setter.value);

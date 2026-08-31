@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <cstdio>
 #include <filesystem>
@@ -466,6 +467,21 @@ public:
     }
 };
 
+bool GoToStateInTemplate(openxaml::Element& element,
+                         const std::string& state,
+                         bool use_transitions) {
+    if (openxaml::VisualStateManager* const manager =
+            element.visual_state_manager();
+        manager && manager->GoToState(state, use_transitions)) {
+        return true;
+    }
+    for (openxaml::Element* child : element.Children()) {
+        if (child && GoToStateInTemplate(*child, state, use_transitions))
+            return true;
+    }
+    return false;
+}
+
 class VisualStateManagerFactory final
     : public ComObject,
       public IActivationFactory,
@@ -496,13 +512,11 @@ public:
         const HRESULT queried = control->QueryInterface(
             IID_IOpenXamlNative, reinterpret_cast<void**>(&native));
         if (FAILED(queried) || !native) return E_INVALIDARG;
-        openxaml::VisualStateManager* const manager =
-            native->LayoutElement()->visual_state_manager();
-        if (manager) {
-            *result = manager->GoToState(Utf8FromHString(state),
-                                         use_transitions != 0)
+        openxaml::Element* const element = native->LayoutElement();
+        if (element)
+            *result = GoToStateInTemplate(
+                *element, Utf8FromHString(state), use_transitions != 0)
                 ? 1 : 0;
-        }
         native->Release();
         return S_OK;
     }
@@ -8777,6 +8791,225 @@ std::string XbfObjectName(const std::shared_ptr<xbf::Object>& graph) {
     return found->second.constant.string_value;
 }
 
+const xbf::Value* XbfProperty(const std::shared_ptr<xbf::Object>& object,
+                              const char* name) {
+    if (!object) return nullptr;
+    const auto found = object->properties.find(name);
+    return found == object->properties.end() ? nullptr : &found->second;
+}
+
+const std::vector<xbf::Value>* XbfCollection(
+    const std::shared_ptr<xbf::Object>& object, const char* name) {
+    const xbf::Value* value = XbfProperty(object, name);
+    if (!value || value->kind != xbf::Value::Kind::Object || !value->object)
+        return nullptr;
+    return &value->object->items;
+}
+
+HRESULT NativeElement(IInspectable* object, openxaml::Element** value) {
+    if (!object || !value) return E_INVALIDARG;
+    *value = nullptr;
+    IOpenXamlNative* native = nullptr;
+    HRESULT hr = object->QueryInterface(
+        IID_IOpenXamlNative, reinterpret_cast<void**>(&native));
+    if (SUCCEEDED(hr)) *value = native->LayoutElement();
+    if (native) native->Release();
+    return hr;
+}
+
+HRESULT FindNativeElement(IOpenXamlNameScope* names,
+                          const std::string& name,
+                          openxaml::Element** value) {
+    if (!names || !value) return E_INVALIDARG;
+    *value = nullptr;
+    HSTRING key = nullptr;
+    HRESULT hr = HStringFromUtf8(name, &key);
+    IInspectable* found = nullptr;
+    if (SUCCEEDED(hr)) hr = names->Find(key, &found);
+    WindowsDeleteString(key);
+    if (SUCCEEDED(hr) && found) hr = NativeElement(found, value);
+    if (found) found->Release();
+    return *value ? hr : E_BOUNDS;
+}
+
+bool XbfPropertyValue(const xbf::Value& source,
+                      openxaml::PropertyValue& value) {
+    if (source.kind != xbf::Value::Kind::Constant) return false;
+    const xbf::Constant& constant = source.constant;
+    switch (constant.kind) {
+    case xbf::ConstantKind::SharedString:
+    case xbf::ConstantKind::UniqueString:
+    case xbf::ConstantKind::NullString:
+        value = constant.string_value;
+        return true;
+    case xbf::ConstantKind::False:
+        value = false;
+        return true;
+    case xbf::ConstantKind::True:
+        value = true;
+        return true;
+    case xbf::ConstantKind::Float:
+    case xbf::ConstantKind::GridLength:
+        value = ConstantNumber(constant);
+        return true;
+    case xbf::ConstantKind::Signed:
+        value = static_cast<int>(constant.signed_value);
+        return true;
+    case xbf::ConstantKind::Enum:
+        value = static_cast<int>(constant.unsigned_value);
+        return true;
+    case xbf::ConstantKind::Thickness: {
+        const wux::Thickness converted = ConstantThickness(constant);
+        value = openxaml::Thickness{converted.Left, converted.Top,
+                                    converted.Right, converted.Bottom};
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+bool XbfBrushValue(const xbf::Value& source, openxaml::BrushValue& value) {
+    const xbf::Constant* color = nullptr;
+    double opacity = 1.0;
+    if (source.kind == xbf::Value::Kind::Constant &&
+        source.constant.kind == xbf::ConstantKind::Color) {
+        color = &source.constant;
+    } else if (source.kind == xbf::Value::Kind::Object && source.object &&
+               source.object->type ==
+                   "Windows.UI.Xaml.Media.SolidColorBrush") {
+        const xbf::Value* color_value = XbfProperty(
+            source.object, "Windows.UI.Xaml.Media.SolidColorBrush.Color");
+        if (color_value && color_value->kind == xbf::Value::Kind::Constant &&
+            color_value->constant.kind == xbf::ConstantKind::Color)
+            color = &color_value->constant;
+        const xbf::Value* opacity_value = XbfProperty(
+            source.object, "Windows.UI.Xaml.Media.Brush.Opacity");
+        if (opacity_value && opacity_value->kind == xbf::Value::Kind::Constant)
+            opacity = ConstantNumber(opacity_value->constant);
+    }
+    if (!color) return false;
+    const std::uint32_t argb = color->unsigned_value;
+    const BYTE alpha = static_cast<BYTE>(std::clamp(
+        std::lround(((argb >> 24) & 0xff) * opacity), 0l, 255l));
+    value = openxaml::BrushValue::SolidColor({
+        alpha,
+        static_cast<BYTE>((argb >> 16) & 0xff),
+        static_cast<BYTE>((argb >> 8) & 0xff),
+        static_cast<BYTE>(argb & 0xff)});
+    return true;
+}
+
+HRESULT InstallXbfVisualStates(IInspectable* parent,
+                               const std::shared_ptr<xbf::Object>& collection,
+                               IOpenXamlNameScope* xaml_names) {
+    if (!parent || !collection || !xaml_names) return E_INVALIDARG;
+    openxaml::Element* owner = nullptr;
+    HRESULT hr = NativeElement(parent, &owner);
+    if (FAILED(hr) || !owner) return FAILED(hr) ? hr : E_INVALIDARG;
+
+    try {
+        auto native_names = std::make_shared<openxaml::NameScope>();
+        auto manager = std::make_unique<openxaml::VisualStateManager>(
+            *owner, *native_names);
+
+        for (const xbf::Value& group_value : collection->items) {
+            if (group_value.kind != xbf::Value::Kind::Object ||
+                !group_value.object)
+                continue;
+            const std::string group_name = XbfObjectName(group_value.object);
+            if (group_name.empty()) continue;
+            openxaml::VisualStateGroup group(group_name);
+            const auto* states = XbfCollection(
+                group_value.object,
+                "Windows.UI.Xaml.VisualStateGroup.States");
+            if (!states) continue;
+
+            for (const xbf::Value& state_value : *states) {
+                if (state_value.kind != xbf::Value::Kind::Object ||
+                    !state_value.object)
+                    continue;
+                openxaml::VisualState state;
+                state.name = XbfObjectName(state_value.object);
+                if (state.name.empty()) continue;
+                const auto* setters = XbfCollection(
+                    state_value.object,
+                    "Windows.UI.Xaml.VisualState.Setters");
+                if (setters) {
+                    for (const xbf::Value& setter_value : *setters) {
+                        if (setter_value.kind != xbf::Value::Kind::Object ||
+                            !setter_value.object)
+                            continue;
+                        const xbf::Value* target_value = XbfProperty(
+                            setter_value.object,
+                            "Windows.UI.Xaml.Setter.Target");
+                        const xbf::Value* assigned = XbfProperty(
+                            setter_value.object,
+                            "Windows.UI.Xaml.Setter.Value");
+                        if (!target_value || !assigned ||
+                            target_value->kind != xbf::Value::Kind::Constant)
+                            continue;
+                        const std::string target_path =
+                            target_value->constant.string_value;
+                        const std::size_t separator = target_path.rfind('.');
+                        if (separator == std::string::npos) continue;
+                        const std::string target_name =
+                            target_path.substr(0, separator);
+                        const std::string property_name =
+                            target_path.substr(separator + 1);
+                        openxaml::Element* target = nullptr;
+                        hr = FindNativeElement(xaml_names, target_name, &target);
+                        if (FAILED(hr) || !target) return hr;
+                        if (!native_names->Find(target_name))
+                            native_names->Register(target_name, *target);
+
+                        openxaml::VisualStateSetter setter;
+                        setter.target_name = target_name;
+                        openxaml::BrushValue brush;
+                        if ((property_name == "Background" ||
+                             property_name == "Foreground") &&
+                            XbfBrushValue(*assigned, brush)) {
+                            const bool background = property_name == "Background";
+                            const openxaml::BrushValue base = background
+                                ? target->background_brush()
+                                : target->foreground_brush();
+                            setter.apply = [target, brush, background]() {
+                                if (background)
+                                    target->set_background_brush(brush);
+                                else
+                                    target->set_foreground_brush(brush);
+                                target->InvalidateRender(false);
+                            };
+                            setter.clear = [target, base, background]() {
+                                if (background)
+                                    target->set_background_brush(base);
+                                else
+                                    target->set_foreground_brush(base);
+                                target->InvalidateRender(false);
+                            };
+                        } else {
+                            setter.property = openxaml::FindProperty(
+                                target->PropertyOwners(), property_name);
+                            if (!setter.property ||
+                                !XbfPropertyValue(*assigned, setter.value))
+                                continue;
+                        }
+                        state.setters.push_back(std::move(setter));
+                    }
+                }
+                group.Add(std::move(state));
+            }
+            manager->AddGroup(std::move(group));
+        }
+        owner->KeepVisualStateManager(native_names, std::move(manager));
+        return S_OK;
+    } catch (const std::bad_alloc&) {
+        return E_OUTOFMEMORY;
+    } catch (...) {
+        return E_INVALIDARG;
+    }
+}
+
 HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
                         IInspectable* parent, wuxmk::IComponentConnector* connector,
                         wuxmk::IComponentConnector* binding_connector,
@@ -8785,6 +9018,12 @@ HRESULT ApplyCollection(const std::string& property, const xbf::Value& value,
     if (property == "Windows.UI.Xaml.Controls.Frame.ContentTransitions" ||
         property == "Windows.UI.Xaml.VisualStateGroup.Transitions")
         return S_OK;
+    if (property ==
+        "Windows.UI.Xaml.VisualStateManager.VisualStateGroups") {
+        const HRESULT hr = InstallXbfVisualStates(
+            parent, value.object, name_scope);
+        if (FAILED(hr)) return hr;
+    }
     IOpenXamlResourceDictionary* resources = nullptr;
     const bool merged =
         property == "Windows.UI.Xaml.ResourceDictionary.MergedDictionaries";
@@ -9339,6 +9578,24 @@ HRESULT ApplyConstantProperty(const std::string& property, const xbf::Constant& 
         hr = HStringFromUtf8(value.string_value, &glyph);
         if (SUCCEEDED(hr)) hr = icon->put_Glyph(glyph);
         WindowsDeleteString(glyph);
+        icon->Release();
+        return hr;
+    }
+    if (property == "Windows.UI.Xaml.Controls.FontIcon.FontFamily") {
+        wuxc::IFontIcon* icon = nullptr;
+        HRESULT hr = Query(object,
+                           ::openxaml::iid::Windows_UI_Xaml_Controls_IFontIcon,
+                           &icon);
+        if (FAILED(hr)) return hr;
+        auto* family = new (std::nothrow) FontFamilyObject();
+        if (!family) {
+            icon->Release();
+            return E_OUTOFMEMORY;
+        }
+        family->source = value.string_value;
+        family->AddRef();
+        hr = icon->put_FontFamily(family);
+        family->Release();
         icon->Release();
         return hr;
     }

@@ -3,10 +3,12 @@
 #ifndef OPENXAML_VISUAL_STATE_H
 #define OPENXAML_VISUAL_STATE_H
 
+#include <functional>
 #include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "property.h"
@@ -52,9 +54,24 @@ private:
 };
 
 struct VisualStateSetter {
+    VisualStateSetter() = default;
+    VisualStateSetter(std::string target,
+                      const DependencyProperty* dependency_property,
+                      PropertyValue assigned)
+        : target_name(std::move(target)),
+          property(dependency_property),
+          value(std::move(assigned)) {}
+
     std::string target_name;
     const DependencyProperty* property = nullptr;
     PropertyValue value = 0.0;
+    // Some XAML properties retained by the renderer (notably Brush-valued
+    // Foreground and Background) do not live in the closed scalar dependency
+    // property store yet. Runtime adapters can still give a visual-state
+    // setter the same enter/leave semantics without inventing a second state
+    // machine. Ordinary dependency-property setters leave these empty.
+    std::function<void()> apply;
+    std::function<void()> clear;
 };
 
 struct VisualState {

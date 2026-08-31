@@ -421,6 +421,45 @@ Value CloneValue(const Value& value) {
     return result;
 }
 
+Value StringConstant(std::string text) {
+    Constant value;
+    value.kind = ConstantKind::UniqueString;
+    value.string_value = std::move(text);
+    return Value::FromConstant(std::move(value));
+}
+
+Value ColorConstant(std::uint32_t argb) {
+    Constant value;
+    value.kind = ConstantKind::Color;
+    value.unsigned_value = argb;
+    return Value::FromConstant(std::move(value));
+}
+
+Value SolidColorBrush(std::uint32_t argb) {
+    auto brush = std::make_shared<Object>();
+    brush->type = "Windows.UI.Xaml.Media.SolidColorBrush";
+    brush->properties.emplace("Windows.UI.Xaml.Media.SolidColorBrush.Color",
+                              ColorConstant(argb));
+    return Value::FromObject(std::move(brush));
+}
+
+ResourceMap DarkFrameworkResources() {
+    // Exact dark-theme values from Microsoft UI Xaml's generic.xaml and
+    // Common_themeresources_any.xaml. The compiled Terminal dictionary refers
+    // to these framework-owned keys; leaving them unresolved turns icon text
+    // into the renderer's diagnostic magenta and loses the Fluent icon face.
+    ResourceMap resources;
+    resources.emplace("SymbolThemeFontFamily",
+                      StringConstant("Segoe Fluent Icons,Segoe MDL2 Assets"));
+    resources.emplace("SystemBaseHighColor", ColorConstant(0xffffffff));
+    resources.emplace("SystemControlForegroundBaseHighBrush",
+                      SolidColorBrush(0xffffffff));
+    resources.emplace("TextFillColorDisabled", ColorConstant(0x5dffffff));
+    resources.emplace("SubtleFillColorSecondary", SolidColorBrush(0x0fffffff));
+    resources.emplace("SubtleFillColorTertiary", SolidColorBrush(0x0affffff));
+    return resources;
+}
+
 void AddDictionaryResources(const ObjectPtr& dictionary, ResourceMap& resources) {
     if (!dictionary) return;
     for (const auto& [key, value] : dictionary->dictionary)
@@ -564,7 +603,7 @@ Value Value::Named(Kind kind, std::string value) {
 std::shared_ptr<Object> WriteObjectGraph(const Document& document,
                                          std::size_t stream_index) {
     auto result = Writer(document, stream_index).Run();
-    InstallCaptionTemplates(result, {});
+    InstallCaptionTemplates(result, DarkFrameworkResources());
     return result;
 }
 
