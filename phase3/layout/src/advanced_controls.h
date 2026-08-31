@@ -206,7 +206,6 @@ OPENXAML_MUXC_CONTROL(DropDownButton, "DropDownButton");
 OPENXAML_MUXC_CONTROL(Expander, "Expander");
 OPENXAML_MUXC_CONTROL(InfoBadge, "InfoBadge");
 OPENXAML_MUXC_CONTROL(InfoBar, "InfoBar");
-OPENXAML_MUXC_CONTROL(NavigationView, "NavigationView");
 OPENXAML_MUXC_CONTROL(NavigationViewItem, "NavigationViewItem");
 OPENXAML_MUXC_CONTROL(ProgressRing, "ProgressRing");
 OPENXAML_MUXC_CONTROL(SplitButton, "SplitButton");
@@ -214,6 +213,19 @@ OPENXAML_MUXC_CONTROL(TeachingTip, "TeachingTip");
 OPENXAML_MUXC_CONTROL(TreeView, "TreeView");
 
 #undef OPENXAML_MUXC_CONTROL
+
+// NavigationView's WinUI template always gives its content presenter the
+// available content region. Treating it as an ordinary ContentControl leaves
+// an unsized settings Grid at 0x0 because ContentControl defaults to Left/Top.
+class NavigationView : public MuxContentControl {
+public:
+    NavigationView()
+        : MuxContentControl("Microsoft.UI.Xaml.Controls.NavigationView") {}
+
+protected:
+    Size MeasureOverride(Size available) override;
+    Size ArrangeOverride(Size final_size) override;
+};
 
 class NumberBox : public MuxContentControl {
 public:

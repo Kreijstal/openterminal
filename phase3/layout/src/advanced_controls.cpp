@@ -394,6 +394,22 @@ MuxContentControl::MuxContentControl(std::string name) : type_name_(std::move(na
                "ContentControl", "Control", kTextPropertyOwner, "FrameworkElement", "UIElement"};
 }
 
+Size NavigationView::MeasureOverride(Size available) {
+    const std::vector<Element*> children = Children();
+    if (children.empty()) return {};
+    Element* const content = children.front();
+    content->Measure(available);
+    return content->desired_size();
+}
+
+Size NavigationView::ArrangeOverride(Size final_size) {
+    const std::vector<Element*> children = Children();
+    if (!children.empty()) {
+        children.front()->Arrange({0.0, 0.0, final_size.width, final_size.height});
+    }
+    return final_size;
+}
+
 NumberBox::NumberBox() : MuxContentControl("Microsoft.UI.Xaml.Controls.NumberBox") {
     set_background_brush(BrushValue::SolidColor(
         Color{0xff, 0x33, 0x33, 0x33}));

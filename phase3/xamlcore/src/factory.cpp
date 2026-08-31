@@ -9631,6 +9631,12 @@ HRESULT ApplyXbfProperty(const std::string& property, const xbf::Value& value,
     if (property == "Windows.UI.Xaml.Controls.Frame.ContentTransitions" ||
         property == "Windows.UI.Xaml.Controls.ContentControl.ContentTransitions" ||
         property == "Windows.UI.Xaml.Controls.AutoSuggestBox.ItemTemplate" ||
+        // A DataTemplate's compiled template stream is deferred metadata, not
+        // a ContentControl child. Trying to attach it through SetSingleChild
+        // asks IDataTemplate for IContentControl and aborts the entire page
+        // with E_NOINTERFACE (Launch.xaml is the first Settings page to hit
+        // this through its ComboBox item templates).
+        property == "Windows.UI.Xaml.FrameworkTemplate.Template" ||
         property == "Microsoft.UI.Xaml.Controls.BreadcrumbBar.ItemTemplate") {
         return S_OK;
     }

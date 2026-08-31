@@ -169,6 +169,23 @@ void UserControlContentAlwaysUsesTheControlBounds() {
     CHECK(content_pointer->render_size().height == 200.0);
 }
 
+void NavigationViewContentAlwaysUsesTheControlBounds() {
+    NavigationView navigation;
+    auto content = std::make_unique<FixedDesiredElement>();
+    FixedDesiredElement* const content_pointer = content.get();
+    navigation.SetContent(std::move(content));
+
+    navigation.Measure({1129.0, 635.0});
+    CHECK(content_pointer->desired_size().width == 16.0);
+    CHECK(content_pointer->desired_size().height == 16.0);
+
+    navigation.Arrange({0.0, 0.0, 1129.0, 635.0});
+    CHECK(content_pointer->layout_slot().x == 0.0);
+    CHECK(content_pointer->layout_slot().y == 0.0);
+    CHECK(content_pointer->render_size().width == 1129.0);
+    CHECK(content_pointer->render_size().height == 635.0);
+}
+
 void PopupFlyoutAndMuxc() {
     Border placement;
     Flyout flyout;
@@ -261,6 +278,7 @@ int main() {
     NavigationJournal();
     PageContentAlwaysUsesThePageBounds();
     UserControlContentAlwaysUsesTheControlBounds();
+    NavigationViewContentAlwaysUsesTheControlBounds();
     PopupFlyoutAndMuxc();
     TabViewLaysOutItsItemCollection();
     TabViewItemMeasuresAndArrangesItsCloseAffordance();
