@@ -72,7 +72,7 @@ jobs:
           ' artifacts/winui-xaml-abi.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload textual harvest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phase1-winui-xaml-abi
           path: artifacts/winui-xaml-abi.json
