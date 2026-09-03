@@ -30,7 +30,7 @@ jobs:
   measure:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -69,7 +69,7 @@ jobs:
           echo "harvested from microsoft/terminal $commit"
 
       - name: Check out Microsoft Terminal
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: microsoft/terminal
           ref: ${{ steps.terminal.outputs.commit }}
@@ -718,7 +718,7 @@ jobs:
     needs: measure
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -949,7 +949,7 @@ jobs:
     needs: measure
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
