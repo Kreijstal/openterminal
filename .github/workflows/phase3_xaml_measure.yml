@@ -724,25 +724,25 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.measure.outputs.artifact }}
           path: measurements
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.measure.outputs.fonts }}
           path: fonts
 
       # The corpus the oracle measured; cases are not committed.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.measure.outputs.cases }}
           path: phase3/xaml-db/cases
 
       # And the application dictionary it was harvested against, so the lookups
       # here land in the same content the classifier assumed.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.measure.outputs.theme }}
           path: phase3/xaml-db/theme-resources
@@ -955,22 +955,22 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.measure.outputs.fonts }}
           path: fonts
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.measure.outputs.cases }}
           path: phase3/xaml-db/cases
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.measure.outputs.theme }}
           path: phase3/xaml-db/theme-resources
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.measure.outputs.render_oracle }}
           path: native-render-oracle
@@ -978,7 +978,7 @@ jobs:
       # The recorded glyph outlines the measure job harvested. The name is
       # derived from os_build the same way the measure job derives it when
       # uploading, so the render job needs nothing new published to reach it.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: xaml-glyph-outlines-${{ needs.measure.outputs.os_build }}
           path: glyph-outlines
